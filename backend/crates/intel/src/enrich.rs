@@ -265,20 +265,20 @@ pub async fn enrich_article_gemini(
     Ok(enriched)
 }
 
-// Enrichment is Ollama-only. Cloud fallback removed to prevent budget blowout.
-// If Ollama fails, the event goes unenriched — the caller handles this gracefully.
+// Enrichment is local LLM-only. Cloud fallback removed to prevent budget blowout.
+// If LLM fails, the event goes unenriched — the caller handles this gracefully.
 pub async fn enrich_article_tiered(
     _claude_client: Option<&ClaudeClient>,
     _gemini_client: Option<&GeminiClient>,
-    ollama_client: Option<&crate::ollama::OllamaClient>,
+    llm_client: Option<&crate::llm::LlmClient>,
     _budget: &Arc<BudgetManager>,
     article: &ArticleInput,
 ) -> Result<EnrichedArticleV2> {
-    if let Some(oc) = ollama_client {
-        return oc.enrich_article(article).await;
+    if let Some(llm) = llm_client {
+        return llm.enrich_article(article).await;
     }
 
-    bail!("Ollama not available for enrichment");
+    bail!("LLM not available for enrichment");
 }
 
 fn parse_entities(value: &serde_json::Value) -> Vec<Entity> {

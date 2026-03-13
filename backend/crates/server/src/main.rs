@@ -5,7 +5,7 @@ use std::sync::atomic::AtomicU64;
 
 use axum::routing::{delete, get, post};
 use axum::Router;
-use sr_intel::{BudgetManager, ClaudeClient, GeminiClient, OllamaClient};
+use sr_intel::{BudgetManager, ClaudeClient, GeminiClient, LlmClient};
 use sr_sources::InsertableEvent;
 use sr_types::Severity;
 use sr_sources::registry::SourceRegistry;
@@ -195,16 +195,16 @@ async fn main() -> anyhow::Result<()> {
         info!("GEMINI_API_KEY not set — Gemini fallback disabled");
     }
 
-    // Local LLM for enrichment (Ollama + GPU)
-    let ollama_client = OllamaClient::from_env();
-    if let Some(ref oc) = ollama_client {
-        if oc.is_ready().await {
-            info!(model = oc.model(), "Ollama connected — local GPU enrichment enabled");
+    // Local LLM for enrichment (llama-server + GPU)
+    let llm_client = LlmClient::from_env();
+    if let Some(ref lc) = llm_client {
+        if lc.is_ready().await {
+            info!("LLM server connected — local GPU enrichment enabled");
         } else {
-            warn!(model = oc.model(), "Ollama connected but model not yet loaded — will retry");
+            warn!("LLM server connected but not yet ready — will retry");
         }
     } else {
-        info!("OLLAMA_URL not set — using Claude API for enrichment");
+        info!("LLM_URL not set — using Claude API for enrichment");
     }
 
     // Entity graph — load from DB, build in-memory resolver + graph
@@ -277,7 +277,7 @@ async fn main() -> anyhow::Result<()> {
             event_tx.clone(),
             publish_tx.clone(),
             claude_client,
-            ollama_client,
+            llm_client,
             gemini_client,
             budget.clone(),
             pool.clone(),

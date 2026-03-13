@@ -13,7 +13,7 @@ use chrono::{DateTime, Utc};
 use sr_config::PipelineConfig;
 use sr_embeddings::EmbeddingCache;
 use sr_intel::{
-    BudgetManager, ClaudeClient, GeminiClient, OllamaClient,
+    BudgetManager, ClaudeClient, GeminiClient, LlmClient,
     article_from_event, enrich_article_tiered, generate_narrative_tiered,
     generate_situation_title,
 };
@@ -71,7 +71,7 @@ pub struct PipelineCore {
     config: Arc<PipelineConfig>,
 
     // AI clients (optional — None in replay without --ai)
-    pub ollama: Option<Arc<OllamaClient>>,
+    pub llm: Option<Arc<LlmClient>>,
     pub claude: Option<Arc<ClaudeClient>>,
     pub gemini: Option<Arc<GeminiClient>>,
     pub budget: Option<Arc<BudgetManager>>,
@@ -84,11 +84,11 @@ pub struct PipelineCore {
 impl PipelineCore {
     /// Create a new `PipelineCore`.
     ///
-    /// For replay without AI, pass `None` for ollama/claude/budget.
+    /// For replay without AI, pass `None` for llm/claude/budget.
     pub fn new(
         config: Arc<PipelineConfig>,
         embeddings_enabled: bool,
-        ollama: Option<Arc<OllamaClient>>,
+        llm: Option<Arc<LlmClient>>,
         claude: Option<Arc<ClaudeClient>>,
         gemini: Option<Arc<GeminiClient>>,
         budget: Option<Arc<BudgetManager>>,
@@ -99,7 +99,7 @@ impl PipelineCore {
             embeddings_enabled,
             tick_count: 0,
             config,
-            ollama,
+            llm,
             claude,
             gemini,
             budget,
@@ -199,7 +199,7 @@ impl PipelineCore {
     /// In replay with `--ai`, it blocks inline for faithful reproduction.
     /// Returns `(cluster_id, new_title)` pairs.
     pub async fn generate_titles(&mut self) -> Vec<(Uuid, String)> {
-        let has_ai = self.claude.is_some() || self.gemini.is_some() || self.ollama.is_some();
+        let has_ai = self.claude.is_some() || self.gemini.is_some() || self.llm.is_some();
         if !has_ai {
             return vec![];
         }
@@ -233,7 +233,7 @@ impl PipelineCore {
             let title = generate_situation_title(
                 self.claude.as_deref(),
                 self.gemini.as_deref(),
-                self.ollama.as_deref(),
+                self.llm.as_deref(),
                 &budget,
                 &entities,
                 &topics,
@@ -261,14 +261,14 @@ impl PipelineCore {
 
     /// Enrich an event if it's enrichable and lacks enrichment.
     ///
-    /// Calls the same `enrich_article()` / `OllamaClient::enrich_article()`
+    /// Calls the same `enrich_article()` / `LlmClient::enrich_article()`
     /// as production. Returns `true` if enrichment was applied.
     ///
     /// Note: this does NOT persist to DB or update entity graphs — those
     /// are production-driver concerns. It only populates `event.payload.enrichment`
     /// and upgrades coordinates via geocoding.
     pub async fn enrich_event(&self, event: &mut InsertableEvent) -> bool {
-        let has_ai = self.claude.is_some() || self.gemini.is_some() || self.ollama.is_some();
+        let has_ai = self.claude.is_some() || self.gemini.is_some() || self.llm.is_some();
         if !has_ai {
             return false;
         }
@@ -294,7 +294,7 @@ impl PipelineCore {
         let enrichment_result = enrich_article_tiered(
             self.claude.as_deref(),
             self.gemini.as_deref(),
-            self.ollama.as_deref(),
+            self.llm.as_deref(),
             &budget,
             &article,
         )
@@ -355,7 +355,7 @@ impl PipelineCore {
     /// of MAX_NARRATIVES_PER_TICK. Here we process all eligible clusters
     /// sequentially. Returns `(situation_id, narrative_text)` pairs.
     pub async fn generate_narratives(&mut self) -> Vec<(Uuid, String)> {
-        let has_ai = self.claude.is_some() || self.gemini.is_some() || self.ollama.is_some();
+        let has_ai = self.claude.is_some() || self.gemini.is_some() || self.llm.is_some();
         if !has_ai {
             return vec![];
         }
@@ -427,7 +427,7 @@ impl PipelineCore {
             match generate_narrative_tiered(
                 self.claude.as_deref(),
                 self.gemini.as_deref(),
-                self.ollama.as_deref(),
+                self.llm.as_deref(),
                 &budget,
                 &context,
             )

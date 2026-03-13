@@ -7,7 +7,7 @@ use sr_config::PipelineConfig;
 use sr_embeddings::{EmbeddingModel, compose_text};
 use sr_embeddings::cache::embed_key;
 use sr_intel::{
-    AnalysisInput, BudgetManager, ClaudeClient, GeminiClient, GapType, OllamaClient, SharedAnalysis,
+    AnalysisInput, BudgetManager, ClaudeClient, GeminiClient, GapType, LlmClient, SharedAnalysis,
     SearchRateLimiter, SupplementaryData,
     analyze_current_state, analyze_tiered, analysis_interval_secs, article_from_event,
     build_search_query, enrich_article_tiered,
@@ -793,7 +793,7 @@ pub fn spawn_pipeline(
     ingest_tx: broadcast::Sender<InsertableEvent>,
     publish_tx: broadcast::Sender<PublishEvent>,
     claude_client: Option<Arc<ClaudeClient>>,
-    ollama_client: Option<Arc<OllamaClient>>,
+    llm_client: Option<Arc<LlmClient>>,
     gemini_client: Option<Arc<GeminiClient>>,
     budget: Arc<BudgetManager>,
     pool: PgPool,
@@ -817,7 +817,7 @@ pub fn spawn_pipeline(
             publish_tx_clone,
             summaries_clone,
             claude_client,
-            ollama_client,
+            llm_client,
             gemini_client,
             budget,
             analysis_clone,
@@ -840,7 +840,7 @@ async fn run_pipeline(
     publish_tx: broadcast::Sender<PublishEvent>,
     shared_summaries: SharedSummaries,
     claude_client: Option<Arc<ClaudeClient>>,
-    ollama_client: Option<Arc<OllamaClient>>,
+    llm_client: Option<Arc<LlmClient>>,
     gemini_client: Option<Arc<GeminiClient>>,
     budget: Arc<BudgetManager>,
     shared_analysis: SharedAnalysis,
@@ -862,7 +862,7 @@ async fn run_pipeline(
     let mut core = PipelineCore::new(
         config.clone(),
         embeddings_enabled,
-        ollama_client.clone(),
+        llm_client.clone(),
         claude_client.clone(),
         gemini_client.clone(),
         Some(Arc::clone(&budget)),
@@ -973,12 +973,9 @@ async fn run_pipeline(
     // Merge audit infrastructure — Qwen post-hoc validation of situation merges
     let (merge_audit_tx, mut merge_audit_rx) = mpsc::channel::<MergeAuditResult>(32);
 
-    // Ollama health check watchdog — runs in background task to avoid blocking the pipeline loop.
-    // Uses Arc<AtomicU32> for failure counter shared with the spawned task.
-    let ollama_failure_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
-    if let Some(ref ollama) = ollama_client {
-        let ollama = ollama.clone();
-        let failures = ollama_failure_count.clone();
+    // LLM health check watchdog — periodic background check, logs status.
+    if let Some(ref llm) = llm_client {
+        let llm = llm.clone();
         let gpu_paused = metrics.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(600)); // 10 minutes
@@ -986,26 +983,10 @@ async fn run_pipeline(
             loop {
                 interval.tick().await;
                 if gpu_paused.is_gpu_paused() { continue; }
-                if ollama.health_check().await {
-                    let prev = failures.swap(0, std::sync::atomic::Ordering::Relaxed);
-                    if prev > 0 {
-                        info!("Ollama health check passed — resetting failure counter");
-                    }
+                if llm.health_check().await {
+                    debug!("LLM health check passed");
                 } else {
-                    let count = failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
-                    warn!(consecutive_failures = count, "Ollama health check failed");
-                    if count >= 3 {
-                        info!("Ollama unresponsive after 3 checks — attempting warm_model");
-                        match ollama.warm_model().await {
-                            Ok(()) => {
-                                info!("Ollama model re-warmed successfully");
-                                failures.store(0, std::sync::atomic::Ordering::Relaxed);
-                            }
-                            Err(e) => {
-                                warn!("Ollama warm_model failed (Sonnet fallback active): {e}");
-                            }
-                        }
-                    }
+                    warn!("LLM health check failed");
                 }
             }
         });
@@ -1299,7 +1280,7 @@ async fn run_pipeline(
                         &event,
                         &claude_client,
                         &gemini_client,
-                        &ollama_client,
+                        &llm_client,
                         &budget,
                         &publish_tx,
                         &pool,
@@ -1336,7 +1317,7 @@ async fn run_pipeline(
             _ = situation_publish_interval.tick() => {
                 tick_situations(
                     &mut core,
-                    &ollama_client,
+                    &llm_client,
                     &gemini_client,
                     &merge_audit_tx,
                     &claude_client,
@@ -1447,7 +1428,7 @@ async fn run_pipeline(
                     &core.graph,
                     &window,
                     &claude_client,
-                    &ollama_client,
+                    &llm_client,
                     &gemini_client,
                     &budget,
                     &shared_analysis,
@@ -1488,7 +1469,7 @@ async fn run_pipeline(
                     .unwrap_or((0, None));
                 if sr_intel::should_regenerate_summary(event_count, ec_at_summary, last_summary_gen) {
                     let gemini = gemini_client.clone();
-                    let ollama = ollama_client.clone();
+                    let llm = llm_client.clone();
                     let budget_clone = budget.clone();
                     let stx = summary_tx.clone();
                     let sid = result.situation_id;
@@ -1502,7 +1483,7 @@ async fn run_pipeline(
                         .unwrap_or_default();
                     tokio::spawn(async move {
                         match sr_intel::generate_summary(
-                            gemini.as_deref(), ollama.as_deref(), &budget_clone,
+                            gemini.as_deref(), llm.as_deref(), &budget_clone,
                             &narrative_text, prev_summary.as_deref(), &sit_title,
                             event_count, &entities,
                         ).await {
@@ -1709,7 +1690,7 @@ fn tick_analysis(
     situation_graph: &SituationGraph,
     window: &CorrelationWindow,
     claude_client: &Option<Arc<ClaudeClient>>,
-    ollama_client: &Option<Arc<OllamaClient>>,
+    llm_client: &Option<Arc<LlmClient>>,
     gemini_client: &Option<Arc<GeminiClient>>,
     budget: &Arc<BudgetManager>,
     shared_analysis: &SharedAnalysis,
@@ -1729,12 +1710,12 @@ fn tick_analysis(
 
     // Check if it's time for an analysis run
     let interval = analysis_interval_secs(current_tempo);
-    let has_analysis_backend = claude_client.is_some() || ollama_client.is_some() || gemini_client.is_some();
+    let has_analysis_backend = claude_client.is_some() || llm_client.is_some() || gemini_client.is_some();
     if last_analysis.elapsed() >= Duration::from_secs(interval)
         && has_analysis_backend
     {
         let claude = claude_client.clone();
-        let ollama = ollama_client.clone();
+        let llm = llm_client.clone();
         let gemini = gemini_client.clone();
         let budget = Arc::clone(budget);
         let shared = shared_analysis.clone();
@@ -1780,7 +1761,7 @@ fn tick_analysis(
                 recent_events,
                 tempo,
             };
-            match analyze_tiered(claude.as_deref(), gemini.as_deref(), ollama.as_deref(), &budget, &input).await {
+            match analyze_tiered(claude.as_deref(), gemini.as_deref(), llm.as_deref(), &budget, &input).await {
                 Ok((report, escalate)) => {
                     info!(
                         merges = report.suggested_merges.len(),
@@ -1896,7 +1877,7 @@ fn tick_timeline(
 #[allow(clippy::too_many_arguments)]
 fn tick_situations(
     core: &mut PipelineCore,
-    ollama_client: &Option<Arc<OllamaClient>>,
+    llm_client: &Option<Arc<LlmClient>>,
     gemini_client: &Option<Arc<GeminiClient>>,
     merge_audit_tx: &mpsc::Sender<MergeAuditResult>,
     claude_client: &Option<Arc<ClaudeClient>>,
@@ -1922,7 +1903,7 @@ fn tick_situations(
 
     // ── Merge audit (production-only, requires Ollama GPU) ───────────────
     if !output.merges.is_empty() && !gpu_paused {
-        if let Some(ollama) = ollama_client {
+        if let Some(llm) = llm_client {
             let mut merge_info: Vec<(uuid::Uuid, uuid::Uuid, String, Vec<String>, String, Vec<String>)> = Vec::new();
             for &(parent_id, child_id, skip_audit) in output.merges.iter().take(10) {
                 if skip_audit {
@@ -1940,11 +1921,11 @@ fn tick_situations(
                 }
             }
             if !merge_info.is_empty() {
-                let ollama = Arc::clone(ollama);
+                let llm = Arc::clone(llm);
                 let tx = merge_audit_tx.clone();
                 tokio::spawn(async move {
                     for (parent_id, child_id, parent_title, parent_topics, child_title, child_topics) in merge_info {
-                        match ollama.audit_merge(&parent_title, &parent_topics, &child_title, &child_topics).await {
+                        match llm.audit_merge(&parent_title, &parent_topics, &child_title, &child_topics).await {
                             Ok(true) => { debug!(%parent_id, %child_id, "Merge audit: confirmed"); }
                             Ok(false) => {
                                 info!(%parent_id, %child_id, "Merge audit: rejected, requesting unmerge");
@@ -1959,13 +1940,13 @@ fn tick_situations(
     }
 
     // ── AI title generation (production-only: fire-and-forget) ───────────
-    if !gpu_paused && (claude_client.is_some() || ollama_client.is_some() || gemini_client.is_some()) {
+    if !gpu_paused && (claude_client.is_some() || llm_client.is_some() || gemini_client.is_some()) {
         let needing_titles = core.graph.clusters_needing_titles(&core.title_pending);
         for cluster in needing_titles {
             info!(cluster_id = %cluster.id, event_count = cluster.event_count, current_title = %cluster.title, "Requesting AI title for cluster");
             core.title_pending.insert(cluster.id);
             let claude = claude_client.clone();
-            let ollama = ollama_client.clone();
+            let llm = llm_client.clone();
             let gemini = gemini_client.clone();
             let budget = Arc::clone(budget);
             let tx = title_tx.clone();
@@ -1979,7 +1960,7 @@ fn tick_situations(
             let fallback_title = cluster.title.clone();
             tokio::spawn(async move {
                 if let Some(title) = generate_situation_title(
-                    claude.as_deref(), gemini.as_deref(), ollama.as_deref(), &budget, &entities, &topics, &regions,
+                    claude.as_deref(), gemini.as_deref(), llm.as_deref(), &budget, &entities, &topics, &regions,
                     &event_titles, event_count, source_count, None, None, None, &[],
                 ).await {
                     let _ = tx.send(TitleResult { cluster_id: cid, title }).await;
@@ -2068,11 +2049,11 @@ fn tick_situations(
         let events_since = signal_count.saturating_sub(ns.signal_count_at_gen);
 
         if gpu_paused || narratives_spawned_this_tick >= MAX_NARRATIVES_PER_TICK { continue; }
-        if claude_client.is_some() || gemini_client.is_some() || ollama_client.is_some() {
+        if claude_client.is_some() || gemini_client.is_some() || llm_client.is_some() {
             if sr_intel::should_regenerate(ns.version, ns.last_generated, events_since, false, false) {
                 let claude = claude_client.clone();
                 let gemini = gemini_client.clone();
-                let ollama = ollama_client.clone();
+                let llm = llm_client.clone();
                 let budget = Arc::clone(budget);
                 let tx = narrative_tx.clone();
                 let sid = cluster.id;
@@ -2097,7 +2078,7 @@ fn tick_situations(
                 };
 
                 tokio::spawn(async move {
-                    match generate_narrative_tiered(claude.as_deref(), gemini.as_deref(), ollama.as_deref(), &budget, &context).await {
+                    match generate_narrative_tiered(claude.as_deref(), gemini.as_deref(), llm.as_deref(), &budget, &context).await {
                         Ok(Some(narrative)) => { let _ = tx.send(NarrativeResult { situation_id: sid, narrative }).await; }
                         Ok(None) => { debug!("Narrative generation skipped (budget)"); }
                         Err(e) => { debug!("Narrative generation failed: {e}"); }
@@ -2179,7 +2160,7 @@ fn spawn_enrichment(
     event: &InsertableEvent,
     claude_client: &Option<Arc<ClaudeClient>>,
     gemini_client: &Option<Arc<GeminiClient>>,
-    ollama_client: &Option<Arc<OllamaClient>>,
+    llm_client: &Option<Arc<LlmClient>>,
     budget: &Arc<BudgetManager>,
     publish_tx: &broadcast::Sender<PublishEvent>,
     pool: &PgPool,
@@ -2193,7 +2174,7 @@ fn spawn_enrichment(
     if metrics.is_gpu_paused() {
         return false;
     }
-    let has_enrichment_backend = ollama_client.is_some() || gemini_client.is_some() || claude_client.is_some();
+    let has_enrichment_backend = llm_client.is_some() || gemini_client.is_some() || claude_client.is_some();
     let is_enrichable = matches!(
         event.event_type,
         EventType::NewsArticle | EventType::TelegramMessage | EventType::GeoNews | EventType::BlueskyPost
@@ -2208,7 +2189,7 @@ fn spawn_enrichment(
 
     let claude = claude_client.clone();
     let gemini = gemini_client.clone();
-    let ollama = ollama_client.clone();
+    let llm = llm_client.clone();
     let budget = Arc::clone(budget);
     let publish_tx = publish_tx.clone();
     let pool = pool.clone();
@@ -2260,7 +2241,7 @@ fn spawn_enrichment(
         let enrichment_result = enrich_article_tiered(
             claude.as_deref(),
             gemini.as_deref(),
-            ollama.as_deref(),
+            llm.as_deref(),
             &budget,
             &article_input,
         )

@@ -4,35 +4,31 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::prompts;
 use crate::types::{ArticleInput, EnrichedArticleV2};
 
-/// Client for local Ollama LLM inference (enrichment on GPU).
+/// Client for local LLM inference via OpenAI-compatible API (llama-server).
 /// Uses a semaphore to serialize requests — a single GPU can only run one
-/// inference at a time efficiently. Without this, 150 concurrent RSS articles
-/// would all hit Ollama simultaneously, causing GPU memory thrashing and
-/// fan spikes followed by idle periods.
-pub struct OllamaClient {
+/// inference at a time efficiently.
+pub struct LlmClient {
     http: reqwest::Client,
     base_url: String,
-    model: String,
     /// Limits concurrent GPU inference requests. Default: 1 (serial).
     gpu_semaphore: Semaphore,
 }
 
 #[derive(Serialize)]
 struct ChatRequest {
-    model: String,
     messages: Vec<ChatMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<ResponseFormat>,
     stream: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    format: Option<serde_json::Value>,
-    options: ChatOptions,
-    /// Disable thinking mode (Qwen3.5+ emits <think> tokens by default).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    think: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -42,26 +38,38 @@ struct ChatMessage {
 }
 
 #[derive(Serialize)]
-struct ChatOptions {
-    temperature: f32,
-    num_ctx: u32,
-    /// Cap output token count (e.g. 50 for titles). None = model default.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    num_predict: Option<u32>,
+struct ResponseFormat {
+    #[serde(rename = "type")]
+    type_: String, // "json_schema"
+    json_schema: JsonSchemaWrapper,
+}
+
+#[derive(Serialize)]
+struct JsonSchemaWrapper {
+    name: String,
+    strict: bool,
+    schema: serde_json::Value,
 }
 
 #[derive(Deserialize)]
 struct ChatResponse {
-    message: ResponseMessage,
-    #[serde(default)]
-    eval_count: u32,
-    #[serde(default)]
-    prompt_eval_count: u32,
+    choices: Vec<Choice>,
+    usage: Option<Usage>,
 }
 
 #[derive(Deserialize)]
-struct ResponseMessage {
-    content: String,
+struct Choice {
+    message: MessageContent,
+}
+
+#[derive(Deserialize)]
+struct MessageContent {
+    content: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Usage {
+    completion_tokens: Option<u32>,
 }
 
 /// JSON Schema for structured output — matches EnrichedArticleV2.
@@ -132,49 +140,33 @@ fn enrichment_schema() -> serde_json::Value {
     })
 }
 
-impl OllamaClient {
-    /// Create from environment variables (OLLAMA_URL, OLLAMA_MODEL).
-    /// Returns None if OLLAMA_URL is not set.
+impl LlmClient {
+    /// Create from environment variables.
+    /// Reads LLM_URL (required), falls back to OLLAMA_URL for backwards compat.
+    /// Returns None if neither is set.
     pub fn from_env() -> Option<Arc<Self>> {
-        let base_url = std::env::var("OLLAMA_URL").ok()?;
-        let model = std::env::var("OLLAMA_MODEL")
-            .unwrap_or_else(|_| "qwen2.5:7b".to_string());
+        let base_url = std::env::var("LLM_URL")
+            .or_else(|_| std::env::var("OLLAMA_URL"))
+            .ok()?;
 
         let http = reqwest::Client::builder()
-            .timeout(Duration::from_secs(120)) // local inference can be slow on first call
+            .timeout(Duration::from_secs(120))
             .build()
             .expect("Failed to build HTTP client");
 
-        info!(url = %base_url, model = %model, "Ollama client initialized (serial GPU queue)");
+        info!(url = %base_url, "LLM client initialized (serial GPU queue)");
 
-        Some(Arc::new(Self { http, base_url, model, gpu_semaphore: Semaphore::new(1) }))
+        Some(Arc::new(Self { http, base_url, gpu_semaphore: Semaphore::new(1) }))
     }
 
-    /// Check if the model is loaded and ready.
+    /// Check if llama-server is ready. GET {base_url}/health returns 200 when ready.
     pub async fn is_ready(&self) -> bool {
-        let url = format!("{}/api/tags", self.base_url);
-        match self.http.get(&url).send().await {
-            Ok(resp) => {
-                if let Ok(body) = resp.json::<serde_json::Value>().await {
-                    if let Some(models) = body.get("models").and_then(|m| m.as_array()) {
-                        return models.iter().any(|m| {
-                            m.get("name")
-                                .and_then(|n| n.as_str())
-                                .is_some_and(|n| n.starts_with(&self.model))
-                        });
-                    }
-                }
-                false
-            }
-            Err(_) => false,
-        }
+        self.health_check().await
     }
 
-    /// Lightweight health check: queries /api/tags to verify Ollama is responsive
-    /// without triggering GPU work (no model inference, no contention with BGE-M3).
-    /// Returns true if Ollama responds within 15 seconds.
+    /// Lightweight health check: GET /health with 15s timeout.
     pub async fn health_check(&self) -> bool {
-        let url = format!("{}/api/tags", self.base_url);
+        let url = format!("{}/health", self.base_url);
         let result = tokio::time::timeout(
             Duration::from_secs(15),
             self.http.get(&url).send(),
@@ -183,42 +175,13 @@ impl OllamaClient {
 
         match result {
             Ok(Ok(resp)) => resp.status().is_success(),
-            Ok(Err(_)) => false, // request error
-            Err(_) => false,     // timeout
-        }
-    }
-
-    /// Force-load the model into GPU memory by sending a minimal generation request.
-    /// This counteracts Ollama's automatic model unloading.
-    pub async fn warm_model(&self) -> Result<()> {
-        let body = serde_json::json!({
-            "model": self.model,
-            "prompt": "warmup",
-            "stream": false,
-            "options": { "num_predict": 1 }
-        });
-
-        let url = format!("{}/api/generate", self.base_url);
-        let resp = self.http
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-            .context("Ollama warm_model request failed")?;
-
-        if resp.status().is_success() {
-            info!(model = %self.model, "Ollama model warmed successfully");
-            Ok(())
-        } else {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            warn!(model = %self.model, status = %status, "Ollama warm_model failed: {body}");
-            bail!("Ollama warm_model failed: {status}")
+            Ok(Err(_)) => false,
+            Err(_) => false,
         }
     }
 
     /// Enrich a news article using local LLM inference.
-    /// Acquires GPU semaphore to serialize requests — prevents thrashing.
+    /// Acquires GPU semaphore to serialize requests.
     pub async fn enrich_article(&self, article: &ArticleInput) -> Result<EnrichedArticleV2> {
         let _permit = self.gpu_semaphore.acquire().await
             .map_err(|_| anyhow::anyhow!("GPU semaphore closed"))?;
@@ -232,7 +195,6 @@ impl OllamaClient {
         );
 
         let request = ChatRequest {
-            model: self.model.clone(),
             messages: vec![
                 ChatMessage {
                     role: "system".to_string(),
@@ -243,59 +205,62 @@ impl OllamaClient {
                     content: user_msg,
                 },
             ],
+            temperature: Some(0.0),
+            max_tokens: Some(2048),
+            response_format: Some(ResponseFormat {
+                type_: "json_schema".to_string(),
+                json_schema: JsonSchemaWrapper {
+                    name: "enrichment".to_string(),
+                    strict: true,
+                    schema: enrichment_schema(),
+                },
+            }),
             stream: false,
-            format: Some(enrichment_schema()),
-            options: ChatOptions {
-                temperature: 0.0,
-                num_ctx: 4096,
-                num_predict: None,
-            },
-            think: Some(false),
         };
 
-        let url = format!("{}/api/chat", self.base_url);
+        let url = format!("{}/v1/chat/completions", self.base_url);
         let resp = self.http
             .post(&url)
             .json(&request)
             .send()
             .await
-            .context("Ollama request failed")?;
+            .context("LLM request failed")?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("Ollama API error {status}: {body}");
+            bail!("LLM API error {status}: {body}");
         }
 
         let chat_resp: ChatResponse = resp.json().await
-            .context("Failed to parse Ollama response")?;
+            .context("Failed to parse LLM response")?;
 
-        let tokens_used = chat_resp.prompt_eval_count + chat_resp.eval_count;
-        debug!(
-            model = %self.model,
-            tokens = tokens_used,
-            "Ollama enrichment complete"
-        );
+        let content = chat_resp.choices.first()
+            .and_then(|c| c.message.content.as_deref())
+            .unwrap_or("");
 
-        let mut enriched: EnrichedArticleV2 = serde_json::from_str(&chat_resp.message.content)
-            .context("Failed to parse enrichment JSON from Ollama")?;
+        let tokens_used = chat_resp.usage
+            .as_ref()
+            .and_then(|u| u.completion_tokens)
+            .unwrap_or(0);
 
-        enriched.model = self.model.clone();
+        debug!(tokens = tokens_used, "LLM enrichment complete");
+
+        let mut enriched: EnrichedArticleV2 = serde_json::from_str(content)
+            .context("Failed to parse enrichment JSON from LLM")?;
+
+        enriched.model = "llama-server".to_string();
         enriched.tokens_used = tokens_used;
 
         Ok(enriched)
     }
 
     /// Simple text completion (no structured output). Used for title generation, etc.
-    /// Thinking disabled — titles are short and simple, and `num_predict` limits
-    /// total output tokens (thinking + content). With `think: true`, Qwen 3.5
-    /// spends all tokens on `<think>` reasoning and returns empty content.
     pub async fn complete_text(&self, system: &str, user: &str, max_tokens: u32) -> Result<String> {
         let _permit = self.gpu_semaphore.acquire().await
             .map_err(|_| anyhow::anyhow!("GPU semaphore closed"))?;
 
         let request = ChatRequest {
-            model: self.model.clone(),
             messages: vec![
                 ChatMessage {
                     role: "system".to_string(),
@@ -306,44 +271,43 @@ impl OllamaClient {
                     content: user.to_string(),
                 },
             ],
+            temperature: Some(0.0),
+            max_tokens: Some(max_tokens),
+            response_format: None,
             stream: false,
-            format: None,
-            options: ChatOptions {
-                temperature: 0.0,
-                num_ctx: max_tokens.max(2048),
-                num_predict: Some(50),
-            },
-            think: Some(false),
         };
 
-        let url = format!("{}/api/chat", self.base_url);
+        let url = format!("{}/v1/chat/completions", self.base_url);
         let resp = self.http
             .post(&url)
             .json(&request)
             .send()
             .await
-            .context("Ollama request failed")?;
+            .context("LLM request failed")?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("Ollama API error {status}: {body}");
+            bail!("LLM API error {status}: {body}");
         }
 
         let chat_resp: ChatResponse = resp.json().await
-            .context("Failed to parse Ollama response")?;
+            .context("Failed to parse LLM response")?;
 
-        Ok(strip_think_tags(&chat_resp.message.content))
+        let content = chat_resp.choices.first()
+            .and_then(|c| c.message.content.as_deref())
+            .unwrap_or("");
+
+        Ok(strip_think_tags(content))
     }
 
     /// Generate a situation narrative using local LLM.
-    /// Thinking mode enabled — produces more analytical, coherent narratives.
+    /// Returns (content, tokens_used).
     pub async fn generate_narrative(&self, system: &str, user: &str) -> Result<(String, u32)> {
         let _permit = self.gpu_semaphore.acquire().await
             .map_err(|_| anyhow::anyhow!("GPU semaphore closed"))?;
 
         let request = ChatRequest {
-            model: self.model.clone(),
             messages: vec![
                 ChatMessage {
                     role: "system".to_string(),
@@ -354,49 +318,49 @@ impl OllamaClient {
                     content: user.to_string(),
                 },
             ],
+            temperature: Some(0.1),
+            max_tokens: None,
+            response_format: None,
             stream: false,
-            format: None,
-            options: ChatOptions {
-                temperature: 0.1,
-                num_ctx: 8192,
-                num_predict: None,
-            },
-            think: Some(true),
         };
 
-        let url = format!("{}/api/chat", self.base_url);
+        let url = format!("{}/v1/chat/completions", self.base_url);
         let resp = self.http
             .post(&url)
             .json(&request)
             .send()
             .await
-            .context("Ollama narrative request failed")?;
+            .context("LLM narrative request failed")?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("Ollama API error {status}: {body}");
+            bail!("LLM API error {status}: {body}");
         }
 
         let chat_resp: ChatResponse = resp.json().await
-            .context("Failed to parse Ollama narrative response")?;
+            .context("Failed to parse LLM narrative response")?;
 
-        let tokens = chat_resp.prompt_eval_count + chat_resp.eval_count;
-        debug!(model = %self.model, tokens, "Ollama narrative complete");
-        Ok((strip_think_tags(&chat_resp.message.content), tokens))
+        let content = chat_resp.choices.first()
+            .and_then(|c| c.message.content.as_deref())
+            .unwrap_or("");
+
+        let tokens = chat_resp.usage
+            .as_ref()
+            .and_then(|u| u.completion_tokens)
+            .unwrap_or(0);
+
+        debug!(tokens, "LLM narrative complete");
+        Ok((strip_think_tags(content), tokens))
     }
 
     /// Run periodic analysis using local LLM with structured JSON output.
-    /// Returns (json_string, tokens_used, escalate_flag).
+    /// Returns (json_string, tokens_used).
     pub async fn analyze(&self, system: &str, user: &str) -> Result<(String, u32)> {
         let _permit = self.gpu_semaphore.acquire().await
             .map_err(|_| anyhow::anyhow!("GPU semaphore closed"))?;
 
-        // Use the analysis schema for structured output
-        let schema = analysis_schema();
-
         let request = ChatRequest {
-            model: self.model.clone(),
             messages: vec![
                 ChatMessage {
                     role: "system".to_string(),
@@ -407,36 +371,47 @@ impl OllamaClient {
                     content: user.to_string(),
                 },
             ],
+            temperature: Some(0.1),
+            max_tokens: Some(4096),
+            response_format: Some(ResponseFormat {
+                type_: "json_schema".to_string(),
+                json_schema: JsonSchemaWrapper {
+                    name: "analysis".to_string(),
+                    strict: true,
+                    schema: analysis_schema(),
+                },
+            }),
             stream: false,
-            format: Some(schema),
-            options: ChatOptions {
-                temperature: 0.1,
-                num_ctx: 8192,
-                num_predict: None,
-            },
-            think: Some(false),
         };
 
-        let url = format!("{}/api/chat", self.base_url);
+        let url = format!("{}/v1/chat/completions", self.base_url);
         let resp = self.http
             .post(&url)
             .json(&request)
             .send()
             .await
-            .context("Ollama analysis request failed")?;
+            .context("LLM analysis request failed")?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
-            bail!("Ollama API error {status}: {body}");
+            bail!("LLM API error {status}: {body}");
         }
 
         let chat_resp: ChatResponse = resp.json().await
-            .context("Failed to parse Ollama analysis response")?;
+            .context("Failed to parse LLM analysis response")?;
 
-        let tokens = chat_resp.prompt_eval_count + chat_resp.eval_count;
-        debug!(model = %self.model, tokens, "Ollama analysis complete");
-        Ok((chat_resp.message.content, tokens))
+        let content = chat_resp.choices.first()
+            .and_then(|c| c.message.content.clone())
+            .unwrap_or_default();
+
+        let tokens = chat_resp.usage
+            .as_ref()
+            .and_then(|u| u.completion_tokens)
+            .unwrap_or(0);
+
+        debug!(tokens, "LLM analysis complete");
+        Ok((content, tokens))
     }
 
     /// Audit a merge: ask if two situations are about the same event.
@@ -465,7 +440,6 @@ impl OllamaClient {
         );
 
         let request = ChatRequest {
-            model: self.model.clone(),
             messages: vec![
                 ChatMessage {
                     role: "system".to_string(),
@@ -476,23 +450,19 @@ impl OllamaClient {
                     content: user_msg,
                 },
             ],
+            temperature: Some(0.0),
+            max_tokens: Some(100),
+            response_format: None,
             stream: false,
-            format: None,
-            options: ChatOptions {
-                temperature: 0.0,
-                num_ctx: 2048,
-                num_predict: Some(50),
-            },
-            think: Some(false),
         };
 
-        let url = format!("{}/api/chat", self.base_url);
+        let url = format!("{}/v1/chat/completions", self.base_url);
         let resp = self.http
             .post(&url)
             .json(&request)
             .send()
             .await
-            .context("Ollama merge audit request failed")?;
+            .context("LLM merge audit request failed")?;
 
         if !resp.status().is_success() {
             // On error, assume merge is valid (don't undo)
@@ -500,20 +470,18 @@ impl OllamaClient {
         }
 
         let chat_resp: ChatResponse = resp.json().await
-            .context("Failed to parse Ollama merge audit response")?;
+            .context("Failed to parse LLM merge audit response")?;
 
-        let answer = strip_think_tags(&chat_resp.message.content).trim().to_lowercase();
+        let content = chat_resp.choices.first()
+            .and_then(|c| c.message.content.as_deref())
+            .unwrap_or("");
+
+        let answer = strip_think_tags(content).trim().to_lowercase();
         Ok(answer.starts_with("yes"))
-    }
-
-    pub fn model(&self) -> &str {
-        &self.model
     }
 }
 
 /// Strip any leaked `<think>...</think>` tags from model output.
-/// Ollama normally puts thinking in a separate `thinking` field, but as a safety
-/// net we also strip it from content in case of model/version differences.
 fn strip_think_tags(content: &str) -> String {
     let s = content.trim();
     if let Some(start) = s.find("<think>") {

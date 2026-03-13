@@ -12,7 +12,7 @@ use uuid::Uuid;
 use crate::budget::BudgetManager;
 use crate::client::ClaudeClient;
 use crate::gemini::{GeminiClient, GeminiModel};
-use crate::ollama::OllamaClient;
+use crate::llm::LlmClient;
 
 /// Generated narrative for a situation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -163,7 +163,7 @@ fn needs_sonnet(ctx: &NarrativeContext) -> bool {
 pub async fn generate_narrative_tiered(
     _claude: Option<&ClaudeClient>,
     gemini: Option<&GeminiClient>,
-    ollama: Option<&OllamaClient>,
+    llm: Option<&LlmClient>,
     budget: &Arc<BudgetManager>,
     ctx: &NarrativeContext,
 ) -> Result<Option<SituationNarrative>> {
@@ -204,25 +204,25 @@ pub async fn generate_narrative_tiered(
         // If Gemini not available, fall through to Ollama below
     }
 
-    // Routine situations (or high-severity when Gemini unavailable): Ollama
-    if let Some(oc) = ollama {
+    // Routine situations (or high-severity when Gemini unavailable): local LLM
+    if let Some(lc) = llm {
         tracing::debug!(
             situation = %ctx.situation_title,
-            "Generating narrative via Qwen (routine)"
+            "Generating narrative via local LLM (routine)"
         );
-        match oc.generate_narrative(NARRATIVE_SYSTEM, &user_prompt).await {
+        match lc.generate_narrative(NARRATIVE_SYSTEM, &user_prompt).await {
             Ok((text, tokens)) => {
                 return Ok(Some(SituationNarrative {
                     situation_id: ctx.situation_id,
                     version: ctx.current_version + 1,
                     narrative_text: text,
-                    model: oc.model().to_string(),
+                    model: "llama-server".to_string(),
                     tokens_used: tokens,
                     generated_at: Utc::now(),
                 }));
             }
             Err(e) => {
-                tracing::warn!(error = %e, "Ollama narrative failed, skipping");
+                tracing::warn!(error = %e, "LLM narrative failed, skipping");
                 return Ok(None);
             }
         }
@@ -283,7 +283,7 @@ Rules:
 /// Returns (summary_text, key_entities_json, key_dates_json) on success.
 pub async fn generate_summary(
     gemini: Option<&GeminiClient>,
-    ollama: Option<&OllamaClient>,
+    llm: Option<&LlmClient>,
     budget: &Arc<BudgetManager>,
     narrative_text: &str,
     previous_summary: Option<&str>,
@@ -306,14 +306,14 @@ pub async fn generate_summary(
     prompt.push_str(narrative_text);
     prompt.push_str("\n\nGenerate the updated cumulative summary JSON.");
 
-    // Try Ollama first (cheap), then Gemini Flash-Lite
-    if let Some(oc) = ollama {
-        match oc.generate_narrative(SUMMARY_SYSTEM, &prompt).await {
+    // Try local LLM first (cheap), then Gemini Flash-Lite
+    if let Some(lc) = llm {
+        match lc.generate_narrative(SUMMARY_SYSTEM, &prompt).await {
             Ok((text, _tokens)) => {
                 return parse_summary_response(&text);
             }
             Err(e) => {
-                tracing::debug!("Ollama summary generation failed: {e}");
+                tracing::debug!("LLM summary generation failed: {e}");
             }
         }
     }

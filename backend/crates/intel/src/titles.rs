@@ -5,7 +5,7 @@ use tracing::{debug, info};
 use crate::budget::BudgetManager;
 use crate::client::ClaudeClient;
 use crate::gemini::GeminiClient;
-use crate::ollama::OllamaClient;
+use crate::llm::LlmClient;
 use crate::prompts;
 
 /// Multi-word geographic phrases to strip first (longest first to avoid partial matches).
@@ -243,7 +243,7 @@ fn filter_relevant_entities(
 pub async fn generate_situation_title(
     _claude_client: Option<&ClaudeClient>,
     _gemini_client: Option<&GeminiClient>,
-    ollama_client: Option<&OllamaClient>,
+    llm_client: Option<&LlmClient>,
     _budget: &Arc<BudgetManager>,
     entities: &[String],
     topics: &[String],
@@ -266,19 +266,19 @@ pub async fn generate_situation_title(
         severity_dist, event_type_breakdown, fatality_count, enrichment_summaries,
     );
 
-    if let Some(ollama) = ollama_client {
-        match ollama.complete_text(prompts::TITLE_SYSTEM, &user_prompt, 2048).await {
+    if let Some(llm) = llm_client {
+        match llm.complete_text(prompts::TITLE_SYSTEM, &user_prompt, 2048).await {
             Ok(text) => {
                 let title = text.trim().trim_matches('"').to_string();
                 if is_garbage_title(&title) {
-                    info!(title = %title, backend = "ollama", "Rejected garbage title from Ollama, using heuristic");
+                    info!(title = %title, backend = "llm", "Rejected garbage title from LLM, using heuristic");
                     return None;
                 }
-                info!(title = %title, backend = "ollama", "Generated situation title");
+                info!(title = %title, backend = "llm", "Generated situation title");
                 return Some(title);
             }
             Err(e) => {
-                debug!(error = %e, "Ollama title generation failed, using heuristic");
+                debug!(error = %e, "LLM title generation failed, using heuristic");
             }
         }
     }

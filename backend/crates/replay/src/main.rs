@@ -23,7 +23,7 @@ use clap::{Parser, Subcommand};
 use tracing::info;
 
 use sr_config::PipelineConfig;
-use sr_intel::{BudgetManager, ClaudeClient, OllamaClient};
+use sr_intel::{BudgetManager, ClaudeClient, LlmClient};
 use sr_pipeline::replay::{
     GoldenFile, ReplayComparison, ReplayConfig, ReplayDataset, ReplayEvent, ReplayHarness,
     ReplayMetrics, ScoreCard,
@@ -81,7 +81,7 @@ enum Commands {
         label: Option<String>,
 
         /// Enable AI processing (enrichment, titles, narratives).
-        /// Requires OLLAMA_URL and/or ANTHROPIC_API_KEY env vars.
+        /// Requires LLM_URL and/or ANTHROPIC_API_KEY env vars.
         #[arg(long, default_value = "false")]
         ai: bool,
     },
@@ -154,7 +154,7 @@ enum Commands {
         snapshot_interval: i64,
 
         /// Enable AI processing (enrichment, titles, narratives).
-        /// Requires OLLAMA_URL and/or ANTHROPIC_API_KEY env vars.
+        /// Requires LLM_URL and/or ANTHROPIC_API_KEY env vars.
         #[arg(long, default_value = "false")]
         ai: bool,
     },
@@ -308,20 +308,20 @@ async fn cmd_run_db(
     };
 
     let mut harness = if ai {
-        let ollama = OllamaClient::from_env();
+        let llm = LlmClient::from_env();
         let claude = std::env::var("ANTHROPIC_API_KEY")
             .ok()
             .map(|key| Arc::new(ClaudeClient::new(key)));
         let budget = BudgetManager::from_env();
-        if ollama.is_none() && claude.is_none() {
-            anyhow::bail!("--ai requires OLLAMA_URL and/or ANTHROPIC_API_KEY env vars");
+        if llm.is_none() && claude.is_none() {
+            anyhow::bail!("--ai requires LLM_URL and/or ANTHROPIC_API_KEY env vars");
         }
         info!(
-            ollama = ollama.is_some(),
+            llm = llm.is_some(),
             claude = claude.is_some(),
             "AI clients initialized for replay"
         );
-        ReplayHarness::with_ai(pipeline_config, replay_config, ollama, claude, budget)
+        ReplayHarness::with_ai(pipeline_config, replay_config, llm, claude, budget)
     } else {
         ReplayHarness::new(pipeline_config, replay_config)
     };
@@ -541,20 +541,20 @@ async fn cmd_run_file(
     };
 
     let mut harness = if ai {
-        let ollama = OllamaClient::from_env();
+        let llm = LlmClient::from_env();
         let claude = std::env::var("ANTHROPIC_API_KEY")
             .ok()
             .map(|key| Arc::new(ClaudeClient::new(key)));
         let budget = BudgetManager::from_env();
-        if ollama.is_none() && claude.is_none() {
-            anyhow::bail!("--ai requires OLLAMA_URL and/or ANTHROPIC_API_KEY env vars");
+        if llm.is_none() && claude.is_none() {
+            anyhow::bail!("--ai requires LLM_URL and/or ANTHROPIC_API_KEY env vars");
         }
         info!(
-            ollama = ollama.is_some(),
+            llm = llm.is_some(),
             claude = claude.is_some(),
             "AI clients initialized for replay"
         );
-        ReplayHarness::with_ai(pipeline_config, replay_config, ollama, claude, budget)
+        ReplayHarness::with_ai(pipeline_config, replay_config, llm, claude, budget)
     } else {
         ReplayHarness::new(pipeline_config, replay_config)
     };

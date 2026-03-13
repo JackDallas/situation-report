@@ -7,7 +7,7 @@ use std::time::Instant;
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use sr_config::PipelineConfig;
-use sr_intel::{BudgetManager, ClaudeClient, OllamaClient};
+use sr_intel::{BudgetManager, ClaudeClient, LlmClient};
 use sr_types::EventType;
 use tracing::{debug, info};
 
@@ -63,7 +63,7 @@ impl ReplayHarness {
     pub fn with_ai(
         pipeline_config: PipelineConfig,
         replay_config: ReplayConfig,
-        ollama: Option<Arc<OllamaClient>>,
+        llm: Option<Arc<LlmClient>>,
         claude: Option<Arc<ClaudeClient>>,
         budget: Arc<BudgetManager>,
     ) -> Self {
@@ -71,7 +71,7 @@ impl ReplayHarness {
             core: PipelineCore::new(
                 Arc::new(pipeline_config),
                 false, // embeddings require the ONNX model; not loaded in replay
-                ollama,
+                llm,
                 claude,
                 None, // Gemini not used in replay yet
                 Some(budget),

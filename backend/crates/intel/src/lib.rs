@@ -4,7 +4,7 @@ pub mod client;
 pub mod enrich;
 pub mod gemini;
 pub mod narrative;
-pub mod ollama;
+pub mod llm;
 pub mod prompts;
 pub mod search;
 pub mod titles;
@@ -18,7 +18,7 @@ pub use budget::BudgetManager;
 pub use client::ClaudeClient;
 pub use enrich::{article_from_event, enrich_article, enrich_article_gemini, enrich_article_tiered};
 pub use gemini::{GeminiClient, GeminiModel};
-pub use ollama::OllamaClient;
+pub use llm::LlmClient;
 pub use search::{
     GapAnalysisInput, GapType, InformationGap, SearchHistory, SearchRateLimiter,
     SupplementaryData, analyze_gaps, build_gap_query, build_search_query,

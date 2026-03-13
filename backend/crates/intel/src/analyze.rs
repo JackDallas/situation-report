@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::budget::BudgetManager;
 use crate::client::ClaudeClient;
 use crate::gemini::{GeminiClient, GeminiModel};
-use crate::ollama::OllamaClient;
+use crate::llm::LlmClient;
 use crate::prompts;
 use crate::types::{
     AnalysisReport, EntityConnection, EventSummary, SituationSummary, SuggestedMerge,
@@ -114,7 +114,7 @@ pub async fn analyze_current_state(
 pub async fn analyze_tiered(
     _claude: Option<&ClaudeClient>,
     gemini: Option<&GeminiClient>,
-    ollama: Option<&OllamaClient>,
+    llm: Option<&LlmClient>,
     budget: &Arc<BudgetManager>,
     input: &AnalysisInput,
 ) -> Result<(AnalysisReport, bool)> {
@@ -131,18 +131,18 @@ pub async fn analyze_tiered(
         // If Gemini unavailable for HIGH tempo, fall through to Ollama
     }
 
-    // NORMAL/ELEVATED (or HIGH when Gemini unavailable) → Ollama
-    if let Some(oc) = ollama {
+    // NORMAL/ELEVATED (or HIGH when Gemini unavailable) → local LLM
+    if let Some(lc) = llm {
         let user_msg = prompts::analysis_user(&input.situations, &input.recent_events, &input.tempo);
 
         info!(
             situations = input.situations.len(),
             events = input.recent_events.len(),
             tempo = %input.tempo,
-            "Running periodic analysis via Qwen (routine)"
+            "Running periodic analysis via local LLM (routine)"
         );
 
-        let (json_str, tokens) = oc.analyze(prompts::ANALYSIS_SYSTEM, &user_msg).await?;
+        let (json_str, tokens) = lc.analyze(prompts::ANALYSIS_SYSTEM, &user_msg).await?;
 
         // Strip markdown code fences if present
         let clean = json_str
@@ -153,7 +153,7 @@ pub async fn analyze_tiered(
         let clean = clean.strip_suffix("```").unwrap_or(clean).trim();
 
         let parsed: serde_json::Value =
-            serde_json::from_str(clean).context("Failed to parse Qwen analysis JSON")?;
+            serde_json::from_str(clean).context("Failed to parse LLM analysis JSON")?;
 
         let escalate = parsed["escalate"].as_bool().unwrap_or(false);
 
@@ -171,7 +171,7 @@ pub async fn analyze_tiered(
                 .unwrap_or("STABLE")
                 .to_string(),
             key_entities: parse_entity_connections(&parsed["key_entities"]),
-            model: oc.model().to_string(),
+            model: "llama-server".to_string(),
             tokens_used: tokens,
             tempo: input.tempo.clone(),
         };
@@ -181,17 +181,17 @@ pub async fn analyze_tiered(
             clusters = report.topic_clusters.len(),
             escalate,
             tokens,
-            "Qwen analysis complete"
+            "LLM analysis complete"
         );
 
         if escalate {
-            warn!("Qwen flagged escalation — Gemini/Sonnet re-analysis recommended");
+            warn!("LLM flagged escalation — Gemini re-analysis recommended");
         }
 
         return Ok((report, escalate));
     }
 
-    bail!("No LLM backend available for analysis (Ollama required for NORMAL/ELEVATED tempo)");
+    bail!("No LLM backend available for analysis");
 }
 
 /// Run analysis via Gemini Flash with structured JSON output.
