@@ -242,7 +242,7 @@ pub(crate) fn recompute_cluster_severity(cluster: &mut SituationCluster, severit
     let severity_cap = if disaster_only { Severity::High } else { Severity::Critical };
 
     let has_cyber_sources = effective_source_types.iter().any(|s| is_cyber_source(*s));
-    let source_diversity = effective_source_types.len();
+    let source_diversity = super::scoring::effective_source_diversity(effective_source_types);
 
     // Compute severity from scratch based on current cluster state.
     // Multiple paths to escalation: conflict, cyber, environmental, or sheer corroboration.
@@ -255,9 +255,9 @@ pub(crate) fn recompute_cluster_severity(cluster: &mut SituationCluster, severit
         // Active armed conflict with heavy multi-source corroboration
         Severity::Critical.min(severity_cap)
     } else if is_active_or_developing
-        && (has_conflict_sources || has_conflict_topics)
+        && has_conflict_topics
         && effective_event_count >= severity_config.high_min_events
-        && source_diversity >= severity_config.medium_min_sources
+        && source_diversity >= severity_config.critical_min_sources.min(3)
     {
         // Developing/active conflict situation with multi-source corroboration
         Severity::High.min(severity_cap)
@@ -486,6 +486,10 @@ impl SituationGraph {
 
             let gap_tolerance = compute_gap_tolerance(cluster, &self.config.phases, now);
 
+            // Track whether the phase transition was blocked by dwell time.
+            // Severity recompute must ALWAYS run regardless of phase transition outcome.
+            let mut phase_blocked = false;
+
             if let Some((new_phase, reason)) = evaluate_phase_transition(cluster.phase, &metrics, gap_tolerance, &self.config.phases) {
                 let is_declining = matches!(
                     new_phase,
@@ -505,14 +509,10 @@ impl SituationGraph {
                                 hours_in_active = format!("{:.1}", hours_in_active),
                                 "Phase transition blocked: Critical needs 24h dwell in Active"
                             );
-                            if let Some(c) = self.clusters.get_mut(&cid) {
-                                c.peak_event_rate = peak_rate;
-                                if current_rate >= c.peak_event_rate * decay { c.peak_rate_at = now; }
-                            }
-                            continue;
+                            phase_blocked = true;
                         }
                     }
-                    if cluster.severity == Severity::High
+                    if !phase_blocked && cluster.severity == Severity::High
                         && matches!(new_phase, SituationPhase::Declining | SituationPhase::Resolved | SituationPhase::Historical)
                         && cluster.phase == SituationPhase::Active
                     {
@@ -524,16 +524,12 @@ impl SituationGraph {
                                 hours_in_active = format!("{:.1}", hours_in_active),
                                 "Phase transition blocked: High needs 12h dwell in Active"
                             );
-                            if let Some(c) = self.clusters.get_mut(&cid) {
-                                c.peak_event_rate = peak_rate;
-                                if current_rate >= c.peak_event_rate * decay { c.peak_rate_at = now; }
-                            }
-                            continue;
+                            phase_blocked = true;
                         }
                     }
                 }
 
-                if cluster.phase == SituationPhase::Active
+                if !phase_blocked && cluster.phase == SituationPhase::Active
                     && new_phase == SituationPhase::Declining
                 {
                     let hours_in_active = (now - cluster.phase_changed_at).num_minutes().max(0) as f64 / 60.0;
@@ -544,50 +540,52 @@ impl SituationGraph {
                             hours_in_active = format!("{:.1}", hours_in_active),
                             "Phase transition blocked: minimum 6h dwell time in Active not met"
                         );
-                        if let Some(c) = self.clusters.get_mut(&cid) {
-                            c.peak_event_rate = peak_rate;
-                            if current_rate >= c.peak_event_rate * decay { c.peak_rate_at = now; }
-                        }
-                        continue;
+                        phase_blocked = true;
                     }
 
-                    let four_hours_ago = now - chrono::Duration::hours(4);
-                    let has_recent_events = cluster.event_ids.iter().any(|(t, _)| *t >= four_hours_ago);
-                    if has_recent_events {
-                        debug!(
-                            cluster_id = %cid,
-                            title = %cluster.title,
-                            "Phase transition blocked: recent events within last 4h prevent declining"
-                        );
-                        if let Some(c) = self.clusters.get_mut(&cid) {
-                            c.peak_event_rate = peak_rate;
-                            if current_rate >= c.peak_event_rate * decay { c.peak_rate_at = now; }
+                    if !phase_blocked {
+                        let four_hours_ago = now - chrono::Duration::hours(4);
+                        let has_recent_events = cluster.event_ids.iter().any(|(t, _)| *t >= four_hours_ago);
+                        if has_recent_events {
+                            debug!(
+                                cluster_id = %cid,
+                                title = %cluster.title,
+                                "Phase transition blocked: recent events within last 4h prevent declining"
+                            );
+                            phase_blocked = true;
                         }
-                        continue;
                     }
                 }
 
-                let transition = PhaseTransition {
-                    from_phase: cluster.phase,
-                    to_phase: new_phase,
-                    trigger_reason: reason,
-                    metrics_snapshot: metrics.to_json(),
-                    transitioned_at: now,
-                };
+                if phase_blocked {
+                    // Update peak rate even when phase is blocked
+                    if let Some(c) = self.clusters.get_mut(&cid) {
+                        c.peak_event_rate = peak_rate;
+                        if current_rate >= c.peak_event_rate * decay { c.peak_rate_at = now; }
+                    }
+                } else {
+                    let transition = PhaseTransition {
+                        from_phase: cluster.phase,
+                        to_phase: new_phase,
+                        trigger_reason: reason,
+                        metrics_snapshot: metrics.to_json(),
+                        transitioned_at: now,
+                    };
 
-                let cluster = self.clusters.get_mut(&cid).unwrap();
-                cluster.phase = new_phase;
-                cluster.phase_changed_at = now;
-                cluster.peak_event_rate = peak_rate;
-                if current_rate >= cluster.peak_event_rate * decay {
-                    cluster.peak_rate_at = now;
-                }
-                cluster.phase_transitions.push(transition.clone());
-                if cluster.phase_transitions.len() > 20 {
-                    cluster.phase_transitions.drain(..cluster.phase_transitions.len() - 20);
-                }
+                    let cluster = self.clusters.get_mut(&cid).unwrap();
+                    cluster.phase = new_phase;
+                    cluster.phase_changed_at = now;
+                    cluster.peak_event_rate = peak_rate;
+                    if current_rate >= cluster.peak_event_rate * decay {
+                        cluster.peak_rate_at = now;
+                    }
+                    cluster.phase_transitions.push(transition.clone());
+                    if cluster.phase_transitions.len() > 20 {
+                        cluster.phase_transitions.drain(..cluster.phase_transitions.len() - 20);
+                    }
 
-                transitions.push((cid, transition));
+                    transitions.push((cid, transition));
+                }
             } else {
                 if let Some(cluster) = self.clusters.get_mut(&cid) {
                     cluster.peak_event_rate = peak_rate;
@@ -597,7 +595,9 @@ impl SituationGraph {
                 }
             }
 
-            // Recompute cluster severity
+            // Recompute cluster severity — runs unconditionally, even when phase transition
+            // is blocked by dwell time. Previously, dwell-time `continue` statements skipped
+            // this, causing stale HIGH severity to persist indefinitely.
             if let Some(cluster) = self.clusters.get_mut(&cid) {
                 let old_sev = cluster.severity;
                 if recompute_cluster_severity(cluster, &self.config.severity, &self.config.certainty, now) {
