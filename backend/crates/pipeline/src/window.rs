@@ -130,6 +130,66 @@ impl CorrelationWindow {
             .unwrap_or_default()
     }
 
+    /// Extract 2-letter country code from an event's payload or title.
+    /// Public wrapper for use by correlation rules.
+    pub fn event_country<'a>(&self, event: &'a InsertableEvent) -> Option<&'a str> {
+        Self::extract_country(event)
+    }
+
+    /// Extract 2-letter country code from an event's payload or title.
+    /// Checks `payload.country`, `payload.country_code`, and falls back to
+    /// extracting a trailing " in XX" pattern from the title.
+    pub(crate) fn extract_country(event: &InsertableEvent) -> Option<&str> {
+        if let Some(cc) = event.payload.get("country").and_then(|v| v.as_str()) {
+            if cc.len() == 2 {
+                return Some(cc);
+            }
+        }
+        if let Some(cc) = event.payload.get("country_code").and_then(|v| v.as_str()) {
+            if cc.len() == 2 {
+                return Some(cc);
+            }
+        }
+        // Fallback: extract " in XX" from title (used by OONI censorship events)
+        if let Some(title) = event.title.as_deref() {
+            if title.len() >= 6 {
+                let suffix = &title[title.len() - 6..];
+                if suffix.starts_with(" in ") && suffix.len() == 6 {
+                    return Some(&title[title.len() - 2..]);
+                }
+            }
+        }
+        None
+    }
+
+    /// Get events of a given type with a matching country code within a time window.
+    /// Country is extracted from `payload.country`, `payload.country_code`, or title suffix.
+    pub fn by_type_and_country(
+        &self,
+        event_type: EventType,
+        country: &str,
+        within: Duration,
+    ) -> Vec<&InsertableEvent> {
+        let cutoff = Utc::now() - within;
+        self.by_event_type
+            .get(&event_type)
+            .map(|indices| {
+                indices
+                    .iter()
+                    .filter_map(|&idx| {
+                        let ts = &self.events[idx];
+                        if ts.ingested >= cutoff {
+                            if Self::extract_country(&ts.event) == Some(country) {
+                                return Some(&ts.event);
+                            }
+                        }
+                        None
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     /// Get events of a given type in a specific region within a time window.
     pub fn by_type_and_region(
         &self,
@@ -314,6 +374,48 @@ mod tests {
 
         let near_kyiv = w.near(EventType::ThermalAnomaly, 50.4, 30.5, 50.0, Duration::from_secs(60));
         assert_eq!(near_kyiv.len(), 1);
+    }
+
+    fn make_event_with_country(event_type: EventType, region: Option<&str>, country: &str) -> InsertableEvent {
+        InsertableEvent {
+            event_type,
+            source_type: SourceType::Acled,
+            region_code: region.map(|s| s.to_string()),
+            payload: serde_json::json!({"country": country}),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_by_type_and_country() {
+        let mut w = CorrelationWindow::new(Duration::from_secs(3600));
+        // Two BGP events in middle-east, but different countries
+        w.push(make_event_with_country(EventType::BgpAnomaly, Some("middle-east"), "IR"));
+        w.push(make_event_with_country(EventType::BgpAnomaly, Some("middle-east"), "IQ"));
+        w.push(make_event_with_country(EventType::BgpAnomaly, Some("middle-east"), "IR"));
+
+        let ir = w.by_type_and_country(EventType::BgpAnomaly, "IR", Duration::from_secs(60));
+        assert_eq!(ir.len(), 2, "Should only match IR events");
+
+        let iq = w.by_type_and_country(EventType::BgpAnomaly, "IQ", Duration::from_secs(60));
+        assert_eq!(iq.len(), 1, "Should only match IQ events");
+
+        // by_type_and_region still returns all 3 (same mega-region)
+        let all = w.by_type_and_region(EventType::BgpAnomaly, "middle-east", Duration::from_secs(60));
+        assert_eq!(all.len(), 3, "Region-level should match all");
+    }
+
+    #[test]
+    fn test_extract_country_from_title() {
+        // OONI censorship events have country in title suffix
+        let event = InsertableEvent {
+            event_type: EventType::CensorshipEvent,
+            source_type: SourceType::Acled,
+            title: Some("Censorship anomaly: https://example.com/ in SY".to_string()),
+            payload: serde_json::Value::Null,
+            ..Default::default()
+        };
+        assert_eq!(CorrelationWindow::extract_country(&event), Some("SY"));
     }
 
     #[test]

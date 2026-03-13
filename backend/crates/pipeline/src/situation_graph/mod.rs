@@ -62,6 +62,9 @@ pub struct SituationGraph {
     /// Held for up to `noise_buffer_secs` to see if a matching cluster appears
     /// or if other pending events share enough signal to form a cluster together.
     pending_buffer: Vec<PendingEvent>,
+    /// Override clock for deterministic replay. When set, `self.now()` returns
+    /// this value instead of `Utc::now()`. Advanced by replay harness.
+    clock_override: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +80,10 @@ pub struct SituationCluster {
     pub first_seen: DateTime<Utc>,
     pub last_updated: DateTime<Utc>,
     pub centroid: Option<(f64, f64)>,
+    /// Recent event coordinates for median-based centroid calculation.
+    /// Capped at 30 entries — old entries are dropped as new ones arrive.
+    #[serde(default)]
+    pub coord_buffer: Vec<(f64, f64)>,
     /// Convenience counter kept in sync with `event_ids.len()`.
     pub event_count: usize,
     /// Count of high-signal events (conflict, news, geo) — used to gate regen triggers.
@@ -115,6 +122,86 @@ pub struct SituationCluster {
     /// Composite anomaly score (0.0–1.0) based on burst detection across topics.
     #[serde(default)]
     pub anomaly_score: f64,
+    /// When this cluster was last retroactively swept for historical event links.
+    #[serde(default)]
+    pub last_retro_sweep: Option<DateTime<Utc>>,
+    /// Total events ever ingested (survives shedding, unlike event_ids.len()).
+    #[serde(default)]
+    pub total_events_ingested: usize,
+}
+
+/// Parameters for a retroactive sweep DB query (returned by `retro_sweep_candidates`).
+pub struct RetroSweepParams {
+    pub cluster_id: Uuid,
+    pub entity_names: Vec<String>,
+    pub entity_patterns: Vec<String>,
+    pub lookback_from: DateTime<Utc>,
+    pub lookback_to: DateTime<Utc>,
+    pub exclude_source_ids: HashSet<String>,
+}
+
+/// Event types whose coordinates represent the actual event location.
+/// These contribute to situation centroids. Excluded:
+/// - News/RSS/GDELT/Telegram: geocoded to publisher, not event location
+/// - NOTAMs: accurate airspace coords but unrelated to the situation topic
+///   (e.g. UK Heathrow NOTAM clustered with Iran conflict)
+/// - Shodan/Internet outage: infrastructure locations, not geopolitical events
+fn has_reliable_coordinates(event_type: EventType) -> bool {
+    matches!(
+        event_type,
+        EventType::ThermalAnomaly
+            | EventType::SeismicEvent
+            | EventType::NuclearEvent
+            | EventType::GeoEvent
+            | EventType::ConflictEvent
+            | EventType::GpsInterference
+            | EventType::FishingEvent
+    )
+}
+
+/// Check if a centroid exactly matches a known region_center() value.
+/// These are fake centroids from region-level geocoding and should be excluded.
+pub(crate) fn is_region_center_fallback(lat: f64, lon: f64) -> bool {
+    const KNOWN_CENTERS: &[(f64, f64)] = &[
+        (27.0, 44.0),   // middle-east
+        (48.5, 31.0),   // eastern-europe
+        (48.0, 2.0),    // western-europe
+        (8.0, 25.0),    // africa / sub-saharan-africa
+        (28.0, 15.0),   // north-africa
+        (15.0, 105.0),  // southeast-asia
+        (35.0, 120.0),  // east-asia
+        (25.0, 78.0),   // south-asia
+        (42.0, 65.0),   // central-asia
+        (40.0, -100.0), // north-america
+        (-15.0, -55.0), // south-america
+        (15.0, -80.0),  // central-america / caribbean
+        (-25.0, 135.0), // oceania
+        (75.0, 0.0),    // arctic
+    ];
+    KNOWN_CENTERS
+        .iter()
+        .any(|(clat, clon)| (lat - clat).abs() < 0.01 && (lon - clon).abs() < 0.01)
+}
+
+/// Maximum distance (km) an event can be from the cluster centroid to contribute
+/// to the coord_buffer. Prevents worldwide GDACS events from averaging to Africa.
+const CENTROID_COHERENCE_RADIUS_KM: f64 = 2000.0;
+
+/// Compute a median-based centroid from a buffer of coordinates.
+/// Uses median(lat), median(lon) independently — resistant to outliers
+/// from misgeocoded events that corrupt running averages.
+pub(crate) fn median_centroid(coords: &[(f64, f64)]) -> (f64, f64) {
+    debug_assert!(!coords.is_empty());
+    let mut lats: Vec<f64> = coords.iter().map(|(lat, _)| *lat).collect();
+    let mut lons: Vec<f64> = coords.iter().map(|(_, lon)| *lon).collect();
+    lats.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    lons.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = lats.len() / 2;
+    if lats.len() % 2 == 0 {
+        ((lats[mid - 1] + lats[mid]) / 2.0, (lons[mid - 1] + lons[mid]) / 2.0)
+    } else {
+        (lats[mid], lons[mid])
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +220,28 @@ impl SituationGraph {
             config,
             merge_rejections: HashMap::new(),
             pending_buffer: Vec::new(),
+            clock_override: None,
         }
+    }
+
+    /// Current time — uses `clock_override` if set (replay mode), otherwise `Utc::now()`.
+    pub fn now(&self) -> DateTime<Utc> {
+        self.clock_override.unwrap_or_else(Utc::now)
+    }
+
+    /// Set the clock for deterministic replay. Pass `None` to revert to wall clock.
+    pub fn set_clock(&mut self, time: Option<DateTime<Utc>>) {
+        self.clock_override = time;
+    }
+
+    /// Diagnostic: number of internal clusters (before DTO filtering).
+    pub fn internal_cluster_count(&self) -> usize {
+        self.clusters.len()
+    }
+
+    /// Diagnostic: number of events buffered in the pending/noise buffer.
+    pub fn pending_buffer_len(&self) -> usize {
+        self.pending_buffer.len()
     }
 
     /// Score a candidate cluster for an event. Returns None if the cluster
@@ -226,6 +334,12 @@ impl SituationGraph {
                 score += scoring.geo_inner_bonus;
             } else if dist <= radius {
                 score += scoring.geo_outer_bonus;
+            } else if dist > CENTROID_COHERENCE_RADIUS_KM
+                && has_reliable_coordinates(event.event_type)
+            {
+                // Strong penalty for geo-reliable events very far from cluster centroid.
+                // Prevents worldwide GDACS earthquakes from clustering together.
+                score -= 15;
             }
         }
 
@@ -309,7 +423,7 @@ impl SituationGraph {
 
         // Temporal decay: reduce score for stale clusters
         let (half_life, offset) = self.config.decay_params(event.event_type.as_str());
-        let dt_hours = (Utc::now() - cluster.last_updated).num_minutes().max(0) as f64 / 60.0;
+        let dt_hours = (self.now() - cluster.last_updated).num_minutes().max(0) as f64 / 60.0;
         let effective_dt = (dt_hours - offset).max(0.0);
         let decay = (-0.693 / half_life * effective_dt).exp();
         score = (score as f64 * decay).round() as i32;
@@ -440,7 +554,7 @@ impl SituationGraph {
             }
             self.pending_buffer.push(PendingEvent {
                 event: event.clone(),
-                received_at: Utc::now(),
+                received_at: self.now(),
                 entities,
                 topics,
             });
@@ -452,7 +566,7 @@ impl SituationGraph {
     /// unmatched pending events that share enough signal, and discard expired
     /// entries that remain unmatched.
     pub fn flush_pending(&mut self, mut embedding_cache: Option<&mut EmbeddingCache>) {
-        let now = Utc::now();
+        let now = self.now();
         let max_age = chrono::Duration::seconds(self.config.sweep.noise_buffer_secs as i64);
 
         // Take the buffer out so we can iterate while mutating self.
@@ -637,6 +751,8 @@ impl SituationGraph {
         entities: HashSet<String>,
         topics: HashSet<String>,
     ) {
+        // Capture current time before taking mutable borrow on the cluster
+        let now = self.now();
         // Count children before taking mutable borrow on the cluster
         let child_count = self.clusters.values().filter(|c| c.parent_id == Some(cluster_id)).count();
 
@@ -658,6 +774,7 @@ impl SituationGraph {
             cluster.event_ids.drain(..drain_count);
         }
         cluster.event_count += 1;
+        cluster.total_events_ingested += 1;
         if is_high_signal_event(event.event_type) {
             cluster.signal_event_count += 1;
         }
@@ -665,22 +782,56 @@ impl SituationGraph {
         // Source type tracking
         cluster.source_types.insert(event.source_type);
 
-        // Update centroid (running weighted average)
+        // Update centroid via coordinate buffer (median-based, outlier-resistant)
+        // Prefer geo-reliable event types; fall back to any coords if cluster has none
         if let (Some(lat), Some(lon)) = (event.latitude, event.longitude) {
-            let n = (cluster.event_count - 1) as f64; // prior count
-            cluster.centroid = Some(match cluster.centroid {
-                Some((old_lat, old_lon)) => (
-                    (old_lat * n + lat) / (n + 1.0),
-                    (old_lon * n + lon) / (n + 1.0),
-                ),
-                None => (lat, lon),
-            });
+            if !is_region_center_fallback(lat, lon) {
+                if has_reliable_coordinates(event.event_type) {
+                    // Geo-reliable: add to buffer, but only if geographically coherent
+                    // with existing centroid (prevents worldwide GDACS events from
+                    // averaging to a meaningless central point)
+                    let close_enough = match cluster.centroid {
+                        Some((clat, clon)) => {
+                            distance_km(lat, lon, clat, clon) < CENTROID_COHERENCE_RADIUS_KM
+                        }
+                        None => true, // no centroid yet, always accept
+                    };
+                    if close_enough {
+                        cluster.coord_buffer.push((lat, lon));
+                        if cluster.coord_buffer.len() > 30 {
+                            cluster.coord_buffer.drain(..cluster.coord_buffer.len() - 30);
+                        }
+                        cluster.centroid = Some(median_centroid(&cluster.coord_buffer));
+                    }
+                } else if cluster.coord_buffer.is_empty() && cluster.centroid.is_none() {
+                    // Fallback: use non-reliable coords only if cluster has NO coords at all.
+                    // NOTAM events are excluded entirely — their airport coordinates are precise
+                    // but topically unrelated to the situation (a Cranfield NOTAM shouldn't set
+                    // the centroid for an "ECB Rate Decision" situation).
+                    // Also require the event's region to match the cluster's existing regions.
+                    let is_notam = event.event_type == EventType::NotamEvent;
+                    if !is_notam {
+                        let region_ok = cluster.region_codes.is_empty()
+                            || event.region_code.as_ref().map_or(false, |rc| {
+                                cluster.region_codes.contains(&*normalize_region(rc))
+                            });
+                        if region_ok {
+                            cluster.centroid = Some((lat, lon));
+                        }
+                    }
+                }
+            }
         }
 
         // Region (normalize to canonical hyphenated form)
+        // Cap at 4 regions to prevent unrelated region accumulation from
+        // events matched via embedding similarity but geographically distant
         if let Some(ref rc) = event.region_code {
             let norm = normalize_region(rc);
-            cluster.region_codes.insert(norm.to_string());
+            let norm_str = norm.to_string();
+            if cluster.region_codes.contains(&norm_str) || cluster.region_codes.len() < 4 {
+                cluster.region_codes.insert(norm_str);
+            }
         }
 
         // Severity – only upgrade if new event is higher, but allow
@@ -702,7 +853,7 @@ impl SituationGraph {
         if event.event_time < cluster.first_seen {
             cluster.first_seen = event.event_time;
         }
-        cluster.last_updated = Utc::now();
+        cluster.last_updated = now;
 
         // Merge entities with IDF-based eviction: if at cap, evict the lowest-IDF
         // (most common) entity to make room for a rarer, more specific one.
@@ -737,6 +888,10 @@ impl SituationGraph {
         // Merge topics with IDF-based eviction (same pattern)
         let max_topics = self.config.cluster_caps.max_topics;
         for t in &topics {
+            // Skip raw tag-format topics (e.g. "country:australia", "source:gdelt")
+            if t.contains(':') {
+                continue;
+            }
             if cluster.topics.contains(t) {
                 continue;
             }
@@ -804,16 +959,29 @@ impl SituationGraph {
         topics: HashSet<String>,
     ) -> Uuid {
         let id = Uuid::new_v4();
-        let now = Utc::now();
+        let now = self.now();
 
         let mut region_codes = HashSet::new();
         if let Some(ref rc) = event.region_code {
             region_codes.insert(normalize_region(rc).to_string());
         }
 
-        let centroid = match (event.latitude, event.longitude) {
-            (Some(lat), Some(lon)) => Some((lat, lon)),
-            _ => None,
+        let (centroid, coord_buffer) = match (event.latitude, event.longitude) {
+            (Some(lat), Some(lon)) if !is_region_center_fallback(lat, lon) => {
+                if has_reliable_coordinates(event.event_type) {
+                    // Geo-reliable: seed both centroid and buffer
+                    (Some((lat, lon)), vec![(lat, lon)])
+                } else if event.event_type == EventType::NotamEvent {
+                    // NOTAMs have precise airport coords but they're topically unrelated
+                    // to the situation — don't let them set the initial centroid
+                    (None, Vec::new())
+                } else {
+                    // Fallback: set centroid but don't seed buffer
+                    // so geo-reliable events will replace it later
+                    (Some((lat, lon)), Vec::new())
+                }
+            }
+            _ => (None, Vec::new()),
         };
 
         let event_ref = event
@@ -869,13 +1037,14 @@ impl SituationGraph {
             id,
             title,
             entities: entities.clone(),
-            topics: topics.clone(),
+            topics: topics.iter().filter(|t| !t.contains(':')).cloned().collect(),
             event_ids: vec![(event.event_time, event_ref)],
             region_codes,
             severity,
             first_seen: event.event_time,
             last_updated: now,
             centroid,
+            coord_buffer,
             event_count: 1,
             signal_event_count: if is_high_signal_event(event.event_type) { 1 } else { 0 },
             source_types,
@@ -894,6 +1063,8 @@ impl SituationGraph {
             phase_transitions: Vec::new(),
             certainty: 0.0,
             anomaly_score,
+            last_retro_sweep: None,
+            total_events_ingested: 1,
         };
 
         // Update indices
@@ -909,7 +1080,7 @@ impl SituationGraph {
     }
 
     /// Build a human-readable title from the top entities, topics, and regions.
-    fn generate_title(
+    pub(crate) fn generate_title(
         entities: &HashSet<String>,
         topics: &HashSet<String>,
         regions: &HashSet<String>,
@@ -920,9 +1091,14 @@ impl SituationGraph {
             .map(|rc| region_code_to_name(rc))
             .unwrap_or_else(|| "Unknown Region".to_string());
 
-        // Pick the best topic for context (prefer descriptive ones)
+        // Pick the best topic — prefer descriptive ones, skip entity-like topics
+        let entity_names_lower: HashSet<String> = entities.iter()
+            .map(|e| e.to_lowercase())
+            .collect();
         let topic_label = {
-            let mut sorted: Vec<&String> = topics.iter().collect();
+            let mut sorted: Vec<&String> = topics.iter()
+                .filter(|t| !entity_names_lower.contains(&t.to_lowercase()))
+                .collect();
             sorted.sort();
             sorted.first().map(|t| title_case(t))
         };
@@ -935,9 +1111,9 @@ impl SituationGraph {
             } else {
                 title_case(sorted[0])
             };
-            // If we have a topic, use it as context
             if let Some(ref topic) = topic_label {
-                return format!("{topic}: {entity_part} ({region_label})");
+                // Use dash format without region suffix (AI title replaces this quickly)
+                return format!("{entity_part} — {topic}");
             }
             return format!("{entity_part} — {region_label}");
         }
@@ -950,7 +1126,14 @@ impl SituationGraph {
     }
 
     /// Detect garbage titles produced by LLM refusals — these should never be locked.
-    fn is_garbage_title(title: &str) -> bool {
+    pub(crate) fn is_garbage_title(title: &str) -> bool {
+        if title.trim().is_empty() {
+            return true;
+        }
+        // Raw metadata leaked into title (e.g. "Country:afghanistan: ...")
+        if title.starts_with("Country:") || title.starts_with("country:") {
+            return true;
+        }
         let lower = title.to_lowercase();
         // LLM refusal patterns
         if lower.contains("no relevant")
@@ -967,6 +1150,65 @@ impl SituationGraph {
         // Short "and" titles (<=5 words like "Israel and Lebanon Border Conflict") are OK
         if lower.contains(" and ") && title.split_whitespace().count() >= 6 {
             return true;
+        }
+        // Repetitive/redundant titles (e.g. "Earthquake: Earthquake In Afghanistan, Earthquake In ...")
+        // Detect when the same keyword appears 3+ times (sign of list-concatenation)
+        for keyword in ["earthquake", "wildfire", "conflict", "attack"] {
+            if lower.matches(keyword).count() >= 3 {
+                return true;
+            }
+        }
+        // Title over 60 chars is too long for a headline
+        if title.len() > 60 {
+            return true;
+        }
+        // Colon-prefixed topic-name pattern (e.g., "afghanistan-cultural-expression: ...")
+        if title.contains(':') {
+            let prefix = title.split(':').next().unwrap_or("");
+            if prefix.contains('-') && prefix.len() > 15 {
+                return true;
+            }
+        }
+        // URL-slug titles (e.g., "Eu-terror-designations", "belgorod-heat-plant-strike")
+        // Detected when most words are joined by hyphens rather than spaces.
+        {
+            let words: Vec<&str> = title.split_whitespace().collect();
+            let hyphenated = words.iter().filter(|w| w.contains('-')).count();
+            if words.len() <= 3 && hyphenated >= 1 && title.contains('-') {
+                // A single slug-word like "Eu-terror-designations" is the entire title
+                let hyphen_chars = title.chars().filter(|c| *c == '-').count();
+                if hyphen_chars >= 2 {
+                    return true;
+                }
+            }
+        }
+        // Fallback generate_title() always uses " — " (em-dash).
+        // AI-generated titles never use this pattern.
+        if title.contains(" — ") {
+            return true;
+        }
+        // Comma-separated repeated patterns: "Earthquake In X, Earthquake In Y"
+        if title.contains(", ") {
+            let parts: Vec<&str> = title.split(", ").collect();
+            if parts.len() >= 2 {
+                let first_words: Vec<&str> = parts[0].split_whitespace().take(2).collect();
+                let second_words: Vec<&str> = parts[1].split_whitespace().take(2).collect();
+                if first_words.len() >= 2 && first_words == second_words {
+                    return true;
+                }
+            }
+        }
+        // Fallback generate_title() topic-only pattern: "Topic in REGION-NAME"
+        // e.g., "Idf in WESTERN-EUROPE" — a single topic word + region is not meaningful.
+        if lower.contains(" in ") {
+            let parts: Vec<&str> = title.splitn(2, " in ").collect();
+            if parts.len() == 2 {
+                let topic_part = parts[0].trim();
+                // Single-word topic before " in " is too vague
+                if !topic_part.contains(' ') && topic_part.len() <= 20 {
+                    return true;
+                }
+            }
         }
         // Vague filler patterns
         let vague = [
@@ -1050,7 +1292,7 @@ impl SituationGraph {
     /// Excludes clusters whose IDs are in `pending` (already being processed).
     pub fn clusters_needing_titles(&self, pending: &HashSet<Uuid>) -> Vec<&SituationCluster> {
         let quality = &self.config.quality;
-        let now = Utc::now();
+        let now = self.now();
         self.clusters
             .values()
             .filter(|c| {
@@ -1086,13 +1328,32 @@ impl SituationGraph {
     /// Update a cluster's title with an AI-generated one.
     /// Applies title stability checks for parent situations to prevent drift.
     pub fn update_cluster_title(&mut self, cluster_id: Uuid, title: String) {
-        // Reject garbage titles from the AI — don't store them, let it retry next cycle
+        let now = self.now();
+        // Reject garbage titles from the AI
         if Self::is_garbage_title(&title) {
-            debug!(
-                cluster_id = %cluster_id,
-                rejected_title = %title,
-                "AI title rejected: new title is garbage, keeping old"
-            );
+            // If the current title is ALSO garbage, replace with a basic generated one
+            // to break the garbage→garbage loop
+            if let Some(cluster) = self.clusters.get_mut(&cluster_id) {
+                if Self::is_garbage_title(&cluster.title) {
+                    let new_title = Self::generate_title(&cluster.entities, &cluster.topics, &cluster.region_codes);
+                    info!(
+                        cluster_id = %cluster_id,
+                        rejected_title = %title,
+                        fallback_title = %new_title,
+                        "AI title garbage, current also garbage — using fallback"
+                    );
+                    cluster.title = new_title;
+                    cluster.has_ai_title = false;
+                    cluster.title_signal_count_at_gen = cluster.signal_event_count;
+                    cluster.last_title_gen = now;
+                } else {
+                    debug!(
+                        cluster_id = %cluster_id,
+                        rejected_title = %title,
+                        "AI title rejected: new title is garbage, keeping old"
+                    );
+                }
+            }
             return;
         }
 
@@ -1117,7 +1378,7 @@ impl SituationGraph {
             cluster.title = title;
             cluster.has_ai_title = true;
             cluster.title_signal_count_at_gen = cluster.signal_event_count;
-            cluster.last_title_gen = Utc::now();
+            cluster.last_title_gen = now;
         }
     }
 
@@ -1125,8 +1386,9 @@ impl SituationGraph {
     /// If the cluster already has supplementary data, new articles are merged
     /// (deduped by URL, capped at 10 articles total).
     pub fn update_cluster_supplementary(&mut self, cluster_id: Uuid, data: sr_intel::search::SupplementaryData) {
+        let now = self.now();
         if let Some(cluster) = self.clusters.get_mut(&cluster_id) {
-            cluster.last_searched = Some(Utc::now());
+            cluster.last_searched = Some(now);
             match cluster.supplementary.as_mut() {
                 Some(existing) => existing.merge(data),
                 None => cluster.supplementary = Some(data),
@@ -1139,6 +1401,173 @@ impl SituationGraph {
         if let Some(cluster) = self.clusters.get_mut(&cluster_id) {
             cluster.search_history.set_from_db(gap, last, total, empty);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Retroactive sweep — link old events to current situations
+    // -----------------------------------------------------------------------
+
+    /// Return clusters eligible for retroactive sweep, prioritized by severity
+    /// and staleness of last sweep. Returns at most `max` candidates.
+    pub fn retro_sweep_candidates(&mut self, max: usize) -> Vec<RetroSweepParams> {
+        let now = self.now();
+        let lookback_hours = self.config.sweep.retro_sweep_lookback_hours;
+        let min_interval = chrono::Duration::seconds(self.config.sweep.retro_sweep_interval_secs as i64);
+
+        let mut candidates: Vec<(Uuid, u8)> = self.clusters.iter()
+            .filter(|(_, c)| {
+                // Must have enough signal to be worth sweeping
+                if c.signal_event_count < 3 { return false; }
+                // Must be alive (not resolved/historical)
+                if matches!(c.phase, SituationPhase::Resolved | SituationPhase::Historical) {
+                    return false;
+                }
+                // Must have entities to search for
+                if c.entities.is_empty() { return false; }
+                // Rate-limit: skip if recently swept
+                if let Some(last) = c.last_retro_sweep {
+                    if now - last < min_interval { return false; }
+                }
+                true
+            })
+            .map(|(&id, c)| (id, c.severity.rank()))
+            .collect();
+
+        // Sort: highest severity first, then by ID for stability
+        candidates.sort_by(|a, b| b.1.cmp(&a.1));
+        candidates.truncate(max);
+
+        candidates.iter().filter_map(|(id, _)| {
+            let cluster = self.clusters.get_mut(id)?;
+            // Mark as swept now
+            cluster.last_retro_sweep = Some(now);
+
+            let entity_names: Vec<String> = cluster.entities.iter().take(10).cloned().collect();
+            let entity_patterns: Vec<String> = entity_names.iter()
+                .map(|e| format!("%{}%", e))
+                .collect();
+            let lookback_from = cluster.first_seen - chrono::Duration::hours(lookback_hours as i64);
+            let lookback_to = now;
+            let exclude_source_ids: HashSet<String> = cluster.event_ids.iter()
+                .map(|(_, sid)| sid.clone())
+                .collect();
+
+            Some(RetroSweepParams {
+                cluster_id: *id,
+                entity_names,
+                entity_patterns,
+                lookback_from,
+                lookback_to,
+                exclude_source_ids,
+            })
+        }).collect()
+    }
+
+    /// Add retroactively discovered events to a cluster.
+    /// This is a lightweight version of update_cluster — it adds entity/topic
+    /// references and event_ids but does NOT modify severity, phase, or velocity.
+    /// Text data (titles, descriptions) is preserved in the DB; the cluster gains
+    /// references and enriched entity/topic context.
+    pub fn retroactive_add(
+        &mut self,
+        cluster_id: Uuid,
+        events: &[InsertableEvent],
+    ) -> usize {
+        let cluster = match self.clusters.get_mut(&cluster_id) {
+            Some(c) => c,
+            None => return 0,
+        };
+
+        let mut added = 0usize;
+        let existing_sids: HashSet<String> = cluster.event_ids.iter()
+            .map(|(_, sid)| sid.clone())
+            .collect();
+
+        for event in events {
+            let event_ref = event.source_id.clone()
+                .unwrap_or_else(|| event.event_type.to_string());
+            if existing_sids.contains(&event_ref) {
+                continue;
+            }
+
+            // Add event reference
+            cluster.event_ids.push((event.event_time, event_ref));
+            cluster.event_count += 1;
+            cluster.total_events_ingested += 1;
+            if is_high_signal_event(event.event_type) {
+                cluster.signal_event_count += 1;
+            }
+
+            // Extract and add entities/topics (enriching the cluster's context)
+            let entities = extract_entities(event, self.config.cluster_caps.max_entities_per_event);
+            for entity in &entities {
+                if cluster.entities.insert(entity.clone()) {
+                    self.entity_index.entry(entity.clone()).or_default().insert(cluster_id);
+                }
+            }
+            let topics = extract_topics(event, self.config.cluster_caps.max_enrichment_topics);
+            for topic in &topics {
+                if !topic.contains(':') {
+                    if cluster.topics.insert(topic.clone()) {
+                        self.topic_index.entry(topic.clone()).or_default().insert(cluster_id);
+                    }
+                }
+            }
+
+            // Add title for narrative context (preserve text data)
+            if let Some(ref title) = event.title {
+                let trimmed = title.trim();
+                if !trimmed.is_empty() && !cluster.event_titles.contains(&trimmed.to_string()) {
+                    cluster.event_titles.push(trimmed.to_string());
+                    // Keep up to 30 titles for richer narrative context
+                    if cluster.event_titles.len() > 30 {
+                        cluster.event_titles.remove(0);
+                    }
+                }
+            }
+
+            // Update centroid if event has reliable coordinates and is geographically coherent
+            if let (Some(lat), Some(lon)) = (event.latitude, event.longitude) {
+                if !is_region_center_fallback(lat, lon) && has_reliable_coordinates(event.event_type) {
+                    let close_enough = match cluster.centroid {
+                        Some((clat, clon)) => {
+                            distance_km(lat, lon, clat, clon) < CENTROID_COHERENCE_RADIUS_KM
+                        }
+                        None => true,
+                    };
+                    if close_enough {
+                        cluster.coord_buffer.push((lat, lon));
+                        if cluster.coord_buffer.len() > 30 {
+                            cluster.coord_buffer.drain(..cluster.coord_buffer.len() - 30);
+                        }
+                        cluster.centroid = Some(median_centroid(&cluster.coord_buffer));
+                    }
+                }
+            }
+
+            // Add region code (capped at 4 to prevent global sprawl)
+            if let Some(ref rc) = event.region_code {
+                let norm = normalize_region(rc);
+                let norm_str = norm.to_string();
+                if cluster.region_codes.contains(&norm_str) || cluster.region_codes.len() < 4 {
+                    cluster.region_codes.insert(norm_str);
+                }
+            }
+
+            // Track source type
+            cluster.source_types.insert(event.source_type);
+
+            added += 1;
+        }
+
+        // Trim event_ids if they got too large
+        let max_eids = self.config.cluster_caps.max_event_ids;
+        if cluster.event_ids.len() > max_eids {
+            let drain = cluster.event_ids.len() - max_eids;
+            cluster.event_ids.drain(..drain);
+        }
+
+        added
     }
 
     /// Restore pre-built clusters from the database, rebuilding all internal indices.
@@ -1207,6 +1636,56 @@ impl SituationGraph {
             info!(orphaned, "Post-restore child cap enforcement complete");
         }
 
+        // Topical orphaning: detach children with no title/entity connection to parent.
+        // This breaks contaminated parent-child relationships from before merge fixes.
+        let child_parent_pairs: Vec<(Uuid, Uuid)> = self.clusters.values()
+            .filter_map(|c| c.parent_id.map(|pid| (c.id, pid)))
+            .collect();
+        let mut topical_orphaned = 0usize;
+        for (child_id, parent_id) in child_parent_pairs {
+            let (child_title, child_entities) = match self.clusters.get(&child_id) {
+                Some(c) => (c.title.clone(), c.entities.clone()),
+                None => continue,
+            };
+            let (parent_title, parent_entities) = match self.clusters.get(&parent_id) {
+                Some(c) => (c.title.clone(), c.entities.clone()),
+                None => {
+                    if let Some(c) = self.clusters.get_mut(&child_id) { c.parent_id = None; }
+                    topical_orphaned += 1;
+                    continue;
+                }
+            };
+            let shared_entities = child_entities.intersection(&parent_entities).count();
+            // Exclude generic category words from title overlap calculation
+            let generic = &scoring::GENERIC_TITLE_WORDS;
+            let words_a: HashSet<String> = parent_title.to_lowercase()
+                .split_whitespace().filter(|w| w.len() > 2)
+                .filter(|w| !generic.contains(w))
+                .map(|w| w.to_string()).collect();
+            let words_b: HashSet<String> = child_title.to_lowercase()
+                .split_whitespace().filter(|w| w.len() > 2)
+                .filter(|w| !generic.contains(w))
+                .map(|w| w.to_string()).collect();
+            let title_overlap = if words_a.is_empty() || words_b.is_empty() {
+                0.0
+            } else {
+                let inter = words_a.intersection(&words_b).count();
+                let union = words_a.union(&words_b).count();
+                if union == 0 { 0.0 } else { inter as f64 / union as f64 }
+            };
+            if shared_entities == 0 && title_overlap < 0.15 {
+                if let Some(c) = self.clusters.get_mut(&child_id) {
+                    c.parent_id = None;
+                    topical_orphaned += 1;
+                    let key = if parent_id < child_id { (parent_id, child_id) } else { (child_id, parent_id) };
+                    self.merge_rejections.insert(key, self.now());
+                }
+            }
+        }
+        if topical_orphaned > 0 {
+            info!(topical_orphaned, "Post-restore topical orphaning complete");
+        }
+
         // Detach significant children that are parents themselves.
         // A cluster with 3+ children of its own is an established situation that
         // was incorrectly absorbed by a magnet cluster — promote to top-level.
@@ -1236,11 +1715,10 @@ impl SituationGraph {
             info!(detached, "Post-restore grandparent detachment complete");
         }
 
-        // Propagate severity from substantial children to parents on restore,
-        // using proportional threshold (same logic as periodic lifecycle sweep).
+        // Propagate severity from substantial children to parents on restore.
+        // Only raises parent severity — never lowers below direct-computation result.
         let min_events = self.config.quality.min_events_standalone;
         let threshold = self.config.sweep.severity_propagation_threshold;
-        let allow_decrease = self.config.sweep.severity_propagation_allow_decrease;
         let parent_ids: Vec<Uuid> = self.clusters.values()
             .filter(|c| c.parent_id.is_none())
             .map(|c| c.id)
@@ -1265,13 +1743,13 @@ impl SituationGraph {
                 .copied()
                 .unwrap_or(Severity::Info);
             if let Some(parent) = self.clusters.get_mut(&pid) {
-                if candidate != parent.severity && (candidate > parent.severity || allow_decrease) {
+                if candidate > parent.severity {
                     info!(
                         cluster_id = %pid,
                         title = %parent.title,
                         from = %parent.severity,
                         to = %candidate,
-                        "Parent severity adjusted via proportional threshold on restore"
+                        "Parent severity raised via proportional threshold on restore"
                     );
                     parent.severity = candidate;
                     severity_changed += 1;
@@ -1282,13 +1760,108 @@ impl SituationGraph {
             info!(severity_changed, "Post-restore parent severity propagation complete");
         }
 
+        // Post-restore: clean polluted coord_buffers.
+        // Before the coherence fix, worldwide events (GDACS earthquakes, FIRMS fires)
+        // could all land in one cluster's coord_buffer, producing a meaningless
+        // centroid in Central Africa. Detect and fix.
+        let mut centroids_cleaned = 0usize;
+        for cluster in self.clusters.values_mut() {
+            // If a cluster spans 5+ regions, its centroid is meaningless
+            // (it was computed from worldwide events averaging to Africa).
+            if cluster.region_codes.len() >= 5 && !cluster.coord_buffer.is_empty() {
+                cluster.coord_buffer.clear();
+                cluster.centroid = None;
+                centroids_cleaned += 1;
+                continue;
+            }
+            if cluster.coord_buffer.len() < 2 {
+                continue;
+            }
+            // Check geographic spread: if the buffer spans > 4000km, it's polluted.
+            // Compute max distance between any pair (sampled for perf).
+            let mut max_spread = 0.0f64;
+            let sample: Vec<&(f64, f64)> = cluster.coord_buffer.iter()
+                .step_by(cluster.coord_buffer.len().max(1) / 10.min(cluster.coord_buffer.len()).max(1))
+                .collect();
+            for i in 0..sample.len() {
+                for j in (i+1)..sample.len() {
+                    let d = distance_km(sample[i].0, sample[i].1, sample[j].0, sample[j].1);
+                    if d > max_spread { max_spread = d; }
+                }
+            }
+            if max_spread > 4000.0 {
+                // Buffer contains worldwide coords — clear entirely
+                cluster.coord_buffer.clear();
+                cluster.centroid = None;
+                centroids_cleaned += 1;
+                continue;
+            }
+            // Secondary check: remove individual outliers > 2000km from median
+            for _ in 0..2 {
+                if cluster.coord_buffer.len() < 2 { break; }
+                let med = median_centroid(&cluster.coord_buffer);
+                let before = cluster.coord_buffer.len();
+                cluster.coord_buffer.retain(|(lat, lon)| {
+                    distance_km(*lat, *lon, med.0, med.1) < CENTROID_COHERENCE_RADIUS_KM
+                });
+                if cluster.coord_buffer.len() == before { break; }
+            }
+            // Recompute centroid from cleaned buffer
+            if cluster.coord_buffer.is_empty() {
+                if cluster.centroid.is_some() {
+                    cluster.centroid = None;
+                    centroids_cleaned += 1;
+                }
+            } else {
+                let new_centroid = median_centroid(&cluster.coord_buffer);
+                if let Some(old) = cluster.centroid {
+                    if distance_km(old.0, old.1, new_centroid.0, new_centroid.1) > 100.0 {
+                        centroids_cleaned += 1;
+                    }
+                }
+                cluster.centroid = Some(new_centroid);
+            }
+        }
+        if centroids_cleaned > 0 {
+            info!(centroids_cleaned, "Post-restore centroid cleanup complete");
+        }
+
+        // Post-restore: trim bloated region code sets (>4 regions = unfocused).
+        // Keep the most specific regions, preferring non-continent codes.
+        for cluster in self.clusters.values_mut() {
+            if cluster.region_codes.len() > 4 {
+                let mut regions: Vec<String> = cluster.region_codes.drain().collect();
+                // Prefer specific regions over generic ones
+                regions.sort_by_key(|r| match r.as_str() {
+                    "global" => 2,
+                    "africa" => 1,
+                    _ => 0,
+                });
+                regions.truncate(4);
+                cluster.region_codes = regions.into_iter().collect();
+            }
+        }
+
+        // Post-restore: fix empty titles from merge/split operations.
+        let mut titles_fixed = 0usize;
+        for cluster in self.clusters.values_mut() {
+            if cluster.title.trim().is_empty() {
+                cluster.title = Self::generate_title(&cluster.entities, &cluster.topics, &cluster.region_codes);
+                titles_fixed += 1;
+            }
+        }
+        if titles_fixed > 0 {
+            info!(titles_fixed, "Post-restore empty title fix complete");
+        }
+
         info!(count = self.clusters.len(), "Restored clusters from DB");
     }
 
     /// Record that a specific gap type was searched for a cluster.
     pub fn record_gap_searched(&mut self, cluster_id: Uuid, gap_type: sr_intel::search::GapType) {
+        let now = self.now();
         if let Some(cluster) = self.clusters.get_mut(&cluster_id) {
-            cluster.search_history.last_searched_by_type.insert(gap_type, Utc::now());
+            cluster.search_history.last_searched_by_type.insert(gap_type, now);
             cluster.search_history.total_searches += 1;
         }
     }
@@ -1546,6 +2119,97 @@ mod tests {
         let (clat, clon) = cluster.centroid.unwrap();
         assert!((clat - 40.05).abs() < 0.01);
         assert!((clon - 30.05).abs() < 0.01);
+        assert_eq!(cluster.coord_buffer.len(), 2);
+    }
+
+    #[test]
+    fn test_median_centroid_resists_outliers() {
+        let coords = vec![
+            (33.0, 44.0), // Baghdad
+            (33.1, 44.1), // near Baghdad
+            (33.2, 44.2), // near Baghdad
+            (8.0, 25.0),  // Africa region center (outlier)
+        ];
+        let (lat, lon) = median_centroid(&coords);
+        // Median should be near Baghdad, not pulled toward Africa
+        assert!((lat - 33.05).abs() < 0.2, "lat={lat} should be ~33");
+        assert!((lon - 44.05).abs() < 0.2, "lon={lon} should be ~44");
+    }
+
+    #[test]
+    fn test_region_center_fallback_filtered_from_centroid() {
+        let mut g = SituationGraph::default();
+
+        // First event with real coordinates
+        let e1 = make_event(json!({
+            "entity_name": "Site",
+            "tags": ["topic:conflict"],
+            "latitude": 33.3,
+            "longitude": 44.4,
+            "region_code": "IQ",
+        }));
+        g.ingest(&e1, None);
+
+        // Second event with region center coordinates (should be filtered)
+        let e2 = make_event(json!({
+            "entity_name": "Site",
+            "tags": ["topic:conflict"],
+            "latitude": 27.0,
+            "longitude": 44.0,
+            "region_code": "IQ",
+        }));
+        g.ingest(&e2, None);
+
+        assert_eq!(g.clusters.len(), 1);
+        let cluster = g.clusters.values().next().unwrap();
+        // Centroid should remain at the real coordinate, not averaged with the region center
+        let (clat, _clon) = cluster.centroid.unwrap();
+        assert!((clat - 33.3).abs() < 0.1, "centroid lat={clat} should be ~33.3, not pulled to 27.0");
+        assert_eq!(cluster.coord_buffer.len(), 1, "region center should not be in coord_buffer");
+    }
+
+    #[test]
+    fn test_centroid_coherence_rejects_distant_events() {
+        let mut g = SituationGraph::default();
+
+        // First event: seismic event in Turkey
+        let e1 = make_event(json!({
+            "entity_name": "Quake",
+            "tags": ["topic:earthquake"],
+            "latitude": 39.0,
+            "longitude": 35.0,
+            "region_code": "TR",
+            "event_type": "seismic_event",
+        }));
+        g.ingest(&e1, None);
+
+        assert_eq!(g.clusters.len(), 1);
+        let cid = *g.clusters.keys().next().unwrap();
+        let cluster = g.clusters.get(&cid).unwrap();
+        assert!(cluster.centroid.is_some());
+        let (clat, clon) = cluster.centroid.unwrap();
+        assert!((clat - 39.0).abs() < 0.1);
+        assert!((clon - 35.0).abs() < 0.1);
+
+        // Second event: seismic event >8000km away in Drake Passage (Antarctica)
+        // This should NOT update the centroid due to geographic coherence check
+        let e2 = make_event(json!({
+            "entity_name": "Quake",
+            "tags": ["topic:earthquake"],
+            "latitude": -58.0,
+            "longitude": -25.0,
+            "region_code": "global",
+            "event_type": "seismic_event",
+        }));
+        g.ingest(&e2, None);
+
+        let cluster = g.clusters.get(&cid).unwrap();
+        let (clat2, clon2) = cluster.centroid.unwrap();
+        // Centroid should stay near Turkey, not dragged toward Antarctica
+        assert!((clat2 - 39.0).abs() < 1.0,
+            "centroid lat={clat2} should still be ~39.0 (Turkey), not pulled toward -58");
+        assert_eq!(cluster.coord_buffer.len(), 1,
+            "distant event should not be added to coord_buffer");
     }
 
     #[test]
@@ -1600,7 +2264,9 @@ mod tests {
 
     #[test]
     fn test_active_clusters_sorted() {
-        let mut g = SituationGraph::default();
+        let mut config = PipelineConfig::default();
+        config.quality.min_events_standalone = 3; // Lower threshold for test
+        let mut g = SituationGraph::new(Arc::new(config));
 
         g.ingest(&make_event(json!({ "entity_name": "First", "source_type": "acled" })), None);
         g.ingest(&make_event(json!({ "entity_name": "First", "tags": ["topic:x"], "source_type": "geoconfirmed" })), None);
@@ -1619,6 +2285,12 @@ mod tests {
         g.ingest(&make_event(json!({ "entity_name": "Second", "tags": ["topic:y"], "source_type": "notam" })), None);
         g.ingest(&make_event(json!({ "entity_name": "Second", "tags": ["topic:y"], "source_type": "usgs" })), None);
         g.ingest(&make_event(json!({ "entity_name": "Second", "tags": ["topic:y"], "source_type": "usgs" })), None);
+
+        // Give clusters titles so they pass the quality gate
+        let ids: Vec<_> = g.clusters.keys().cloned().collect();
+        for (i, id) in ids.iter().enumerate() {
+            g.update_cluster_title(*id, format!("Test Situation {i}"));
+        }
 
         let clusters = g.active_clusters();
         assert_eq!(clusters.len(), 2);
@@ -1832,6 +2504,7 @@ mod tests {
                 first_seen: now,
                 last_updated: now,
                 centroid: None,
+                coord_buffer: Vec::new(),
                 event_count,
                 signal_event_count: 0,
                 source_types,
@@ -1850,6 +2523,8 @@ mod tests {
                 phase_transitions: vec![],
                 certainty: 0.0,
                 anomaly_score: 0.0,
+                last_retro_sweep: None,
+                total_events_ingested: 0,
             }
         };
 
@@ -1886,6 +2561,7 @@ mod tests {
             first_seen: now,
             last_updated: now,
             centroid: None,
+            coord_buffer: Vec::new(),
             event_count: 1,
             signal_event_count: 0,
             source_types,
@@ -1904,6 +2580,8 @@ mod tests {
             phase_transitions: vec![],
             certainty: 0.0,
             anomaly_score: 0.0,
+            last_retro_sweep: None,
+            total_events_ingested: 0,
         }
     }
 
@@ -1914,7 +2592,7 @@ mod tests {
             0.0,
             HashSet::from([SourceType::Gdelt]),
         );
-        let low_tol = compute_gap_tolerance(&low_cluster, &sr_config::PhaseConfig::default());
+        let low_tol = compute_gap_tolerance(&low_cluster, &sr_config::PhaseConfig::default(), Utc::now());
         assert!(
             (low_tol - 2.0).abs() < 0.01,
             "Low/single-source should give ~2.0h tolerance, got {low_tol}"
@@ -1925,7 +2603,7 @@ mod tests {
             15.0,
             HashSet::from([SourceType::Gdelt, SourceType::Geoconfirmed, SourceType::Acled, SourceType::Firms]),
         );
-        let critical_tol = compute_gap_tolerance(&critical_cluster, &sr_config::PhaseConfig::default());
+        let critical_tol = compute_gap_tolerance(&critical_cluster, &sr_config::PhaseConfig::default(), Utc::now());
         assert!(
             critical_tol > 20.0,
             "Critical/multi-source should give >20h tolerance, got {critical_tol}"
@@ -1940,7 +2618,7 @@ mod tests {
             5.0,
             HashSet::from([SourceType::Gdelt, SourceType::Firms]),
         );
-        let medium_tol = compute_gap_tolerance(&medium_cluster, &sr_config::PhaseConfig::default());
+        let medium_tol = compute_gap_tolerance(&medium_cluster, &sr_config::PhaseConfig::default(), Utc::now());
         assert!(
             (medium_tol - 6.0).abs() < 0.1,
             "Medium/2-source/5-rate should give ~6.0h, got {medium_tol}"
@@ -1954,7 +2632,7 @@ mod tests {
             15.0,
             HashSet::from([SourceType::Gdelt, SourceType::Geoconfirmed, SourceType::Acled, SourceType::Firms]),
         );
-        let gap_tolerance = compute_gap_tolerance(&cluster, &sr_config::PhaseConfig::default());
+        let gap_tolerance = compute_gap_tolerance(&cluster, &sr_config::PhaseConfig::default(), Utc::now());
         assert!(
             (gap_tolerance - 39.0).abs() < 0.1,
             "Expected gap_tolerance ~39.0, got {gap_tolerance}"
@@ -2002,7 +2680,7 @@ mod tests {
             0.0,
             HashSet::from([SourceType::Gdelt]),
         );
-        let cold_tol = compute_gap_tolerance(&cold_cluster, &sr_config::PhaseConfig::default());
+        let cold_tol = compute_gap_tolerance(&cold_cluster, &sr_config::PhaseConfig::default(), Utc::now());
         let metrics_cold = PhaseMetrics {
             event_velocity_5m: 0,
             event_velocity_30m: 0,
@@ -2145,6 +2823,13 @@ mod tests {
         assert!(SituationGraph::is_garbage_title("NO RELEVANT Information Available"));
         assert!(SituationGraph::is_garbage_title("No core situation detected"));
         assert!(SituationGraph::is_garbage_title("No context provided for the analysis"));
+        // Fallback generate_title patterns (em-dash is the signature)
+        assert!(SituationGraph::is_garbage_title("Israel Defense Forces — SOUTHEAST-ASIA"));
+        assert!(SituationGraph::is_garbage_title("Houthi Rebels, Yemen — EAST-ASIA"));
+        assert!(SituationGraph::is_garbage_title("Forest Fires In Myanmar — EASTERN-EUROPE"));
+        assert!(SituationGraph::is_garbage_title("Earthquake In United States — Earthquake"));
+        // Comma-separated repetition
+        assert!(SituationGraph::is_garbage_title("Earthquake In Russia, Earthquake In Russian Federation"));
     }
 
     #[test]
@@ -2236,6 +2921,7 @@ mod tests {
             first_seen: now,
             last_updated: now - chrono::Duration::hours(8),
             centroid: None,
+            coord_buffer: Vec::new(),
             event_count: 25,
             signal_event_count: 0,
             source_types: HashSet::from([SourceType::AirplanesLive]),
@@ -2254,6 +2940,8 @@ mod tests {
             phase_transitions: vec![],
             certainty: 0.0,
             anomaly_score: 0.0,
+            last_retro_sweep: None,
+            total_events_ingested: 0,
         });
 
         assert_eq!(g.clusters.len(), 1);
@@ -2546,6 +3234,7 @@ mod tests {
             first_seen: now,
             last_updated: now,
             centroid: None,
+            coord_buffer: Vec::new(),
             event_count: 10,
             signal_event_count: 5,
             source_types: HashSet::from([SourceType::RssNews]),
@@ -2564,6 +3253,8 @@ mod tests {
             phase_transitions: vec![],
             certainty: 0.0,
             anomaly_score: 0.0,
+            last_retro_sweep: None,
+            total_events_ingested: 0,
         });
 
         let cid_b = Uuid::new_v4();
@@ -2578,6 +3269,7 @@ mod tests {
             first_seen: now,
             last_updated: now,
             centroid: None,
+            coord_buffer: Vec::new(),
             event_count: 8,
             signal_event_count: 4,
             source_types: HashSet::from([SourceType::RssNews]),
@@ -2596,6 +3288,8 @@ mod tests {
             phase_transitions: vec![],
             certainty: 0.0,
             anomaly_score: 0.0,
+            last_retro_sweep: None,
+            total_events_ingested: 0,
         });
 
         for t in ["economy", "trade", "security"] {
@@ -2629,6 +3323,7 @@ mod tests {
             first_seen: now,
             last_updated: now,
             centroid: None,
+            coord_buffer: Vec::new(),
             event_count: 5,
             signal_event_count: 3,
             source_types: HashSet::from([SourceType::RssNews]),
@@ -2647,6 +3342,8 @@ mod tests {
             phase_transitions: vec![],
             certainty: 0.0,
             anomaly_score: 0.0,
+            last_retro_sweep: None,
+            total_events_ingested: 0,
         });
 
         let cid_b = Uuid::new_v4();
@@ -2661,6 +3358,7 @@ mod tests {
             first_seen: now,
             last_updated: now,
             centroid: None,
+            coord_buffer: Vec::new(),
             event_count: 5,
             signal_event_count: 3,
             source_types: HashSet::from([SourceType::Gdelt]),
@@ -2679,6 +3377,8 @@ mod tests {
             phase_transitions: vec![],
             certainty: 0.0,
             anomaly_score: 0.0,
+            last_retro_sweep: None,
+            total_events_ingested: 0,
         });
 
         g.topic_index.entry("topic-x".into()).or_default().insert(cid_a);
@@ -2711,6 +3411,7 @@ mod tests {
             first_seen: now,
             last_updated: now,
             centroid: None,
+            coord_buffer: Vec::new(),
             event_count: 10,
             signal_event_count: 5,
             source_types: HashSet::from([SourceType::RssNews, SourceType::Gdelt]),
@@ -2729,6 +3430,8 @@ mod tests {
             phase_transitions: vec![],
             certainty: 0.0,
             anomaly_score: 0.0,
+            last_retro_sweep: None,
+            total_events_ingested: 0,
         });
 
         let cid_b = Uuid::new_v4();
@@ -2743,6 +3446,7 @@ mod tests {
             first_seen: now,
             last_updated: now,
             centroid: None,
+            coord_buffer: Vec::new(),
             event_count: 10,
             signal_event_count: 5,
             source_types: HashSet::from([SourceType::RssNews, SourceType::Gdelt]),
@@ -2761,6 +3465,8 @@ mod tests {
             phase_transitions: vec![],
             certainty: 0.0,
             anomaly_score: 0.0,
+            last_retro_sweep: None,
+            total_events_ingested: 0,
         });
 
         g.entity_index.entry("entity-a".into()).or_default().insert(cid_a);
@@ -2797,6 +3503,7 @@ mod tests {
             first_seen: now,
             last_updated: now,
             centroid: Some((51.0, 35.0)),
+            coord_buffer: vec![(51.0, 35.0)],
             event_count: 50,
             signal_event_count: 50,
             source_types: HashSet::from([SourceType::Firms]),
@@ -2815,6 +3522,8 @@ mod tests {
             phase_transitions: vec![],
             certainty: 0.0,
             anomaly_score: 0.0,
+            last_retro_sweep: None,
+            total_events_ingested: 0,
         });
         g.entity_index.entry("iran".into()).or_default().insert(cid);
         g.topic_index.entry("thermal-anomaly".into()).or_default().insert(cid);
@@ -2957,6 +3666,7 @@ mod tests {
             first_seen: now,
             last_updated: now,
             centroid: None,
+            coord_buffer: Vec::new(),
             event_count: 10,
             signal_event_count: 5,
             source_types: HashSet::from([SourceType::Gdelt, SourceType::Acled]),
@@ -2975,6 +3685,8 @@ mod tests {
             phase_transitions: vec![],
             certainty: 0.5,
             anomaly_score: 0.0,
+            last_retro_sweep: None,
+            total_events_ingested: 0,
         };
 
         g.clusters.insert(cluster_id, cluster);
@@ -3029,6 +3741,7 @@ mod tests {
             first_seen: now,
             last_updated: now,
             centroid: None,
+            coord_buffer: Vec::new(),
             event_count: 3,
             signal_event_count: 0,
             source_types: HashSet::from([SourceType::Gdelt]),
@@ -3047,6 +3760,8 @@ mod tests {
             phase_transitions: vec![],
             certainty: 0.0,
             anomaly_score: 0.0,
+            last_retro_sweep: None,
+            total_events_ingested: 0,
         };
 
         g.clusters.insert(cluster_id, cluster);
@@ -3085,6 +3800,7 @@ mod tests {
             first_seen: now,
             last_updated: now,
             centroid: None,
+            coord_buffer: Vec::new(),
             event_count: 8,
             signal_event_count: 0,
             source_types: HashSet::from([SourceType::Gdelt]),
@@ -3103,6 +3819,8 @@ mod tests {
             phase_transitions: vec![],
             certainty: 0.0,
             anomaly_score: 0.0,
+            last_retro_sweep: None,
+            total_events_ingested: 0,
         };
 
         g.clusters.insert(cluster_id, cluster);

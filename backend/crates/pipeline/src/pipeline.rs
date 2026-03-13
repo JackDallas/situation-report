@@ -1,16 +1,17 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use sr_config::PipelineConfig;
-use sr_embeddings::{EmbeddingCache, EmbeddingModel, compose_text};
+use sr_embeddings::{EmbeddingModel, compose_text};
 use sr_embeddings::cache::embed_key;
 use sr_intel::{
-    AnalysisInput, BudgetManager, ClaudeClient, GapType, OllamaClient, SharedAnalysis,
+    AnalysisInput, BudgetManager, ClaudeClient, GeminiClient, GapType, OllamaClient, SharedAnalysis,
     SearchRateLimiter, SupplementaryData,
     analyze_current_state, analyze_tiered, analysis_interval_secs, article_from_event,
-    build_search_query, enrich_article, generate_narrative_tiered, generate_situation_title,
+    build_search_query, enrich_article_tiered,
+    generate_narrative_tiered, generate_situation_title,
     search_situation_context, tempo_label,
 };
 use sr_sources::db::PgPool;
@@ -21,12 +22,13 @@ use tracing::{debug, info, warn};
 
 use crate::airspace::SharedAirspaceIndex;
 use crate::alerts::{AlertRule, AlertTracker, FiredAlert, evaluate_rules};
+use crate::core::{PipelineCore, NarrativeState};
 use crate::rules;
-use crate::situation_graph::{SituationCluster, SituationGraph, SituationPhase};
+use crate::situation_graph::{SituationCluster, SituationGraph, SituationPhase, is_region_center_fallback};
 use crate::types::{Incident, PublishEvent, Summary, SharedEntityResolver, SharedEntityGraph};
 use crate::window::CorrelationWindow;
 
-/// Atomic counters for pipeline throughput monitoring.
+/// Atomic counters for pipeline throughput monitoring and runtime controls.
 pub struct PipelineMetrics {
     pub events_ingested: AtomicU64,
     pub events_correlated: AtomicU64,
@@ -34,6 +36,9 @@ pub struct PipelineMetrics {
     pub events_published: AtomicU64,
     pub events_filtered: AtomicU64,
     pub incidents_created: AtomicU64,
+    /// When true, GPU-intensive work is paused (embeddings, Ollama LLM calls).
+    /// Data ingestion, clustering, correlation rules, and SSE publishing continue.
+    pub gpu_paused: AtomicBool,
 }
 
 impl PipelineMetrics {
@@ -45,7 +50,13 @@ impl PipelineMetrics {
             events_published: AtomicU64::new(0),
             events_filtered: AtomicU64::new(0),
             incidents_created: AtomicU64::new(0),
+            gpu_paused: AtomicBool::new(false),
         }
+    }
+
+    /// Check if GPU processing is currently paused.
+    pub fn is_gpu_paused(&self) -> bool {
+        self.gpu_paused.load(Ordering::Relaxed)
     }
 }
 
@@ -270,16 +281,7 @@ struct MergeAuditResult {
     child_id: uuid::Uuid,
 }
 
-/// Per-situation narrative tracking state.
-struct NarrativeState {
-    version: i32,
-    last_generated: Option<chrono::DateTime<chrono::Utc>>,
-    /// Cluster signal_event_count at last narrative generation (for delta tracking).
-    /// Uses signal count (conflict/news/geo) not raw event count, so telemetry
-    /// (NOTAMs, thermal, BGP) doesn't trigger expensive regen.
-    signal_count_at_gen: usize,
-    last_narrative: Option<String>,
-}
+// NarrativeState is defined in core.rs and re-exported from lib.rs
 
 /// Load alert rules from the database.
 async fn load_alert_rules(pool: &PgPool) -> Vec<AlertRule> {
@@ -370,28 +372,6 @@ async fn load_persisted_clusters(pool: &PgPool) -> Vec<SituationCluster> {
     rows.iter().filter_map(cluster_from_db_row).collect()
 }
 
-/// Check if a centroid exactly matches a known region_center() value.
-/// These are fake centroids from the old fallback logic and should be discarded.
-fn is_region_center_fallback(lat: f64, lon: f64) -> bool {
-    const KNOWN_CENTERS: &[(f64, f64)] = &[
-        (27.0, 44.0),   // middle-east
-        (48.5, 31.0),   // eastern-europe
-        (48.0, 2.0),    // western-europe
-        (8.0, 25.0),    // africa / sub-saharan-africa
-        (28.0, 15.0),   // north-africa
-        (15.0, 105.0),  // southeast-asia
-        (35.0, 120.0),  // east-asia
-        (25.0, 78.0),   // south-asia
-        (42.0, 65.0),   // central-asia
-        (40.0, -100.0), // north-america
-        (-15.0, -55.0), // south-america
-        (15.0, -80.0),  // central-america / caribbean
-        (-25.0, 135.0), // oceania
-        (75.0, 0.0),    // arctic
-    ];
-    KNOWN_CENTERS.iter().any(|(clat, clon)| (lat - clat).abs() < 0.01 && (lon - clon).abs() < 0.01)
-}
-
 /// Convert a DB row + its properties JSONB back into a `SituationCluster`.
 fn cluster_from_db_row(row: &SituationDbRow) -> Option<SituationCluster> {
     let props = &row.properties;
@@ -415,21 +395,54 @@ fn cluster_from_db_row(row: &SituationDbRow) -> Option<SituationCluster> {
             .as_u64()
             .unwrap_or(row.event_count_30m.max(0) as u64) as usize,
         severity: severity_from_rank(row.max_severity),
-        centroid: props["centroid"].as_array().and_then(|a| {
-            if a.len() >= 2 {
-                let lat = a[0].as_f64()?;
-                let lon = a[1].as_f64()?;
-                // Discard fake centroids that were derived from region_center() fallback.
-                // These are exact matches (e.g. [27.0, 44.0] for "middle-east", [35.0, 120.0] for "east-asia").
-                if is_region_center_fallback(lat, lon) {
-                    None
-                } else {
-                    Some((lat, lon))
+        // coord_buffer and centroid: if a persisted coord_buffer exists, use it
+        // to recompute the centroid via median. If no buffer was persisted (old data),
+        // discard the old centroid too — it was computed via a corrupted running average.
+        centroid: {
+            let buf = props["coord_buffer"].as_array();
+            match buf {
+                Some(arr) => {
+                    let coords: Vec<(f64, f64)> = arr.iter()
+                        .filter_map(|pair| {
+                            let a = pair.as_array()?;
+                            if a.len() >= 2 {
+                                let lat = a[0].as_f64()?;
+                                let lon = a[1].as_f64()?;
+                                if is_region_center_fallback(lat, lon) { None } else { Some((lat, lon)) }
+                            } else { None }
+                        })
+                        .collect();
+                    if coords.is_empty() {
+                        None
+                    } else {
+                        Some(crate::situation_graph::median_centroid(&coords))
+                    }
                 }
-            } else {
-                None
+                // No coord_buffer persisted — old data. Discard corrupted centroid.
+                None => None,
             }
-        }),
+        },
+        coord_buffer: props["coord_buffer"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|pair| {
+                        let a = pair.as_array()?;
+                        if a.len() >= 2 {
+                            let lat = a[0].as_f64()?;
+                            let lon = a[1].as_f64()?;
+                            if is_region_center_fallback(lat, lon) {
+                                None
+                            } else {
+                                Some((lat, lon))
+                            }
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
         first_seen: row.started_at,
         last_updated: row.updated_at,
         phase: SituationPhase::from_str_lossy(&row.phase),
@@ -450,6 +463,12 @@ fn cluster_from_db_row(row: &SituationDbRow) -> Option<SituationCluster> {
         supplementary: None,                // Not critical to persist
         certainty: props["certainty"].as_f64().unwrap_or(0.0) as f32,
         anomaly_score: props["anomaly_score"].as_f64().unwrap_or(0.0),
+        last_retro_sweep: props["last_retro_sweep"]
+            .as_str()
+            .and_then(|s| s.parse().ok()),
+        total_events_ingested: props["total_events_ingested"]
+            .as_u64()
+            .unwrap_or(row.event_count_5m.max(0) as u64) as usize,
     })
 }
 
@@ -490,8 +509,10 @@ fn json_string_array_to_source_types(v: &serde_json::Value) -> HashSet<SourceTyp
 }
 
 /// Parse a JSON array of `{t, id}` objects back into event ID tuples.
+/// Sorts chronologically (oldest first) so `.last()` = most recent event,
+/// matching the order used during live operation.
 fn json_event_ids(v: &serde_json::Value) -> Vec<(chrono::DateTime<chrono::Utc>, String)> {
-    v.as_array()
+    let mut ids: Vec<_> = v.as_array()
         .map(|arr| {
             arr.iter()
                 .filter_map(|item| {
@@ -502,7 +523,9 @@ fn json_event_ids(v: &serde_json::Value) -> Vec<(chrono::DateTime<chrono::Utc>, 
                 })
                 .collect()
         })
-        .unwrap_or_default()
+        .unwrap_or_default();
+    ids.sort_by_key(|(dt, _)| *dt);
+    ids
 }
 
 /// Reverse the severity rank integer back to a `Severity` variant.
@@ -574,7 +597,9 @@ async fn upsert_situation(
         "event_count_total": cluster.event_count,
         "event_ids": event_ids_json,
         "centroid": cluster.centroid,
+        "coord_buffer": cluster.coord_buffer,
         "certainty": cluster.certainty,
+        "total_events_ingested": cluster.total_events_ingested,
     });
 
     // Build PostGIS point from centroid if available
@@ -652,11 +677,109 @@ async fn persist_narrative(pool: &PgPool, narrative: &sr_intel::SituationNarrati
     }
 }
 
+/// Load recent incidents from DB to seed active_incidents on startup.
+/// This ensures cooldowns survive pipeline restarts.
+async fn load_recent_incidents(pool: &PgPool) -> Vec<crate::types::Incident> {
+    let rows = sqlx::query(
+        "SELECT id, rule_id, title, description, severity, confidence, \
+         first_seen, last_updated, region_code, tags \
+         FROM incidents WHERE first_seen > NOW() - INTERVAL '1 hour' \
+         ORDER BY first_seen DESC LIMIT 50",
+    )
+    .fetch_all(pool)
+    .await;
+
+    match rows {
+        Ok(rows) => {
+            use sqlx::Row;
+            let incidents: Vec<_> = rows
+                .iter()
+                .filter_map(|r| {
+                    Some(crate::types::Incident {
+                        id: r.get::<uuid::Uuid, _>("id"),
+                        rule_id: r.get::<String, _>("rule_id"),
+                        title: r.get::<String, _>("title"),
+                        description: r.get::<String, _>("description"),
+                        severity: match r.get::<i32, _>("severity") {
+                            4 => Severity::Critical,
+                            3 => Severity::High,
+                            2 => Severity::Medium,
+                            1 => Severity::Low,
+                            _ => Severity::Info,
+                        },
+                        confidence: r.get::<f32, _>("confidence"),
+                        first_seen: r.get("first_seen"),
+                        last_updated: r.get("last_updated"),
+                        region_code: r.get("region_code"),
+                        latitude: None,
+                        longitude: None,
+                        tags: r.get::<Vec<String>, _>("tags"),
+                        evidence: Vec::new(),
+                        parent_id: None,
+                        related_ids: Vec::new(),
+                        merged_from: Vec::new(),
+                        display_title: None,
+                    })
+                })
+                .collect();
+            if !incidents.is_empty() {
+                info!(count = incidents.len(), "Loaded recent incidents from DB for cooldown");
+            }
+            incidents
+        }
+        Err(e) => {
+            warn!("Failed to load recent incidents: {e}");
+            Vec::new()
+        }
+    }
+}
+
+/// Persist a correlated incident to the incidents table.
+async fn persist_incident(pool: &PgPool, incident: &crate::types::Incident) {
+    let severity_int: i32 = incident.severity.rank() as i32;
+    let location_wkt: Option<String> = match (incident.latitude, incident.longitude) {
+        (Some(lat), Some(lon)) => Some(format!("SRID=4326;POINT({lon} {lat})")),
+        _ => None,
+    };
+    let evidence_json = serde_json::to_value(&incident.evidence).unwrap_or_default();
+
+    let result = sqlx::query(
+        "INSERT INTO incidents (id, rule_id, title, description, severity, confidence, \
+         first_seen, last_updated, region_code, location, tags, evidence, parent_id, display_title) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, \
+                 CASE WHEN $10::text IS NOT NULL THEN ST_GeogFromText($10) ELSE NULL END, \
+                 $11, $12, $13, $14) \
+         ON CONFLICT (id) DO NOTHING",
+    )
+    .bind(incident.id)
+    .bind(&incident.rule_id)
+    .bind(&incident.title)
+    .bind(&incident.description)
+    .bind(severity_int)
+    .bind(incident.confidence)
+    .bind(incident.first_seen)
+    .bind(incident.last_updated)
+    .bind(&incident.region_code)
+    .bind(&location_wkt)
+    .bind(&incident.tags)
+    .bind(&evidence_json)
+    .bind(incident.parent_id)
+    .bind(&incident.display_title)
+    .execute(pool)
+    .await;
+
+    if let Err(e) = result {
+        tracing::warn!(incident_id = %incident.id, rule_id = %incident.rule_id, "Failed to persist incident: {e}");
+    }
+}
+
 /// Spawn the pipeline task. Returns (publish_tx for SSE, shared summaries for REST, shared analysis for REST, metrics).
 pub fn spawn_pipeline(
     ingest_tx: broadcast::Sender<InsertableEvent>,
+    publish_tx: broadcast::Sender<PublishEvent>,
     claude_client: Option<Arc<ClaudeClient>>,
     ollama_client: Option<Arc<OllamaClient>>,
+    gemini_client: Option<Arc<GeminiClient>>,
     budget: Arc<BudgetManager>,
     pool: PgPool,
     embedding_model: Option<Arc<EmbeddingModel>>,
@@ -664,8 +787,7 @@ pub fn spawn_pipeline(
     entity_graph: SharedEntityGraph,
     config: Arc<PipelineConfig>,
     _airspace_index: SharedAirspaceIndex,
-) -> (broadcast::Sender<PublishEvent>, SharedSummaries, SharedAnalysis, Arc<PipelineMetrics>) {
-    let (publish_tx, _) = broadcast::channel::<PublishEvent>(config.intervals.broadcast_channel_size);
+) -> (SharedSummaries, SharedAnalysis, Arc<PipelineMetrics>) {
     let publish_tx_clone = publish_tx.clone();
     let summaries: SharedSummaries = Arc::new(RwLock::new(HashMap::new()));
     let summaries_clone = summaries.clone();
@@ -681,6 +803,7 @@ pub fn spawn_pipeline(
             summaries_clone,
             claude_client,
             ollama_client,
+            gemini_client,
             budget,
             analysis_clone,
             pool,
@@ -693,7 +816,7 @@ pub fn spawn_pipeline(
         .await;
     });
 
-    (publish_tx, summaries, analysis, metrics)
+    (summaries, analysis, metrics)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -703,6 +826,7 @@ async fn run_pipeline(
     shared_summaries: SharedSummaries,
     claude_client: Option<Arc<ClaudeClient>>,
     ollama_client: Option<Arc<OllamaClient>>,
+    gemini_client: Option<Arc<GeminiClient>>,
     budget: Arc<BudgetManager>,
     shared_analysis: SharedAnalysis,
     pool: PgPool,
@@ -716,28 +840,35 @@ async fn run_pipeline(
     let window_duration = Duration::from_secs(config.intervals.correlation_window_hours * 3600);
     let mut window = CorrelationWindow::new(window_duration);
     let rule_registry = rules::default_rules();
-    let mut active_incidents: Vec<Incident> = Vec::new();
+    // Seed active incidents from DB so cooldowns survive restarts
+    let mut active_incidents: Vec<Incident> = load_recent_incidents(&pool).await;
 
-    let mut situation_graph = SituationGraph::new(config.clone());
+    let embeddings_enabled = embedding_model.is_some();
+    let mut core = PipelineCore::new(
+        config.clone(),
+        embeddings_enabled,
+        ollama_client.clone(),
+        claude_client.clone(),
+        gemini_client.clone(),
+        Some(Arc::clone(&budget)),
+    );
     let mut situation_publish_interval = tokio::time::interval(Duration::from_secs(config.intervals.situation_publish_secs));
-    let mut situation_tick_count: u64 = 0;
     // Consume first tick
     situation_publish_interval.tick().await;
 
-    // Embedding infrastructure (channels + cache + background worker)
-    let mut embedding_cache = EmbeddingCache::new(10_000, 0.05);
+    // Embedding infrastructure (channels + background worker)
     let (embed_tx, mut embed_rx) = mpsc::channel::<(InsertableEvent, String)>(1024);
     let (embed_result_tx, mut embed_result_rx) = mpsc::channel::<EmbedResult>(256);
-    let embeddings_enabled = embedding_model.is_some();
 
     if let Some(model) = embedding_model {
         let result_tx = embed_result_tx.clone();
         let embed_pool = pool.clone();
+        let embed_metrics = metrics.clone();
         tokio::spawn(async move {
             let mut restarts = 0u32;
             loop {
                 embedding_worker(
-                    Arc::clone(&model), &mut embed_rx, result_tx.clone(), embed_pool.clone(),
+                    Arc::clone(&model), &mut embed_rx, result_tx.clone(), embed_pool.clone(), &embed_metrics,
                 ).await;
                 // If embedding_worker returned, the channel was closed — exit.
                 // Panics are caught inside via spawn_blocking error handling.
@@ -759,7 +890,6 @@ async fn run_pipeline(
 
     // AI title generation infrastructure
     let (title_tx, mut title_rx) = mpsc::channel::<TitleResult>(64);
-    let mut title_pending: HashSet<uuid::Uuid> = HashSet::new();
 
     // Exa web search infrastructure for situation enrichment
     let (search_tx, mut search_rx) = mpsc::channel::<SearchResult>(16);
@@ -809,17 +939,55 @@ async fn run_pipeline(
     let mut reingest_sweep = tokio::time::interval(Duration::from_secs(10));
     reingest_sweep.tick().await; // consume first tick
 
+    // Retroactive sweep — periodically link old events to current situations
+    let retro_interval_secs = core.graph.config.sweep.retro_sweep_interval_secs;
+    let mut retro_sweep_interval = tokio::time::interval(Duration::from_secs(retro_interval_secs));
+    retro_sweep_interval.tick().await; // consume first tick
+    let (retro_tx, mut retro_rx) = mpsc::channel::<(uuid::Uuid, Vec<InsertableEvent>)>(32);
+
     // Narrative generation infrastructure
     let (narrative_tx, mut narrative_rx) = mpsc::channel::<NarrativeResult>(16);
-    let mut narrative_state: HashMap<uuid::Uuid, NarrativeState> = HashMap::new();
 
     // Merge audit infrastructure — Qwen post-hoc validation of situation merges
     let (merge_audit_tx, mut merge_audit_rx) = mpsc::channel::<MergeAuditResult>(32);
 
-    // Ollama health check watchdog — detects model unload and re-warms
-    let mut ollama_health_interval = tokio::time::interval(Duration::from_secs(300)); // 5 minutes
-    ollama_health_interval.tick().await; // consume first tick
-    let mut ollama_consecutive_failures: u32 = 0;
+    // Ollama health check watchdog — runs in background task to avoid blocking the pipeline loop.
+    // Uses Arc<AtomicU32> for failure counter shared with the spawned task.
+    let ollama_failure_count = Arc::new(std::sync::atomic::AtomicU32::new(0));
+    if let Some(ref ollama) = ollama_client {
+        let ollama = ollama.clone();
+        let failures = ollama_failure_count.clone();
+        let gpu_paused = metrics.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(600)); // 10 minutes
+            interval.tick().await; // consume first tick
+            loop {
+                interval.tick().await;
+                if gpu_paused.is_gpu_paused() { continue; }
+                if ollama.health_check().await {
+                    let prev = failures.swap(0, std::sync::atomic::Ordering::Relaxed);
+                    if prev > 0 {
+                        info!("Ollama health check passed — resetting failure counter");
+                    }
+                } else {
+                    let count = failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                    warn!(consecutive_failures = count, "Ollama health check failed");
+                    if count >= 3 {
+                        info!("Ollama unresponsive after 3 checks — attempting warm_model");
+                        match ollama.warm_model().await {
+                            Ok(()) => {
+                                info!("Ollama model re-warmed successfully");
+                                failures.store(0, std::sync::atomic::Ordering::Relaxed);
+                            }
+                            Err(e) => {
+                                warn!("Ollama warm_model failed (Sonnet fallback active): {e}");
+                            }
+                        }
+                    }
+                }
+            }
+        });
+    }
 
     let intel_available = claude_client.is_some();
     info!(
@@ -838,10 +1006,10 @@ async fn run_pipeline(
 
         if !persisted.is_empty() {
             let count = persisted.len();
-            situation_graph.restore_clusters(persisted);
+            core.graph.restore_clusters(persisted);
 
             // Publish restored situations via SSE so any already-connected clients see them
-            let clusters = situation_graph.active_clusters();
+            let clusters = core.active_clusters();
             if !clusters.is_empty() {
                 let _ = publish_tx.send(PublishEvent::Situations { clusters });
             }
@@ -877,7 +1045,7 @@ async fn run_pipeline(
                 Ok(centroids) => {
                     let centroid_count = centroids.len();
                     for (id, vec) in centroids {
-                        embedding_cache.init_centroid(id, &vec);
+                        core.embedding_cache.init_centroid(id, &vec);
                     }
                     info!(centroids = centroid_count, "Warmed embedding cache from DB");
                 }
@@ -898,17 +1066,14 @@ async fn run_pipeline(
 
                             // Feed into situation graph for clustering (skip routine high-volume)
                             if !is_routine_high_volume(&event) {
-                                situation_graph.ingest(
-                                    &event,
-                                    if embeddings_enabled { Some(&mut embedding_cache) } else { None },
-                                );
+                                core.ingest_event(&event);
                                 fed += 1;
                             }
                         }
                     }
 
                     // Run initial situation cluster so the dashboard gets data immediately
-                    let clusters = situation_graph.active_clusters();
+                    let clusters = core.active_clusters();
                     let situation_count = clusters.len();
 
                     // Persist backfilled situations to DB
@@ -949,15 +1114,19 @@ async fn run_pipeline(
         .unwrap_or_default();
 
         for row in rows {
-            narrative_state.insert(row.situation_id, NarrativeState {
+            // Use current signal_event_count to prevent cascade regeneration on restart.
+            let signal_count = core.graph.get_cluster(&row.situation_id)
+                .map(|c| c.signal_event_count)
+                .unwrap_or(0);
+            core.narrative_state.insert(row.situation_id, NarrativeState {
                 version: row.version,
                 last_generated: Some(row.generated_at),
-                signal_count_at_gen: 0, // Will be updated on next tick
+                signal_count_at_gen: signal_count,
                 last_narrative: Some(row.narrative_text),
             });
         }
-        if !narrative_state.is_empty() {
-            info!(count = narrative_state.len(), "Loaded narrative state from DB — preventing cascade");
+        if !core.narrative_state.is_empty() {
+            info!(count = core.narrative_state.len(), "Loaded narrative state from DB — preventing cascade");
         }
     }
 
@@ -974,7 +1143,7 @@ async fn run_pipeline(
         let search_loaded = search_rows.len();
         for (sit_id, gap_str, last_ts, total, empty) in search_rows {
             if let Ok(gap) = gap_str.parse::<GapType>() {
-                situation_graph.restore_search_history(sit_id, gap, last_ts, total as u32, empty as u32);
+                core.graph.restore_search_history(sit_id, gap, last_ts, total as u32, empty as u32);
             }
         }
         if search_loaded > 0 {
@@ -982,7 +1151,9 @@ async fn run_pipeline(
         }
     }
 
-    let incident_max_age = chrono::Duration::hours(1);
+    // 6h cooldown prevents duplicate incidents for the same ongoing event
+    // (e.g., Iran coordinated_shutdown re-firing every sweep).
+    let incident_max_age = chrono::Duration::hours(6);
 
     loop {
         tokio::select! {
@@ -1017,6 +1188,11 @@ async fn run_pipeline(
                             "Incident detected"
                         );
                         let _ = publish_tx.send(PublishEvent::Incident(incident.clone()));
+                        {
+                            let pool = pool.clone();
+                            let inc = incident.clone();
+                            tokio::spawn(async move { persist_incident(&pool, &inc).await; });
+                        }
                         active_incidents.push(incident);
                         metrics.incidents_created.fetch_add(1, Ordering::Relaxed);
                     }
@@ -1026,17 +1202,12 @@ async fn run_pipeline(
                 // Feed into situation graph for entity-based clustering
                 // Skip routine high-volume events (flight positions, vessel positions,
                 // BGP anomalies, certs, Shodan banners) unless they carry anomaly signals.
-                // Also skip raw news articles — they'll be re-ingested after enrichment
-                // when we know their relevance score (prevents sports/entertainment clusters).
+                // Always ingest immediately — enrichment is best-effort enhancement,
+                // not a gate. Unenriched articles still have title/tags for basic
+                // clustering. If enrichment succeeds later, the enriched version is
+                // reingested via reingest_tx for improved cluster assignment.
                 if !is_routine_high_volume(&event) {
-                    let defer_for_enrichment = event.event_type == EventType::NewsArticle
-                        && event.payload.get("enrichment").is_none();
-                    if !defer_for_enrichment {
-                        situation_graph.ingest(
-                            &event,
-                            if embeddings_enabled { Some(&mut embedding_cache) } else { None },
-                        );
-                    }
+                    core.ingest_event(&event);
                 }
 
                 // Send to embedding worker (non-blocking, drop if full)
@@ -1067,6 +1238,7 @@ async fn run_pipeline(
                     if spawn_enrichment(
                         &event,
                         &claude_client,
+                        &gemini_client,
                         &ollama_client,
                         &budget,
                         &publish_tx,
@@ -1103,44 +1275,38 @@ async fn run_pipeline(
             }
             _ = situation_publish_interval.tick() => {
                 tick_situations(
-                    &mut situation_graph,
-                    &mut embedding_cache,
-                    embeddings_enabled,
-                    &mut situation_tick_count,
+                    &mut core,
                     &ollama_client,
+                    &gemini_client,
                     &merge_audit_tx,
                     &claude_client,
                     &budget,
-                    &mut title_pending,
                     &title_tx,
                     &mut search_pending,
                     &search_rate_limiter,
                     &search_http,
                     &search_tx,
-                    &mut narrative_state,
                     &narrative_tx,
                     &entity_resolver,
                     &entity_graph,
                     &pool,
                     &bg_semaphore,
                     &publish_tx,
+                    &metrics,
                 );
             }
             Some(result) = embed_result_rx.recv() => {
-                embedding_cache.insert(result.key.clone(), result.embedding);
+                core.embedding_cache.insert(result.key.clone(), result.embedding);
                 // Check if an enriched event was waiting for this embedding
                 if let Some(pending) = pending_reingest.remove(&result.key) {
                     debug!(key = %result.key, waited_ms = pending.queued_at.elapsed().as_millis(), "Re-ingesting enriched event with embedding");
-                    situation_graph.ingest(
-                        &pending.event,
-                        if embeddings_enabled { Some(&mut embedding_cache) } else { None },
-                    );
+                    core.ingest_event(&pending.event);
                 }
             }
             Some(result) = title_rx.recv() => {
                 info!(cluster_id = %result.cluster_id, title = %result.title, "AI-generated situation title");
-                title_pending.remove(&result.cluster_id);
-                situation_graph.update_cluster_title(result.cluster_id, result.title);
+                core.title_pending.remove(&result.cluster_id);
+                core.graph.update_cluster_title(result.cluster_id, result.title);
             }
             Some(result) = search_rx.recv() => {
                 search_pending.remove(&result.cluster_id);
@@ -1148,7 +1314,7 @@ async fn run_pipeline(
                 // Record gap search in history + persist to DB
                 let is_empty = result.data.is_none();
                 if let Some(gap) = result.gap_type {
-                    situation_graph.record_gap_searched(result.cluster_id, gap);
+                    core.graph.record_gap_searched(result.cluster_id, gap);
 
                     // Persist search history to DB
                     let persist_pool = pool.clone();
@@ -1179,7 +1345,7 @@ async fn run_pipeline(
                             gap_type = ?result.gap_type,
                             "Supplementary search data received"
                         );
-                        situation_graph.update_cluster_supplementary(result.cluster_id, data);
+                        core.graph.update_cluster_supplementary(result.cluster_id, data);
                     }
                     None => {
                         debug!(
@@ -1187,7 +1353,7 @@ async fn run_pipeline(
                             gap_type = ?result.gap_type,
                             "Search returned no results"
                         );
-                        situation_graph.record_empty_search(result.cluster_id);
+                        core.graph.record_empty_search(result.cluster_id);
                     }
                 }
             }
@@ -1197,12 +1363,9 @@ async fn run_pipeline(
                 // bonus are applied during clustering (fixes race condition).
                 if embeddings_enabled {
                     let key = embed_key(&enriched_event);
-                    if embedding_cache.get(&key).is_some() {
+                    if core.embedding_cache.get(&key).is_some() {
                         // Embedding already cached — ingest immediately
-                        situation_graph.ingest(
-                            &enriched_event,
-                            Some(&mut embedding_cache),
-                        );
+                        core.ingest_event(&enriched_event);
                     } else {
                         // Queue until embedding arrives
                         debug!(key = %key, "Queuing enriched event pending embedding");
@@ -1212,18 +1375,20 @@ async fn run_pipeline(
                         });
                     }
                 } else {
-                    situation_graph.ingest(&enriched_event, None);
+                    core.ingest_event(&enriched_event);
                 }
             }
             _ = analysis_check.tick() => {
+                if metrics.is_gpu_paused() { continue; }
                 tick_analysis(
                     &mut event_count_5min,
                     &mut tempo_window_start,
                     &mut last_analysis,
-                    &situation_graph,
+                    &core.graph,
                     &window,
                     &claude_client,
                     &ollama_client,
+                    &gemini_client,
                     &budget,
                     &shared_analysis,
                     &publish_tx,
@@ -1246,11 +1411,11 @@ async fn run_pipeline(
                     "Narrative generated"
                 );
                 // Update narrative state — snapshot current signal count so delta tracking works
-                if let Some(ns) = narrative_state.get_mut(&result.situation_id) {
+                if let Some(ns) = core.narrative_state.get_mut(&result.situation_id) {
                     ns.version = result.narrative.version;
                     ns.last_generated = Some(result.narrative.generated_at);
                     // Snapshot the cluster's current signal_event_count for delta tracking
-                    if let Some(cluster) = situation_graph.get_cluster(&result.situation_id) {
+                    if let Some(cluster) = core.graph.get_cluster(&result.situation_id) {
                         ns.signal_count_at_gen = cluster.signal_event_count;
                     }
                     ns.last_narrative = Some(result.narrative.narrative_text.clone());
@@ -1261,34 +1426,47 @@ async fn run_pipeline(
                 tokio::spawn(async move { persist_narrative(&pool, &narrative).await });
             }
             Some(result) = merge_audit_rx.recv() => {
-                situation_graph.unmerge(result.parent_id, result.child_id);
+                core.graph.unmerge(result.parent_id, result.child_id);
             }
-            _ = ollama_health_interval.tick() => {
-                if let Some(ref ollama) = ollama_client {
-                    if ollama.health_check().await {
-                        if ollama_consecutive_failures > 0 {
-                            info!("Ollama health check passed — resetting failure counter");
-                        }
-                        ollama_consecutive_failures = 0;
-                    } else {
-                        ollama_consecutive_failures += 1;
-                        warn!(
-                            consecutive_failures = ollama_consecutive_failures,
-                            "Ollama health check failed"
-                        );
-                        if ollama_consecutive_failures >= 3 {
-                            info!("Ollama unresponsive after 3 checks — attempting warm_model");
-                            match ollama.warm_model().await {
-                                Ok(()) => {
-                                    info!("Ollama model re-warmed successfully");
-                                    ollama_consecutive_failures = 0;
-                                }
-                                Err(e) => {
-                                    warn!("Ollama warm_model failed (Sonnet fallback active): {e}");
-                                }
+            // Ollama health check moved to background task (see above) — no longer blocks select! loop
+            _ = retro_sweep_interval.tick() => {
+                // Retroactive sweep: find old events that match current situations.
+                // Phase 1 (sync): extract query params from clusters.
+                // Phase 2 (async, spawned): query DB, send results back via channel.
+                let max_clusters = core.graph.config.sweep.retro_sweep_max_clusters;
+                let max_per = core.graph.config.sweep.retro_sweep_max_per_cluster;
+                let candidates = core.graph.retro_sweep_candidates(max_clusters);
+                for params in candidates {
+                    let pool = pool.clone();
+                    let tx = retro_tx.clone();
+                    let cluster_id = params.cluster_id;
+                    tokio::spawn(async move {
+                        match query_retro_events(&pool, &params, max_per).await {
+                            Ok(events) if !events.is_empty() => {
+                                let _ = tx.send((cluster_id, events)).await;
                             }
+                            Err(e) => {
+                                debug!(
+                                    %cluster_id,
+                                    error = %e,
+                                    "Retroactive sweep query failed"
+                                );
+                            }
+                            _ => {}
                         }
-                    }
+                    });
+                }
+            }
+            Some((cluster_id, events)) = retro_rx.recv() => {
+                let count = events.len();
+                let added = core.graph.retroactive_add(cluster_id, &events);
+                if added > 0 {
+                    info!(
+                        %cluster_id,
+                        queried = count,
+                        linked = added,
+                        "Retroactive sweep linked historical events"
+                    );
                 }
             }
             _ = reingest_sweep.tick() => {
@@ -1303,16 +1481,67 @@ async fn run_pipeline(
                     for key in expired {
                         if let Some(pending) = pending_reingest.remove(&key) {
                             debug!(key = %key, "Flushing expired pending reingest (no embedding after 10s)");
-                            situation_graph.ingest(
-                                &pending.event,
-                                if embeddings_enabled { Some(&mut embedding_cache) } else { None },
-                            );
+                            core.ingest_event(&pending.event);
                         }
                     }
                 }
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Retroactive sweep — query DB for old events matching situation entities
+// ---------------------------------------------------------------------------
+
+/// Query the events table for historical events that match a situation's
+/// entities but aren't already linked. Processes oldest-to-newest so temporal
+/// context builds naturally. Only returns high-signal event types — text data
+/// (titles, descriptions, payloads) is fully preserved in the DB rows.
+async fn query_retro_events(
+    pool: &PgPool,
+    params: &crate::situation_graph::RetroSweepParams,
+    max_per_cluster: i64,
+) -> anyhow::Result<Vec<InsertableEvent>> {
+    let exclude_sids: Vec<String> = params.exclude_source_ids.iter().cloned().collect();
+
+    let rows = sqlx::query_as::<_, sr_sources::db::models::Event>(
+        r#"
+        SELECT event_time, ingested_at, source_type, source_id,
+               ST_Y(location::geometry) as latitude,
+               ST_X(location::geometry) as longitude,
+               region_code, entity_id, entity_name, event_type,
+               severity, confidence, tags, title, description, payload
+        FROM events
+        WHERE event_time BETWEEN $1 AND $2
+          AND (
+              entity_name = ANY($3)
+              OR title ILIKE ANY($4)
+          )
+          AND (source_id IS NULL OR NOT source_id = ANY($5))
+          AND event_type NOT IN (
+              'flight_position', 'vessel_position', 'cert_issued',
+              'shodan_banner', 'bgp_anomaly'
+          )
+        ORDER BY event_time ASC
+        LIMIT $6
+        "#,
+    )
+    .bind(params.lookback_from)
+    .bind(params.lookback_to)
+    .bind(&params.entity_names)
+    .bind(&params.entity_patterns)
+    .bind(&exclude_sids)
+    .bind(max_per_cluster)
+    .fetch_all(pool)
+    .await?;
+
+    let events: Vec<InsertableEvent> = rows
+        .iter()
+        .filter_map(db_event_to_insertable)
+        .collect();
+
+    Ok(events)
 }
 
 // ---------------------------------------------------------------------------
@@ -1353,6 +1582,7 @@ fn tick_analysis(
     window: &CorrelationWindow,
     claude_client: &Option<Arc<ClaudeClient>>,
     ollama_client: &Option<Arc<OllamaClient>>,
+    gemini_client: &Option<Arc<GeminiClient>>,
     budget: &Arc<BudgetManager>,
     shared_analysis: &SharedAnalysis,
     publish_tx: &broadcast::Sender<PublishEvent>,
@@ -1371,12 +1601,13 @@ fn tick_analysis(
 
     // Check if it's time for an analysis run
     let interval = analysis_interval_secs(current_tempo);
-    let has_analysis_backend = claude_client.is_some() || ollama_client.is_some();
+    let has_analysis_backend = claude_client.is_some() || ollama_client.is_some() || gemini_client.is_some();
     if last_analysis.elapsed() >= Duration::from_secs(interval)
         && has_analysis_backend
     {
         let claude = claude_client.clone();
         let ollama = ollama_client.clone();
+        let gemini = gemini_client.clone();
         let budget = Arc::clone(budget);
         let shared = shared_analysis.clone();
         let publish = publish_tx.clone();
@@ -1421,7 +1652,7 @@ fn tick_analysis(
                 recent_events,
                 tempo,
             };
-            match analyze_tiered(claude.as_deref(), ollama.as_deref(), &budget, &input).await {
+            match analyze_tiered(claude.as_deref(), gemini.as_deref(), ollama.as_deref(), &budget, &input).await {
                 Ok((report, escalate)) => {
                     info!(
                         merges = report.suggested_merges.len(),
@@ -1488,111 +1719,82 @@ fn tick_analysis(
     }
 }
 
-/// Situation graph periodic tick: prune, merge, split, titles, search, phases,
-/// narrative generation, and publish clusters via SSE.
+/// Situation graph periodic tick: clustering via PipelineCore, then AI dispatch,
+/// search, narrative generation, and publish clusters via SSE.
 #[allow(clippy::too_many_arguments)]
 fn tick_situations(
-    situation_graph: &mut SituationGraph,
-    embedding_cache: &mut EmbeddingCache,
-    embeddings_enabled: bool,
-    situation_tick_count: &mut u64,
+    core: &mut PipelineCore,
     ollama_client: &Option<Arc<OllamaClient>>,
+    gemini_client: &Option<Arc<GeminiClient>>,
     merge_audit_tx: &mpsc::Sender<MergeAuditResult>,
     claude_client: &Option<Arc<ClaudeClient>>,
     budget: &Arc<BudgetManager>,
-    title_pending: &mut HashSet<uuid::Uuid>,
     title_tx: &mpsc::Sender<TitleResult>,
     search_pending: &mut HashSet<uuid::Uuid>,
     search_rate_limiter: &Arc<SearchRateLimiter>,
     search_http: &reqwest::Client,
     search_tx: &mpsc::Sender<SearchResult>,
-    narrative_state: &mut HashMap<uuid::Uuid, NarrativeState>,
     narrative_tx: &mpsc::Sender<NarrativeResult>,
     entity_resolver: &SharedEntityResolver,
     entity_graph: &SharedEntityGraph,
     pool: &PgPool,
     bg_semaphore: &Arc<tokio::sync::Semaphore>,
     publish_tx: &broadcast::Sender<PublishEvent>,
+    metrics: &Arc<PipelineMetrics>,
 ) {
-    // Prune stale clusters (no events in 6h), clean up embedding centroids
-    if embeddings_enabled {
-        situation_graph.prune_stale_with_cache(
-            Duration::from_secs(6 * 3600),
-            Some(embedding_cache),
-        );
-    } else {
-        situation_graph.prune_stale(Duration::from_secs(6 * 3600));
-    }
+    // ── Core clustering (shared with replay) ─────────────────────────────
+    // Clustering is CPU-only and always runs, even when GPU is paused.
+    let output = core.tick_clustering();
 
-    situation_graph.expire_merge_rejections();
+    let gpu_paused = metrics.is_gpu_paused();
 
-    *situation_tick_count += 1;
-    if situation_tick_count.is_multiple_of(2) {
-        let applied_merges = situation_graph.merge_overlapping(
-            if embeddings_enabled { Some(embedding_cache) } else { None },
-        );
-
-        if !applied_merges.is_empty() {
-            if let Some(ollama) = ollama_client {
-                let mut merge_info: Vec<(uuid::Uuid, uuid::Uuid, String, Vec<String>, String, Vec<String>)> = Vec::new();
-                for &(parent_id, child_id, skip_audit) in applied_merges.iter().take(10) {
-                    if skip_audit {
-                        debug!(%parent_id, %child_id, "Merge audit: skipped (forced consolidation)");
-                        continue;
-                    }
-                    let parent = situation_graph.get_cluster(&parent_id);
-                    let child = situation_graph.get_cluster(&child_id);
-                    if let (Some(p), Some(c)) = (parent, child) {
-                        merge_info.push((
-                            parent_id, child_id,
-                            p.title.clone(), p.topics.iter().cloned().collect::<Vec<_>>(),
-                            c.title.clone(), c.topics.iter().cloned().collect::<Vec<_>>(),
-                        ));
-                    }
+    // ── Merge audit (production-only, requires Ollama GPU) ───────────────
+    if !output.merges.is_empty() && !gpu_paused {
+        if let Some(ollama) = ollama_client {
+            let mut merge_info: Vec<(uuid::Uuid, uuid::Uuid, String, Vec<String>, String, Vec<String>)> = Vec::new();
+            for &(parent_id, child_id, skip_audit) in output.merges.iter().take(10) {
+                if skip_audit {
+                    debug!(%parent_id, %child_id, "Merge audit: skipped (forced consolidation)");
+                    continue;
                 }
-                if !merge_info.is_empty() {
-                    let ollama = Arc::clone(ollama);
-                    let tx = merge_audit_tx.clone();
-                    tokio::spawn(async move {
-                        for (parent_id, child_id, parent_title, parent_topics, child_title, child_topics) in merge_info {
-                            match ollama.audit_merge(&parent_title, &parent_topics, &child_title, &child_topics).await {
-                                Ok(true) => { debug!(%parent_id, %child_id, "Merge audit: confirmed"); }
-                                Ok(false) => {
-                                    info!(%parent_id, %child_id, "Merge audit: rejected, requesting unmerge");
-                                    let _ = tx.send(MergeAuditResult { parent_id, child_id }).await;
-                                }
-                                Err(e) => { warn!(%parent_id, %child_id, error = %e, "Merge audit failed, skipping"); }
-                            }
-                        }
-                    });
+                let parent = core.graph.get_cluster(&parent_id);
+                let child = core.graph.get_cluster(&child_id);
+                if let (Some(p), Some(c)) = (parent, child) {
+                    merge_info.push((
+                        parent_id, child_id,
+                        p.title.clone(), p.topics.iter().cloned().collect::<Vec<_>>(),
+                        c.title.clone(), c.topics.iter().cloned().collect::<Vec<_>>(),
+                    ));
                 }
             }
-        }
-
-        situation_graph.split_divergent();
-
-        if situation_tick_count.is_multiple_of(4) {
-            situation_graph.sweep(
-                if embeddings_enabled { Some(embedding_cache) } else { None },
-            );
+            if !merge_info.is_empty() {
+                let ollama = Arc::clone(ollama);
+                let tx = merge_audit_tx.clone();
+                tokio::spawn(async move {
+                    for (parent_id, child_id, parent_title, parent_topics, child_title, child_topics) in merge_info {
+                        match ollama.audit_merge(&parent_title, &parent_topics, &child_title, &child_topics).await {
+                            Ok(true) => { debug!(%parent_id, %child_id, "Merge audit: confirmed"); }
+                            Ok(false) => {
+                                info!(%parent_id, %child_id, "Merge audit: rejected, requesting unmerge");
+                                let _ = tx.send(MergeAuditResult { parent_id, child_id }).await;
+                            }
+                            Err(e) => { warn!(%parent_id, %child_id, error = %e, "Merge audit failed, skipping"); }
+                        }
+                    }
+                });
+            }
         }
     }
 
-    // Flush the noise buffer every tick — re-try matching pending events
-    // against clusters that may have grown, group matching pending events,
-    // and discard expired entries.
-    situation_graph.flush_pending(
-        if embeddings_enabled { Some(embedding_cache) } else { None },
-    );
-
-    // Spawn AI title generation for clusters that need it
-    if claude_client.is_some() || ollama_client.is_some() {
-        let needing_titles = situation_graph.clusters_needing_titles(title_pending);
+    // ── AI title generation (production-only: fire-and-forget) ───────────
+    if !gpu_paused && (claude_client.is_some() || ollama_client.is_some() || gemini_client.is_some()) {
+        let needing_titles = core.graph.clusters_needing_titles(&core.title_pending);
         for cluster in needing_titles {
             info!(cluster_id = %cluster.id, event_count = cluster.event_count, current_title = %cluster.title, "Requesting AI title for cluster");
-            title_pending.insert(cluster.id);
+            core.title_pending.insert(cluster.id);
             let claude = claude_client.clone();
             let ollama = ollama_client.clone();
+            let gemini = gemini_client.clone();
             let budget = Arc::clone(budget);
             let tx = title_tx.clone();
             let cid = cluster.id;
@@ -1605,7 +1807,7 @@ fn tick_situations(
             let fallback_title = cluster.title.clone();
             tokio::spawn(async move {
                 if let Some(title) = generate_situation_title(
-                    claude.as_deref(), ollama.as_deref(), &budget, &entities, &topics, &regions,
+                    claude.as_deref(), gemini.as_deref(), ollama.as_deref(), &budget, &entities, &topics, &regions,
                     &event_titles, event_count, source_count, None, None, None, &[],
                 ).await {
                     let _ = tx.send(TitleResult { cluster_id: cid, title }).await;
@@ -1617,7 +1819,7 @@ fn tick_situations(
     }
 
     // Spawn Exa web search for clusters due for (re-)research
-    for analysis in situation_graph.clusters_needing_search_with_gaps(search_pending) {
+    for analysis in core.graph.clusters_needing_search_with_gaps(search_pending) {
         if !search_rate_limiter.try_acquire() { break; }
         search_pending.insert(analysis.cluster_id);
         let tx = search_tx.clone();
@@ -1635,15 +1837,14 @@ fn tick_situations(
         });
     }
 
-    // Evaluate phase transitions + severity escalations
-    let (transitions, severity_escalated) = situation_graph.evaluate_phases();
-    for (cid, transition) in &transitions {
+    // ── Phase transitions + severity escalations ──────────────────────────
+    for (cid, transition) in &output.phase_transitions {
         info!(cluster_id = %cid, from = ?transition.from_phase, to = ?transition.to_phase, reason = %transition.trigger_reason, "Situation phase transition");
     }
 
-    for cid in &severity_escalated {
+    for cid in &output.severity_escalations {
         if search_pending.contains(cid) || !search_rate_limiter.try_acquire() { continue; }
-        if let Some(cluster) = situation_graph.get_cluster(cid) {
+        if let Some(cluster) = core.graph.get_cluster(cid) {
             search_pending.insert(*cid);
             let tx = search_tx.clone();
             let cluster_id = *cid;
@@ -1664,10 +1865,10 @@ fn tick_situations(
         }
     }
 
-    let mut clusters = situation_graph.active_clusters();
+    let mut clusters = core.active_clusters();
 
     for cluster in &mut clusters {
-        if let Some(ns) = narrative_state.get(&cluster.id) {
+        if let Some(ns) = core.narrative_state.get(&cluster.id) {
             cluster.narrative_text = ns.last_narrative.clone();
         }
     }
@@ -1676,7 +1877,7 @@ fn tick_situations(
         let pool = pool.clone();
         let cluster = cluster.clone();
         let sem = bg_semaphore.clone();
-        let centroid = embedding_cache.get_cluster_centroid(&cluster.id).cloned();
+        let centroid = core.embedding_cache.get_cluster_centroid(&cluster.id).cloned();
         tokio::spawn(async move {
             let _permit = sem.acquire().await;
             upsert_situation(&pool, &cluster, centroid).await;
@@ -1687,16 +1888,17 @@ fn tick_situations(
     let mut narratives_spawned_this_tick = 0;
     const MAX_NARRATIVES_PER_TICK: usize = 3;
     for cluster in &clusters {
-        let ns = narrative_state.entry(cluster.id).or_insert(NarrativeState {
+        let ns = core.narrative_state.entry(cluster.id).or_insert(NarrativeState {
             version: 0, last_generated: None, signal_count_at_gen: 0, last_narrative: None,
         });
-        let signal_count = situation_graph.get_cluster(&cluster.id).map(|c| c.signal_event_count).unwrap_or(0);
+        let signal_count = core.graph.get_cluster(&cluster.id).map(|c| c.signal_event_count).unwrap_or(0);
         let events_since = signal_count.saturating_sub(ns.signal_count_at_gen);
 
-        if narratives_spawned_this_tick >= MAX_NARRATIVES_PER_TICK { break; }
-        if claude_client.is_some() || ollama_client.is_some() {
+        if gpu_paused || narratives_spawned_this_tick >= MAX_NARRATIVES_PER_TICK { continue; }
+        if claude_client.is_some() || gemini_client.is_some() || ollama_client.is_some() {
             if sr_intel::should_regenerate(ns.version, ns.last_generated, events_since, false, false) {
                 let claude = claude_client.clone();
+                let gemini = gemini_client.clone();
                 let ollama = ollama_client.clone();
                 let budget = Arc::clone(budget);
                 let tx = narrative_tx.clone();
@@ -1720,7 +1922,7 @@ fn tick_situations(
                 };
 
                 tokio::spawn(async move {
-                    match generate_narrative_tiered(claude.as_deref(), ollama.as_deref(), &budget, &context).await {
+                    match generate_narrative_tiered(claude.as_deref(), gemini.as_deref(), ollama.as_deref(), &budget, &context).await {
                         Ok(Some(narrative)) => { let _ = tx.send(NarrativeResult { situation_id: sid, narrative }).await; }
                         Ok(None) => { debug!("Narrative generation skipped (budget)"); }
                         Err(e) => { debug!("Narrative generation failed: {e}"); }
@@ -1801,6 +2003,7 @@ fn build_impact_summary(
 fn spawn_enrichment(
     event: &InsertableEvent,
     claude_client: &Option<Arc<ClaudeClient>>,
+    gemini_client: &Option<Arc<GeminiClient>>,
     ollama_client: &Option<Arc<OllamaClient>>,
     budget: &Arc<BudgetManager>,
     publish_tx: &broadcast::Sender<PublishEvent>,
@@ -1811,7 +2014,11 @@ fn spawn_enrichment(
     entity_graph: &SharedEntityGraph,
     bg_semaphore: &Arc<tokio::sync::Semaphore>,
 ) -> bool {
-    let has_enrichment_backend = ollama_client.is_some() || claude_client.is_some();
+    // Skip enrichment when GPU processing is paused
+    if metrics.is_gpu_paused() {
+        return false;
+    }
+    let has_enrichment_backend = ollama_client.is_some() || gemini_client.is_some() || claude_client.is_some();
     let is_enrichable = matches!(
         event.event_type,
         EventType::NewsArticle | EventType::TelegramMessage | EventType::GeoNews
@@ -1825,6 +2032,7 @@ fn spawn_enrichment(
     };
 
     let claude = claude_client.clone();
+    let gemini = gemini_client.clone();
     let ollama = ollama_client.clone();
     let budget = Arc::clone(budget);
     let publish_tx = publish_tx.clone();
@@ -1845,31 +2053,15 @@ fn spawn_enrichment(
             }
         }
 
-        let allow_claude_fallback = matches!(
-            enrichable_event.event_type,
-            EventType::NewsArticle | EventType::TelegramMessage | EventType::GeoNews
-        );
-        let enrichment_result = if let Some(ref oc) = ollama {
-            match oc.enrich_article(&article_input).await {
-                Ok(enriched) => Ok(enriched),
-                Err(e) => {
-                    if allow_claude_fallback {
-                        debug!("Ollama enrichment failed, trying Claude: {e}");
-                        if let Some(ref client) = claude {
-                            enrich_article(client, &budget, &article_input).await
-                        } else { Err(e) }
-                    } else {
-                        debug!("Ollama enrichment failed for {}, no Claude fallback: {e}",
-                               enrichable_event.event_type);
-                        Err(e)
-                    }
-                }
-            }
-        } else if allow_claude_fallback {
-            if let Some(ref client) = claude {
-                enrich_article(client, &budget, &article_input).await
-            } else { return; }
-        } else { return; };
+        // Tiered enrichment: Ollama -> Gemini Flash-Lite -> Claude
+        let enrichment_result = enrich_article_tiered(
+            claude.as_deref(),
+            gemini.as_deref(),
+            ollama.as_deref(),
+            &budget,
+            &article_input,
+        )
+        .await;
 
         match enrichment_result {
             Ok(enriched) => {
@@ -2046,6 +2238,8 @@ fn spawn_enrichment(
             }
             Err(e) => {
                 debug!("Enrichment failed (publishing raw): {e}");
+                // Event was already ingested unenriched into the graph in the
+                // main loop, so no reingest needed here. Just publish to SSE.
                 let _ = publish_tx.send(PublishEvent::Event { event: enrichable_event });
                 metrics_spawn.events_published.fetch_add(1, Ordering::Relaxed);
             }
@@ -2057,11 +2251,16 @@ fn spawn_enrichment(
 /// Background embedding worker. Receives (event, text) pairs, batches them,
 /// runs BGE-M3 inference via spawn_blocking, persists to DB, and sends results
 /// back to the pipeline loop.
+///
+/// When `metrics.gpu_paused` is set, the worker drains the channel but skips
+/// inference — events are consumed so the sender doesn't block, but no GPU
+/// work is done.
 async fn embedding_worker(
     model: Arc<EmbeddingModel>,
     rx: &mut mpsc::Receiver<(InsertableEvent, String)>,
     result_tx: mpsc::Sender<EmbedResult>,
     pool: PgPool,
+    metrics: &Arc<PipelineMetrics>,
 ) {
     const BATCH_SIZE: usize = 8;
     const BATCH_TIMEOUT: Duration = Duration::from_millis(100);
@@ -2083,6 +2282,11 @@ async fn embedding_worker(
                 Ok(Some(item)) => batch.push(item),
                 _ => break, // timeout or closed
             }
+        }
+
+        // Skip GPU inference when paused — drain the channel to avoid backpressure
+        if metrics.is_gpu_paused() {
+            continue;
         }
 
         let texts: Vec<String> = batch.iter().map(|(_, t)| t.clone()).collect();

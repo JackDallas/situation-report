@@ -13,7 +13,7 @@ use uuid::Uuid;
 use sr_embeddings::EmbeddingCache;
 use tracing::{debug, info};
 
-use super::scoring::{effective_source_diversity, is_conflict_source, is_conflict_topic};
+use super::scoring::{effective_source_diversity, is_conflict_source, is_conflict_topic, is_cyber_source, is_natural_disaster_topic};
 use super::{SituationCluster, SituationGraph};
 
 // Re-export the shared enum from sr-types.
@@ -66,7 +66,7 @@ impl PhaseMetrics {
 }
 
 /// Compute a dynamic gap tolerance (in hours) for a situation cluster.
-pub(crate) fn compute_gap_tolerance(cluster: &SituationCluster, phases: &sr_config::PhaseConfig) -> f64 {
+pub(crate) fn compute_gap_tolerance(cluster: &SituationCluster, phases: &sr_config::PhaseConfig, now: DateTime<Utc>) -> f64 {
     let base = match cluster.severity {
         Severity::Critical => phases.gap_tolerance_critical_hours,
         Severity::High => phases.gap_tolerance_high_hours,
@@ -83,7 +83,6 @@ pub(crate) fn compute_gap_tolerance(cluster: &SituationCluster, phases: &sr_conf
 
     // Use decayed peak rate — the raw peak_event_rate is all-time and never decays,
     // which permanently inflates gap tolerance for clusters that once had a burst.
-    let now = chrono::Utc::now();
     let mins_since_peak = (now - cluster.peak_rate_at).num_minutes().max(0) as f64;
     let decay = 0.5_f64.powf(mins_since_peak / phases.peak_decay_half_life_mins);
     let decayed_peak = cluster.peak_event_rate * decay;
@@ -210,41 +209,73 @@ pub(crate) fn evaluate_phase_transition(
 }
 
 /// Recompute cluster severity based on aggregate signals beyond individual event severity.
-/// Returns true if severity was escalated.
-pub(crate) fn recompute_cluster_severity(cluster: &mut SituationCluster, certainty_config: &sr_config::CertaintyConfig) -> bool {
+/// Computes severity from scratch (can both escalate and downgrade).
+/// Returns true if severity changed.
+pub(crate) fn recompute_cluster_severity(cluster: &mut SituationCluster, severity_config: &sr_config::SeverityConfig, certainty_config: &sr_config::CertaintyConfig, now: DateTime<Utc>) -> bool {
     let old_severity = cluster.severity;
     let has_conflict_sources = cluster.source_types.iter().any(|s| is_conflict_source(*s));
     let has_conflict_topics = cluster.topics.iter().any(|t| is_conflict_topic(t));
+    let is_natural_disaster = cluster.topics.iter().any(|t| is_natural_disaster_topic(t));
     let is_active_or_developing = matches!(
         cluster.phase,
         SituationPhase::Developing | SituationPhase::Active
     );
 
-    if cluster.phase == SituationPhase::Active
+    // Natural disaster clusters (wildfire, earthquake, flood, etc.) cap at high severity
+    // unless they also have genuine conflict signals (e.g., arson in conflict zone).
+    let disaster_only = is_natural_disaster && !has_conflict_topics;
+    let severity_cap = if disaster_only { Severity::High } else { Severity::Critical };
+
+    let has_cyber_sources = cluster.source_types.iter().any(|s| is_cyber_source(*s));
+    let source_diversity = cluster.source_types.len();
+
+    // Compute severity from scratch based on current cluster state.
+    // Multiple paths to escalation: conflict, cyber, environmental, or sheer corroboration.
+    let computed = if cluster.phase == SituationPhase::Active
         && has_conflict_sources
-        && cluster.event_count >= 20
-        && cluster.source_types.len() >= 3
+        && has_conflict_topics
+        && cluster.event_count >= severity_config.critical_min_events
+        && source_diversity >= severity_config.critical_min_sources
     {
-        cluster.severity = cluster.severity.max(Severity::Critical);
+        // Active armed conflict with heavy multi-source corroboration
+        Severity::Critical.min(severity_cap)
     } else if is_active_or_developing
         && (has_conflict_sources || has_conflict_topics)
-        && cluster.event_count >= 10
+        && cluster.event_count >= severity_config.high_min_events
     {
-        cluster.severity = cluster.severity.max(Severity::High);
-    } else if has_conflict_topics && cluster.source_types.len() >= 2 {
-        cluster.severity = cluster.severity.max(Severity::Medium);
-    }
+        // Developing/active conflict situation
+        Severity::High.min(severity_cap)
+    } else if is_active_or_developing
+        && (has_cyber_sources || is_natural_disaster)
+        && source_diversity >= severity_config.medium_min_sources
+        && cluster.event_count >= severity_config.high_min_events
+    {
+        // Multi-source cyber or environmental disaster, actively developing
+        Severity::High.min(severity_cap)
+    } else if (has_conflict_topics || has_cyber_sources || is_natural_disaster)
+        && source_diversity >= severity_config.medium_min_sources
+    {
+        // Corroborated situation (2+ sources) with meaningful topic signal
+        Severity::Medium
+    } else if source_diversity >= severity_config.critical_min_sources && cluster.event_count >= severity_config.medium_min_events {
+        // Any situation with 3+ independent sources is noteworthy
+        Severity::Medium
+    } else {
+        Severity::Low
+    };
+
+    cluster.severity = computed;
 
     // Cap severity for stale clusters
     if let Some((most_recent, _)) = cluster.event_ids.last() {
-        if (Utc::now() - *most_recent).num_hours() > 48 {
+        if (now - *most_recent).num_hours() > 48 {
             cluster.severity = cluster.severity.min(Severity::Medium);
         }
     }
 
     cluster.certainty = compute_certainty_with_config(cluster, certainty_config);
 
-    cluster.severity > old_severity
+    cluster.severity != old_severity
 }
 
 /// Compute a certainty score (0.0-1.0) for a situation cluster using smooth
@@ -275,7 +306,7 @@ impl SituationGraph {
 
     /// Remove stale clusters, optionally cleaning embedding centroids.
     pub fn prune_stale_with_cache(&mut self, max_age: std::time::Duration, embedding_cache: Option<&mut EmbeddingCache>) {
-        let now = Utc::now();
+        let now = self.now();
         let normal_cutoff = now
             - chrono::Duration::from_std(max_age).unwrap_or_else(|_| chrono::Duration::hours(24));
         let fast_cutoff = now
@@ -352,9 +383,23 @@ impl SituationGraph {
 
     /// Evaluate phase transitions for all clusters. Call periodically (e.g. every 30s).
     pub fn evaluate_phases(&mut self) -> (Vec<(Uuid, PhaseTransition)>, Vec<Uuid>) {
-        let now = Utc::now();
+        let now = self.now();
         let mut transitions = Vec::new();
         let mut severity_escalated = Vec::new();
+
+        // Track pre-recompute severity for parent clusters to avoid oscillation log spam
+        let parent_set: HashSet<Uuid> = {
+            let mut parents = HashSet::new();
+            for c in self.clusters.values() {
+                if let Some(pid) = c.parent_id {
+                    parents.insert(pid);
+                }
+            }
+            parents
+        };
+        let pre_recompute_severity: std::collections::HashMap<Uuid, Severity> = parent_set.iter()
+            .filter_map(|pid| self.clusters.get(pid).map(|c| (*pid, c.severity)))
+            .collect();
 
         let cluster_ids: Vec<Uuid> = self.clusters.keys().copied().collect();
         for cid in cluster_ids {
@@ -415,7 +460,7 @@ impl SituationGraph {
                 event_count: cluster.event_count,
             };
 
-            let gap_tolerance = compute_gap_tolerance(cluster, &self.config.phases);
+            let gap_tolerance = compute_gap_tolerance(cluster, &self.config.phases, now);
 
             if let Some((new_phase, reason)) = evaluate_phase_transition(cluster.phase, &metrics, gap_tolerance, &self.config.phases) {
                 let is_declining = matches!(
@@ -530,24 +575,34 @@ impl SituationGraph {
 
             // Recompute cluster severity
             if let Some(cluster) = self.clusters.get_mut(&cid) {
-                if recompute_cluster_severity(cluster, &self.config.certainty) {
-                    info!(
-                        cluster_id = %cid,
-                        title = %cluster.title,
-                        severity = %cluster.severity,
-                        "Cluster severity escalated — flagging for proactive search"
-                    );
-                    severity_escalated.push(cid);
+                let old_sev = cluster.severity;
+                if recompute_cluster_severity(cluster, &self.config.severity, &self.config.certainty, now) {
+                    // Only log for non-parent clusters; parent severity is logged
+                    // after propagation to avoid oscillation spam.
+                    if !parent_set.contains(&cid) {
+                        info!(
+                            cluster_id = %cid,
+                            title = %cluster.title,
+                            from = %old_sev,
+                            to = %cluster.severity,
+                            "Cluster severity changed"
+                        );
+                    }
+                    if cluster.severity > old_sev {
+                        severity_escalated.push(cid);
+                    }
                 }
             }
         }
 
         // Propagate severity from children to parents using proportional threshold.
         // A severity level propagates only when >= threshold fraction of substantial
-        // children are at or above that level.  Allows decrease when enabled.
+        // children are at or above that level.
+        // IMPORTANT: never lower below the parent's own direct-computation result,
+        // otherwise child noise (many low-severity children) can override genuine
+        // parent-level signals (e.g., active multi-source conflict).
         let min_events_for_propagation = self.config.quality.min_events_standalone;
         let threshold = self.config.sweep.severity_propagation_threshold;
-        let allow_decrease = self.config.sweep.severity_propagation_allow_decrease;
         let parent_ids: Vec<Uuid> = self.clusters.values()
             .filter(|c| c.parent_id.is_none())
             .map(|c| c.id)
@@ -572,24 +627,24 @@ impl SituationGraph {
                 .copied()
                 .unwrap_or(Severity::Info);
             if let Some(parent) = self.clusters.get_mut(&pid) {
+                let _pre_propagation = parent.severity;
                 if candidate > parent.severity {
-                    info!(
-                        cluster_id = %pid,
-                        title = %parent.title,
-                        from = %parent.severity,
-                        to = %candidate,
-                        "Parent severity raised via proportional child threshold"
-                    );
                     parent.severity = candidate;
-                } else if allow_decrease && candidate < parent.severity {
-                    info!(
-                        cluster_id = %pid,
-                        title = %parent.title,
-                        from = %parent.severity,
-                        to = %candidate,
-                        "Parent severity lowered — children no longer support level"
-                    );
-                    parent.severity = candidate;
+                }
+                // Only log if the final severity differs from what was recorded
+                // before recompute (stored in pre_recompute_severity map).
+                // This avoids oscillation log spam where recompute→medium then
+                // propagation→critical on every cycle.
+                if let Some(&pre_recompute) = pre_recompute_severity.get(&pid) {
+                    if parent.severity != pre_recompute {
+                        info!(
+                            cluster_id = %pid,
+                            title = %parent.title,
+                            from = %pre_recompute,
+                            to = %parent.severity,
+                            "Parent severity changed (recompute + propagation)"
+                        );
+                    }
                 }
             }
         }
@@ -655,6 +710,8 @@ impl SituationGraph {
                 if cluster.event_ids.len() > sweep_cfg.shed_above_events {
                     let drain_count = cluster.event_ids.len() - sweep_cfg.shed_target_events;
                     cluster.event_ids.drain(..drain_count);
+                    // Keep event_count in sync with event_ids for velocity calculations,
+                    // but total_events_ingested preserves the true historical count.
                     cluster.event_count = cluster.event_ids.len();
                     shed_events += drain_count;
                 }
@@ -662,7 +719,7 @@ impl SituationGraph {
         }
 
         // --- Pass 3: Orphan cleanup ---
-        let now = Utc::now();
+        let now = self.now();
         let orphan_age = chrono::Duration::seconds(sweep_cfg.orphan_min_age_secs as i64);
         let orphan_ids: Vec<Uuid> = self.clusters.values()
             .filter(|c| {
@@ -688,14 +745,114 @@ impl SituationGraph {
                 removed_orphans += 1;
             }
         }
-        if !orphan_ids.is_empty() {
-            let parent_ids: HashSet<Uuid> = self.clusters.values()
-                .filter(|c| c.parent_id.is_none())
-                .map(|c| c.id)
-                .collect();
-            for pid in parent_ids {
-                let _has_children = self.clusters.values().any(|c| c.parent_id == Some(pid));
+        // --- Pass 3b: Enforce max_children_per_parent cap ---
+        // Orphan the smallest children from parents that exceed the cap.
+        let max_children = self.config.cluster_caps.max_children_per_parent;
+        let mut children_per_parent: std::collections::HashMap<Uuid, Vec<(Uuid, usize)>> = std::collections::HashMap::new();
+        for c in self.clusters.values() {
+            if let Some(pid) = c.parent_id {
+                children_per_parent.entry(pid).or_default().push((c.id, c.event_count));
             }
+        }
+        let mut cap_orphaned = 0usize;
+        for (_pid, mut kids) in children_per_parent {
+            if kids.len() <= max_children {
+                continue;
+            }
+            // Keep the largest children, orphan the rest
+            kids.sort_by(|a, b| b.1.cmp(&a.1));
+            for &(kid_id, _) in kids.iter().skip(max_children) {
+                if let Some(kid) = self.clusters.get_mut(&kid_id) {
+                    kid.parent_id = None;
+                    cap_orphaned += 1;
+                }
+            }
+        }
+        if cap_orphaned > 0 {
+            info!(cap_orphaned, max_children, "Sweep: enforced max_children_per_parent cap");
+        }
+
+        // --- Pass 3c: Orphan children with no topical connection to parent ---
+        // Checks title word overlap, shared entities, and shared semantic topics.
+        // Source-type topics (gdacs, firms, copernicus, etc.) are excluded from
+        // overlap calculation since they indicate data source, not situation topic.
+        let mut topical_orphaned = 0usize;
+        let source_topics: HashSet<&str> = [
+            "gdacs", "firms", "copernicus", "usgs", "reliefweb", "acled",
+            "gdelt", "green", "orange", "red", "closed",
+        ].into_iter().collect();
+        {
+            let child_ids: Vec<(Uuid, Uuid)> = self.clusters.values()
+                .filter_map(|c| c.parent_id.map(|pid| (c.id, pid)))
+                .collect();
+            for (child_id, parent_id) in child_ids {
+                let (child_title, child_entities, child_topics) = match self.clusters.get(&child_id) {
+                    Some(c) => (c.title.clone(), c.entities.clone(), c.topics.clone()),
+                    None => continue,
+                };
+                let (parent_title, parent_entities, parent_topics) = match self.clusters.get(&parent_id) {
+                    Some(c) => (c.title.clone(), c.entities.clone(), c.topics.clone()),
+                    None => {
+                        // Parent gone — orphan the child
+                        if let Some(c) = self.clusters.get_mut(&child_id) { c.parent_id = None; }
+                        topical_orphaned += 1;
+                        continue;
+                    }
+                };
+
+                let shared_entities = child_entities.intersection(&parent_entities).count();
+                // Only count semantic topics (exclude source-type tags)
+                let semantic_child: HashSet<&String> = child_topics.iter()
+                    .filter(|t| !source_topics.contains(t.as_str()))
+                    .collect();
+                let semantic_parent: HashSet<&String> = parent_topics.iter()
+                    .filter(|t| !source_topics.contains(t.as_str()))
+                    .collect();
+                let _shared_semantic_topics = semantic_child.intersection(&semantic_parent).count();
+
+                // Title word overlap (Jaccard similarity).
+                // Exclude generic category words (e.g., "wildfires", "earthquake")
+                // that create false overlap between geographically unrelated situations.
+                let generic = &super::scoring::GENERIC_TITLE_WORDS;
+                let words_a: HashSet<String> = parent_title.to_lowercase()
+                    .split_whitespace().filter(|w| w.len() > 2)
+                    .filter(|w| !generic.contains(w))
+                    .map(|w| w.to_string()).collect();
+                let words_b: HashSet<String> = child_title.to_lowercase()
+                    .split_whitespace().filter(|w| w.len() > 2)
+                    .filter(|w| !generic.contains(w))
+                    .map(|w| w.to_string()).collect();
+                let title_overlap = if words_a.is_empty() || words_b.is_empty() {
+                    0.0
+                } else {
+                    let inter = words_a.intersection(&words_b).count();
+                    let union = words_a.union(&words_b).count();
+                    if union == 0 { 0.0 } else { inter as f64 / union as f64 }
+                };
+
+                // Orphan if: no meaningful title overlap AND no shared entities.
+                // Generic words like "Wildfires" are excluded so
+                // "Central Africa Wildfires" won't keep "Thailand Wildfires" as child.
+                if shared_entities == 0 && title_overlap < 0.15 {
+                    if let Some(c) = self.clusters.get_mut(&child_id) {
+                        debug!(
+                            child_id = %child_id,
+                            parent_id = %parent_id,
+                            child_title = %child_title,
+                            parent_title = %parent_title,
+                            "Orphaning child: no topical connection to parent"
+                        );
+                        c.parent_id = None;
+                        topical_orphaned += 1;
+                        // Add merge rejection to prevent re-merge
+                        let key = if parent_id < child_id { (parent_id, child_id) } else { (child_id, parent_id) };
+                        self.merge_rejections.insert(key, self.now());
+                    }
+                }
+            }
+        }
+        if topical_orphaned > 0 {
+            info!(topical_orphaned, "Sweep: orphaned children with no topical connection");
         }
 
         // --- Pass 4: Coherence check (when embeddings available) ---

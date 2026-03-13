@@ -1,25 +1,24 @@
 [package]
-name = "sr-pipeline"
+name = "sr-replay"
 edition.workspace = true
 version.workspace = true
 
+[[bin]]
+name = "sr-replay"
+path = "src/main.rs"
+
 [dependencies]
+sr-pipeline = { path = "../pipeline" }
 sr-sources = { path = "../sources" }
-sr-types = { path = "../types" }
 sr-config = { path = "../config" }
+sr-types = { path = "../types" }
 sr-intel = { path = "../intel" }
-sr-embeddings = { path = "../embeddings" }
 tokio.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 tracing.workspace = true
-uuid.workspace = true
-reqwest.workspace = true
-sqlx.workspace = true
-pgvector.workspace = true
-ts-rs.workspace = true
+tracing-subscriber.workspace = true
 anyhow.workspace = true
-petgraph.workspace = true
-unicode-normalization.workspace = true
-regex-lite = "0.1"
+sqlx.workspace = true
+clap.workspace = true

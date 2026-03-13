@@ -10,8 +10,11 @@ use crate::types::Incident;
 use crate::window::CorrelationWindow;
 
 /// Rule 1: Infrastructure Attack
-/// Triggers on shodan_banner + bgp_anomaly + internet_outage in the same region within 5 min.
+/// Triggers on shodan_banner + bgp_anomaly + internet_outage in the **same country** within 10 min.
 /// Detects potential coordinated attacks on infrastructure (ICS exposure + BGP disruption + outage).
+///
+/// Country-level correlation prevents false positives from Shodan's continuous stream
+/// of banners across a mega-region being correlated with unrelated BGP/outage events.
 pub struct InfraAttackRule;
 
 impl CorrelationRule for InfraAttackRule {
@@ -29,29 +32,31 @@ impl CorrelationRule for InfraAttackRule {
         window: &CorrelationWindow,
         active: &[Incident],
     ) -> Option<Incident> {
-        let region = trigger.region_code.as_deref()?;
-        let within = Duration::from_secs(300); // 5 min
+        // Extract country code — required for country-level correlation
+        let country = window.event_country(trigger)?;
 
-        // Check for existing active incident of this type in this region
+        // Cooldown: no duplicate for same country within active incidents
         if active.iter().any(|i| {
-            i.rule_id == "infra_attack" && i.region_code.as_deref() == Some(region)
+            i.rule_id == "infra_attack"
+                && i.tags.iter().any(|t| t.starts_with("country:") && &t[8..] == country)
         }) {
             return None;
         }
 
-        // Need all three types in the same region
-        let mut shodan = window.by_type_and_region(EventType::ShodanBanner, region, within);
-        let mut bgp = window.by_type_and_region(EventType::BgpAnomaly, region, within);
-        let mut outage = window.by_type_and_region(EventType::InternetOutage, region, within);
+        let within = Duration::from_secs(300); // 5 min — tight window for genuine attacks
 
-        // Require meaningful volume — single events of each type is routine
-        // co-occurrence, not an attack. Need at least 2 Shodan exposures,
-        // 3 BGP anomalies, and 2 outage events to reduce false positives.
-        if shodan.len() < 2 || bgp.len() < 3 || outage.len() < 2 {
+        // Need all three types in the same country
+        let mut shodan = window.by_type_and_country(EventType::ShodanBanner, country, within);
+        let mut bgp = window.by_type_and_country(EventType::BgpAnomaly, country, within);
+        let mut outage = window.by_type_and_country(EventType::InternetOutage, country, within);
+
+        // Shodan streams hundreds of banners/hour, BGP churn is 400+/hour for
+        // countries like Iran/Russia. A real infra attack needs extreme co-occurrence:
+        // 20+ Shodan exposures, 50+ BGP anomalies, and 5+ outage reports in 5 min.
+        if shodan.len() < 20 || bgp.len() < 50 || outage.len() < 5 {
             return None;
         }
 
-        // Sort each evidence pool by severity descending (highest first)
         sort_by_severity(&mut shodan);
         sort_by_severity(&mut bgp);
         sort_by_severity(&mut outage);
@@ -59,29 +64,30 @@ impl CorrelationRule for InfraAttackRule {
         let now = Utc::now();
         let mut evidence = vec![evidence_from(trigger, EvidenceRole::Trigger)];
 
-        // Add corroboration from each type (highest severity first)
-        if let Some(s) = shodan.first()
-            && (s.event_type != trigger.event_type || s.entity_id != trigger.entity_id)
-        {
-            evidence.push(evidence_from(s, EvidenceRole::Corroboration));
+        for s in shodan.iter().take(2) {
+            if s.event_type != trigger.event_type || s.entity_id != trigger.entity_id {
+                evidence.push(evidence_from(s, EvidenceRole::Corroboration));
+            }
         }
-        if let Some(b) = bgp.first()
-            && (b.event_type != trigger.event_type || b.entity_id != trigger.entity_id)
-        {
-            evidence.push(evidence_from(b, EvidenceRole::Corroboration));
+        for b in bgp.iter().take(2) {
+            if b.event_type != trigger.event_type || b.entity_id != trigger.entity_id {
+                evidence.push(evidence_from(b, EvidenceRole::Corroboration));
+            }
         }
-        if let Some(o) = outage.first()
-            && (o.event_type != trigger.event_type || o.entity_id != trigger.entity_id)
-        {
-            evidence.push(evidence_from(o, EvidenceRole::Corroboration));
+        for o in outage.iter().take(2) {
+            if o.event_type != trigger.event_type || o.entity_id != trigger.entity_id {
+                evidence.push(evidence_from(o, EvidenceRole::Corroboration));
+            }
         }
+
+        let region = trigger.region_code.clone().unwrap_or_default();
 
         Some(Incident {
             id: Uuid::new_v4(),
             rule_id: "infra_attack".into(),
-            title: format!("Infrastructure attack detected in {region}"),
+            title: format!("Infrastructure attack detected in {country}"),
             description: format!(
-                "ICS/SCADA exposure (Shodan), BGP disruption, and internet outage detected in region {region} within 5 minutes. \
+                "ICS/SCADA exposure (Shodan), BGP disruption, and internet outage detected in {country} within 10 minutes. \
                  {} exposed services, {} BGP anomalies, {} outage events.",
                 shodan.len(),
                 bgp.len(),
@@ -91,10 +97,15 @@ impl CorrelationRule for InfraAttackRule {
             confidence: 0.75,
             first_seen: now,
             last_updated: now,
-            region_code: Some(region.to_string()),
+            region_code: Some(region),
             latitude: trigger.latitude,
             longitude: trigger.longitude,
-            tags: vec!["infrastructure".into(), "cyber".into(), "multi-source".into()],
+            tags: vec![
+                "infrastructure".into(),
+                "cyber".into(),
+                "multi-source".into(),
+                format!("country:{country}"),
+            ],
             evidence,
             parent_id: None,
             related_ids: Vec::new(),

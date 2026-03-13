@@ -15,7 +15,7 @@ use sr_embeddings::EmbeddingCache;
 use tracing::info;
 
 use super::scoring::regions_overlap;
-use super::{SituationCluster, SituationGraph};
+use super::{median_centroid, SituationCluster, SituationGraph};
 
 /// K-means with k=2 for splitting incoherent clusters.
 ///
@@ -246,7 +246,7 @@ impl SituationGraph {
                 // embedding state. This handles duplicate clusters from restart
                 // and related sub-topics.
                 let both_regions_empty = a.region_codes.is_empty() && b.region_codes.is_empty();
-                let title_identity_merge = cluster_titles_similar >= 0.60
+                let title_identity_merge = cluster_titles_similar >= self.config.merge.title_identity_threshold
                     && (shared_region || both_regions_empty)
                     && !cross_region;
 
@@ -254,7 +254,7 @@ impl SituationGraph {
                 // titles are moderately similar in the same region
                 if !title_identity_merge
                     && a.entities.is_empty() && b.entities.is_empty()
-                    && semantically_similar < 0.75
+                    && semantically_similar < self.config.merge.entity_empty_semantic_threshold as f32
                     && cluster_titles_similar < 0.40
                 {
                     continue;
@@ -265,7 +265,7 @@ impl SituationGraph {
                 let b_signals = b.entities.len() + b.topics.len();
                 if !title_identity_merge
                     && a_signals <= 2 && b_signals <= 2
-                    && semantically_similar < 0.80
+                    && semantically_similar < self.config.merge.low_content_semantic_threshold as f32
                     && !(cluster_titles_similar >= 0.40 && (shared_region || both_regions_empty))
                 {
                     continue;
@@ -284,8 +284,11 @@ impl SituationGraph {
                 } else {
                     &b.source_types
                 };
+                let shared_topics = a.topics.intersection(&b.topics).count();
                 let regional_absorb = !cross_region && (shared_region || both_regions_empty)
-                    && smaller_events <= 20 && larger_events_count >= 50
+                    && smaller_events <= self.config.merge.regional_absorb_max_smaller
+                    && larger_events_count >= self.config.merge.regional_absorb_min_larger
+                    && (shared_topics >= 1 || shared_entities >= 1)
                     && smaller_source_types.iter().all(|s| matches!(s,
                         SourceType::RssNews | SourceType::Gdelt | SourceType::GdeltGeo
                         | SourceType::Geoconfirmed | SourceType::Telegram));
@@ -294,17 +297,15 @@ impl SituationGraph {
                 } else if regional_absorb {
                     true
                 } else if sim_f64 < 0.01 {
-                    // Fallback: when centroids are missing, use entity+region+title heuristic
+                    // Fallback: when centroids are missing, use entity+region+title heuristic.
+                    // Require stronger evidence to prevent spurious merges.
                     let effective_region = shared_region || both_regions_empty;
+                    let heuristic_title = self.config.merge.heuristic_title_threshold;
                     (shared_entities >= 2 && effective_region)
-                        || (cluster_titles_similar >= 0.40 && effective_region && shared_entities >= 1)
-                        // Absorb small orphan into large cluster with shared entity+region
-                        || (smaller_events <= 20 && larger_events_count >= 20
-                            && shared_entities >= 1 && effective_region
-                            && cluster_titles_similar >= 0.25)
-                        // Same-region clusters with moderate title overlap (catches "Sudan Civil War X" variants)
-                        || (cluster_titles_similar >= 0.40 && effective_region && !cross_region
-                            && (a_signals + b_signals) >= 2)
+                        || (cluster_titles_similar >= heuristic_title && effective_region && shared_entities >= 1)
+                        // Same-region clusters with strong title overlap
+                        || (cluster_titles_similar >= heuristic_title && effective_region && !cross_region
+                            && shared_topics >= 1)
                 } else {
                     let mc = &self.config.merge;
                     let mut score = sim_f64;
@@ -433,22 +434,19 @@ impl SituationGraph {
             applied_merges.push((parent_id, child_id, skip_audit));
 
             // Collect child data to merge into parent
-            let (child_entities, child_topics, child_event_ids, child_source_types,
-                 child_region_codes, child_event_titles, child_severity,
-                 child_first_seen, child_last_updated, child_centroid, child_event_count,
+            let (child_event_ids, child_source_types,
+                 child_event_titles, child_severity,
+                 child_first_seen, child_last_updated, child_coord_buffer, child_event_count,
                  child_signal_count) = {
                 let child = self.clusters.get(&child_id).unwrap();
                 (
-                    child.entities.clone(),
-                    child.topics.clone(),
                     child.event_ids.clone(),
                     child.source_types.clone(),
-                    child.region_codes.clone(),
                     child.event_titles.clone(),
                     child.severity,
                     child.first_seen,
                     child.last_updated,
-                    child.centroid,
+                    child.coord_buffer.clone(),
                     child.event_count,
                     child.signal_event_count,
                 )
@@ -457,28 +455,12 @@ impl SituationGraph {
             let parent_child_count = self.clusters.values().filter(|c| c.parent_id == Some(parent_id)).count();
 
             if let Some(parent) = self.clusters.get_mut(&parent_id) {
-                let entities_before = parent.entities.len();
                 let source_types_before = parent.source_types.len();
-                for e in &child_entities {
-                    if parent.entities.len() >= self.config.cluster_caps.max_entities { break; }
-                    if parent.entities.insert(e.clone()) {
-                        self.entity_index
-                            .entry(e.clone())
-                            .or_default()
-                            .insert(parent_id);
-                    }
-                }
-                let shared_child_topics: Vec<String> = child_topics
-                    .iter()
-                    .filter(|t| parent.topics.contains(*t))
-                    .cloned()
-                    .collect();
-                for t in &shared_child_topics {
-                    self.topic_index
-                        .entry(t.clone())
-                        .or_default()
-                        .insert(parent_id);
-                }
+                // Do NOT inherit child entities into parent — prevents entity
+                // snowball where the parent accumulates all child entities and
+                // matches against every new cluster. Children keep their own
+                // entities; the parent retains only its direct-observation entities.
+                // (Entity index still maps child entities to child_id, not parent_id.)
                 parent.event_ids.extend(child_event_ids);
                 let max_eids = self.config.cluster_caps.max_event_ids;
                 if parent.event_ids.len() > max_eids {
@@ -488,7 +470,9 @@ impl SituationGraph {
                 parent.event_count += child_event_count;
                 parent.signal_event_count += child_signal_count;
                 parent.source_types.extend(child_source_types);
-                parent.region_codes.extend(child_region_codes);
+                // Do NOT extend parent region_codes — prevents region snowball
+                // where the parent accumulates all child regions and matches
+                // every new cluster globally. Children keep their own regions.
                 for title in child_event_titles {
                     if parent.event_titles.len() < self.config.cluster_caps.max_event_titles {
                         parent.event_titles.push(title);
@@ -503,20 +487,17 @@ impl SituationGraph {
                 if child_last_updated > parent.last_updated {
                     parent.last_updated = child_last_updated;
                 }
-                if let Some((clat, clon)) = child_centroid {
-                    let cn = child_event_count as f64;
-                    parent.centroid = Some(match parent.centroid {
-                        Some((plat, plon)) => {
-                            let pn = (parent.event_count as f64) - cn;
-                            let total = pn + cn;
-                            ((plat * pn + clat * cn) / total, (plon * pn + clon * cn) / total)
-                        }
-                        None => (clat, clon),
-                    });
+                // Merge coordinate buffers and recompute median centroid
+                if !child_coord_buffer.is_empty() {
+                    parent.coord_buffer.extend(child_coord_buffer);
+                    // Keep only the most recent 30 coordinates
+                    if parent.coord_buffer.len() > 30 {
+                        parent.coord_buffer.drain(..parent.coord_buffer.len() - 30);
+                    }
+                    parent.centroid = Some(median_centroid(&parent.coord_buffer));
                 }
-                let entities_added = parent.entities.len().saturating_sub(entities_before);
                 let source_types_added = parent.source_types.len().saturating_sub(source_types_before);
-                if entities_added >= 3 || source_types_added >= 1 {
+                if source_types_added >= 1 {
                     parent.has_ai_title = false;
                     parent.title_signal_count_at_gen = 0;
                 }
@@ -597,9 +578,10 @@ impl SituationGraph {
 
     /// Split clusters that have grown too large and contain divergent entity subgroups.
     pub fn split_divergent(&mut self) {
+        let min_events = self.config.sweep.split_divergent_min_events;
         let large_ids: Vec<Uuid> = self.clusters
             .iter()
-            .filter(|(_, c)| c.event_count >= 30 && c.parent_id.is_none())
+            .filter(|(_, c)| c.event_count >= min_events && c.parent_id.is_none())
             .map(|(&id, _)| id)
             .collect();
 
@@ -612,7 +594,7 @@ impl SituationGraph {
             };
 
             let entities: Vec<String> = cluster.entities.iter().cloned().collect();
-            if entities.len() < 4 {
+            if entities.len() < self.config.sweep.split_divergent_min_entities {
                 continue;
             }
 
@@ -656,7 +638,7 @@ impl SituationGraph {
                 let total_entities: usize = subgroups.iter().map(|g| g.len()).sum();
                 let largest = subgroups.iter().map(|g| g.len()).max().unwrap_or(0);
                 let overlap_ratio = largest as f64 / total_entities as f64;
-                if overlap_ratio < 0.7 {
+                if overlap_ratio < self.config.sweep.split_divergent_max_overlap {
                     splits.push((cid, subgroups));
                 }
             }
@@ -705,9 +687,10 @@ impl SituationGraph {
                     .cloned()
                     .collect();
 
+                let child_title = SituationGraph::generate_title(&entity_group, &child_topics, &parent.region_codes);
                 let child = SituationCluster {
                     id: child_id,
-                    title: String::new(),
+                    title: child_title,
                     entities: entity_group.clone(),
                     topics: child_topics.clone(),
                     event_ids: child_event_ids,
@@ -716,6 +699,7 @@ impl SituationGraph {
                     first_seen: parent.first_seen,
                     last_updated: parent.last_updated,
                     centroid: parent.centroid,
+                    coord_buffer: parent.coord_buffer.clone(),
                     event_count: child_event_count,
                     signal_event_count: 0,
                     source_types: parent.source_types.clone(),
@@ -741,6 +725,8 @@ impl SituationGraph {
                     phase_transitions: Vec::new(),
                     certainty: 0.0,
                     anomaly_score: 0.0,
+                    last_retro_sweep: None,
+                    total_events_ingested: child_event_count,
                 };
 
                 for e in &entity_group {
@@ -850,22 +836,63 @@ impl SituationGraph {
         let new_id = Uuid::new_v4();
         let split_event_count = split_event_ids.len();
 
+        let (parent_coord_buffer, parent_entities, parent_topics, parent_event_titles) = {
+            let cluster = self.clusters.get(&cluster_id)?;
+            (
+                cluster.coord_buffer.clone(),
+                cluster.entities.clone(),
+                cluster.topics.clone(),
+                cluster.event_titles.clone(),
+            )
+        };
+
+        // Populate child's entities/topics from split event ref_ids.
+        // Match entities and topics that appear in event titles associated with the split events.
+        let _split_ref_ids_set: HashSet<&str> = split_event_ids.iter()
+            .map(|(_, ref_id)| ref_id.as_str())
+            .collect();
+
+        // Use the same approach as split_divergent(): filter parent's entities/topics
+        // by co-occurrence with event titles. Since we don't have a direct mapping from
+        // event_ids to titles, we use a proportion-based allocation — take entities/topics
+        // that appear in the parent's event titles most associated with the split group.
+        let child_entities: HashSet<String> = parent_entities.iter()
+            .filter(|e| {
+                parent_event_titles.iter().any(|t| t.to_lowercase().contains(e.to_lowercase().as_str()))
+            })
+            .cloned()
+            .collect();
+
+        let child_topics: HashSet<String> = parent_topics.iter()
+            .filter(|t| {
+                parent_event_titles.iter().any(|title| title.to_lowercase().contains(t.as_str()))
+            })
+            .cloned()
+            .collect();
+
+        let child_event_titles: Vec<String> = parent_event_titles.iter()
+            .take(split_event_count.min(10))
+            .cloned()
+            .collect();
+
+        let split_title = SituationGraph::generate_title(&child_entities, &child_topics, &parent_region_codes);
         let new_cluster = SituationCluster {
             id: new_id,
-            title: String::new(),
-            entities: HashSet::new(),
-            topics: HashSet::new(),
+            title: split_title,
+            entities: child_entities,
+            topics: child_topics,
             event_ids: split_event_ids.clone(),
             region_codes: parent_region_codes,
             severity: parent_severity,
             first_seen: parent_first_seen,
             last_updated: parent_last_updated,
             centroid: parent_centroid,
+            coord_buffer: parent_coord_buffer,
             event_count: split_event_count,
             signal_event_count: 0,
             source_types: parent_source_types,
             parent_id: Some(cluster_id),
-            event_titles: Vec::new(),
+            event_titles: child_event_titles,
             has_ai_title: false,
             title_signal_count_at_gen: 0,
             last_title_gen: Utc::now(),
@@ -879,8 +906,19 @@ impl SituationGraph {
             phase_transitions: Vec::new(),
             certainty: 0.0,
             anomaly_score: 0.0,
+            last_retro_sweep: None,
+            total_events_ingested: split_event_count,
         };
 
+        // Update entity/topic indexes for the new child cluster
+        if let Some(ref cluster) = Some(&new_cluster) {
+            for e in &cluster.entities {
+                self.entity_index.entry(e.clone()).or_default().insert(new_id);
+            }
+            for t in &cluster.topics {
+                self.topic_index.entry(t.clone()).or_default().insert(new_id);
+            }
+        }
         self.clusters.insert(new_id, new_cluster);
 
         // Remove the split events from the original cluster

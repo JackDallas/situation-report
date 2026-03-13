@@ -41,6 +41,14 @@ pub enum PublishEvent {
     /// A fired alert (keyword/entity/anomaly match)
     #[serde(rename = "alert")]
     Alert(crate::alerts::FiredAlert),
+    /// Source health status change (healthy/degraded/error/rate_limited)
+    #[serde(rename = "source_health")]
+    SourceHealthChange {
+        source_id: String,
+        status: String,
+        consecutive_failures: u32,
+        last_error: Option<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

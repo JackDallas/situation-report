@@ -406,6 +406,17 @@ pub(crate) fn normalize_region(code: &str) -> &str {
         "SA" if code.len() == 2 => "south-asia", // distinguish from Saudi Arabia
         "NA" => "north-america",
         "LA" => "south-america",
+        // Common country codes → region normalization
+        "RU" | "UA" | "BY" | "MD" | "PL" | "RO" | "BG" | "HU" | "CZ" | "SK" => "eastern-europe",
+        "AS" | "JP" | "KR" | "CN" | "TW" | "MN" => "east-asia",
+        "DE" | "FR" | "GB" | "IT" | "ES" | "NL" | "BE" | "AT" | "CH" | "SE" | "NO" | "DK" | "FI" | "IE" | "PT" => "western-europe",
+        "US" | "CA" | "MX" => "north-america",
+        "BR" | "AR" | "CO" | "VE" | "CL" | "PE" | "EC" | "BO" | "UY" | "PY" => "south-america",
+        "IN" | "PK" | "BD" | "LK" | "NP" => "south-asia",
+        "TH" | "VN" | "PH" | "MM" | "KH" | "MY" | "SG" | "ID" => "southeast-asia",
+        "KZ" | "UZ" | "TM" | "KG" | "TJ" => "central-asia",
+        "AU" | "NZ" | "FJ" | "PG" => "oceania",
+        "IR" | "IQ" | "SY" | "JO" | "LB" | "IL" | "PS" | "YE" | "OM" | "AE" | "QA" | "BH" | "KW" | "TR" => "middle-east",
         // FIRMS underscore variants
         "east_asia" => "east-asia",
         "south_asia" => "south-asia",
@@ -453,10 +464,39 @@ pub(crate) fn is_conflict_topic(topic: &str) -> bool {
 /// These are genuinely global and should merge at relaxed cross-region thresholds.
 pub(crate) fn is_natural_disaster_topic(topic: &str) -> bool {
     let lower = topic.to_lowercase();
+    // Exact matches for short/ambiguous terms
+    if matches!(lower.as_str(), "fire" | "fires" | "blaze") {
+        return true;
+    }
     [
         "wildfire", "forest-fire", "bushfire", "drought", "flood", "cyclone",
         "hurricane", "typhoon", "tornado", "earthquake", "tsunami", "volcanic",
         "eruption", "thermal-anomaly", "fire-activity", "natural-disaster",
+    ]
+    .iter()
+    .any(|p| lower.contains(p))
+}
+
+/// Words that are generic category descriptors rather than specific situation identifiers.
+/// Used by topical orphaning to avoid false title overlap (e.g., "Central Africa Wildfires"
+/// keeping "Thailand Wildfires" as a child just because both contain "wildfires").
+pub(crate) const GENERIC_TITLE_WORDS: &[&str] = &[
+    "wildfires", "wildfire", "fires", "fire", "earthquake", "earthquakes",
+    "conflict", "crisis", "activity", "sequence", "swarm", "surge",
+    "operations", "military", "regional", "multi-region", "impact",
+    "flood", "floods", "flooding", "cyclone", "hurricane", "typhoon",
+    "tornado", "tsunami", "volcanic", "eruption", "drought",
+    "forest", "bushfire",
+];
+
+/// Returns true if the title text contains natural-disaster keywords.
+/// Used alongside topic-based detection to catch situations like "Nigeria Forest Fires".
+pub(crate) fn is_natural_disaster_title(title: &str) -> bool {
+    let lower = title.to_lowercase();
+    [
+        "wildfire", "wildfires", "forest fire", "bushfire", "earthquake",
+        "tsunami", "volcanic", "eruption", "cyclone", "hurricane",
+        "typhoon", "tornado", "flood",
     ]
     .iter()
     .any(|p| lower.contains(p))
@@ -467,6 +507,21 @@ pub(crate) fn is_conflict_source(st: SourceType) -> bool {
     matches!(
         st,
         SourceType::Acled | SourceType::Geoconfirmed | SourceType::Gdelt | SourceType::GdeltGeo
+    )
+}
+
+/// Cyber-indicating source types.
+pub(crate) fn is_cyber_source(st: SourceType) -> bool {
+    matches!(
+        st,
+        SourceType::Cloudflare
+            | SourceType::CloudflareBgp
+            | SourceType::Ioda
+            | SourceType::Bgp
+            | SourceType::Otx
+            | SourceType::Certstream
+            | SourceType::Ooni
+            | SourceType::Shodan
     )
 }
 
@@ -498,16 +553,30 @@ pub(crate) fn is_language_tag(tag: &str) -> bool {
     )
 }
 
-/// Effective source diversity: collapses all flight sources (airplaneslive,
-/// adsb-fi, adsb-lol, opensky) into a single "flight" category, since they
-/// all report the same aircraft data and shouldn't inflate diversity scores.
+/// Effective source diversity: collapses related sources into single categories
+/// so they don't inflate diversity scores:
+///   - Flight sources (airplaneslive, adsb-fi, adsb-lol, opensky) → 1 "flight"
+///   - News sources (gdelt, gdelt-geo, rss-news) → 1 "news"
+///   - Disaster catalogs (gdacs, reliefweb, copernicus) → 1 "disaster"
 pub(crate) fn effective_source_diversity(source_types: &HashSet<SourceType>) -> usize {
     let mut count = 0;
     let mut has_flight = false;
+    let mut has_news = false;
+    let mut has_disaster_catalog = false;
     for st in source_types {
         if st.is_flight_source() {
             if !has_flight {
                 has_flight = true;
+                count += 1;
+            }
+        } else if matches!(st, SourceType::Gdelt | SourceType::GdeltGeo | SourceType::RssNews) {
+            if !has_news {
+                has_news = true;
+                count += 1;
+            }
+        } else if matches!(st, SourceType::Gdacs | SourceType::Reliefweb | SourceType::Copernicus) {
+            if !has_disaster_catalog {
+                has_disaster_catalog = true;
                 count += 1;
             }
         } else {
