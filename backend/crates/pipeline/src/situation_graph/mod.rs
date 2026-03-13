@@ -128,6 +128,14 @@ pub struct SituationCluster {
     /// Total events ever ingested (survives shedding, unlike event_ids.len()).
     #[serde(default)]
     pub total_events_ingested: usize,
+    /// Count of events directly ingested into this cluster (not inherited from merges).
+    /// Used for accurate severity computation when this cluster is reparented as a child.
+    #[serde(skip)]
+    pub direct_event_count: usize,
+    /// Source types from directly ingested events only (not inherited from merges).
+    /// Used for accurate severity computation when this cluster is reparented as a child.
+    #[serde(skip)]
+    pub direct_source_types: HashSet<SourceType>,
 }
 
 /// Parameters for a retroactive sweep DB query (returned by `retro_sweep_candidates`).
@@ -775,12 +783,14 @@ impl SituationGraph {
         }
         cluster.event_count += 1;
         cluster.total_events_ingested += 1;
+        cluster.direct_event_count += 1;
         if is_high_signal_event(event.event_type) {
             cluster.signal_event_count += 1;
         }
 
         // Source type tracking
         cluster.source_types.insert(event.source_type);
+        cluster.direct_source_types.insert(event.source_type);
 
         // Update centroid via coordinate buffer (median-based, outlier-resistant)
         // Prefer geo-reliable event types; fall back to any coords if cluster has none
@@ -1047,6 +1057,7 @@ impl SituationGraph {
             coord_buffer,
             event_count: 1,
             signal_event_count: if is_high_signal_event(event.event_type) { 1 } else { 0 },
+            direct_source_types: source_types.clone(),
             source_types,
             parent_id: None,
             event_titles,
@@ -1065,6 +1076,7 @@ impl SituationGraph {
             anomaly_score,
             last_retro_sweep: None,
             total_events_ingested: 1,
+            direct_event_count: 1,
         };
 
         // Update indices
@@ -2527,6 +2539,8 @@ mod tests {
                 anomaly_score: 0.0,
                 last_retro_sweep: None,
                 total_events_ingested: 0,
+                direct_event_count: 0,
+                direct_source_types: HashSet::new(),
             }
         };
 
@@ -2584,6 +2598,8 @@ mod tests {
             anomaly_score: 0.0,
             last_retro_sweep: None,
             total_events_ingested: 0,
+            direct_event_count: 0,
+            direct_source_types: HashSet::new(),
         }
     }
 
@@ -2944,6 +2960,8 @@ mod tests {
             anomaly_score: 0.0,
             last_retro_sweep: None,
             total_events_ingested: 0,
+            direct_event_count: 0,
+            direct_source_types: HashSet::new(),
         });
 
         assert_eq!(g.clusters.len(), 1);
@@ -3257,6 +3275,8 @@ mod tests {
             anomaly_score: 0.0,
             last_retro_sweep: None,
             total_events_ingested: 0,
+            direct_event_count: 0,
+            direct_source_types: HashSet::new(),
         });
 
         let cid_b = Uuid::new_v4();
@@ -3292,6 +3312,8 @@ mod tests {
             anomaly_score: 0.0,
             last_retro_sweep: None,
             total_events_ingested: 0,
+            direct_event_count: 0,
+            direct_source_types: HashSet::new(),
         });
 
         for t in ["economy", "trade", "security"] {
@@ -3346,6 +3368,8 @@ mod tests {
             anomaly_score: 0.0,
             last_retro_sweep: None,
             total_events_ingested: 0,
+            direct_event_count: 0,
+            direct_source_types: HashSet::new(),
         });
 
         let cid_b = Uuid::new_v4();
@@ -3381,6 +3405,8 @@ mod tests {
             anomaly_score: 0.0,
             last_retro_sweep: None,
             total_events_ingested: 0,
+            direct_event_count: 0,
+            direct_source_types: HashSet::new(),
         });
 
         g.topic_index.entry("topic-x".into()).or_default().insert(cid_a);
@@ -3434,6 +3460,8 @@ mod tests {
             anomaly_score: 0.0,
             last_retro_sweep: None,
             total_events_ingested: 0,
+            direct_event_count: 0,
+            direct_source_types: HashSet::new(),
         });
 
         let cid_b = Uuid::new_v4();
@@ -3469,6 +3497,8 @@ mod tests {
             anomaly_score: 0.0,
             last_retro_sweep: None,
             total_events_ingested: 0,
+            direct_event_count: 0,
+            direct_source_types: HashSet::new(),
         });
 
         g.entity_index.entry("entity-a".into()).or_default().insert(cid_a);
@@ -3526,6 +3556,8 @@ mod tests {
             anomaly_score: 0.0,
             last_retro_sweep: None,
             total_events_ingested: 0,
+            direct_event_count: 0,
+            direct_source_types: HashSet::new(),
         });
         g.entity_index.entry("iran".into()).or_default().insert(cid);
         g.topic_index.entry("thermal-anomaly".into()).or_default().insert(cid);
@@ -3689,6 +3721,8 @@ mod tests {
             anomaly_score: 0.0,
             last_retro_sweep: None,
             total_events_ingested: 0,
+            direct_event_count: 0,
+            direct_source_types: HashSet::new(),
         };
 
         g.clusters.insert(cluster_id, cluster);
@@ -3764,6 +3798,8 @@ mod tests {
             anomaly_score: 0.0,
             last_retro_sweep: None,
             total_events_ingested: 0,
+            direct_event_count: 0,
+            direct_source_types: HashSet::new(),
         };
 
         g.clusters.insert(cluster_id, cluster);
@@ -3823,6 +3859,8 @@ mod tests {
             anomaly_score: 0.0,
             last_retro_sweep: None,
             total_events_ingested: 0,
+            direct_event_count: 0,
+            direct_source_types: HashSet::new(),
         };
 
         g.clusters.insert(cluster_id, cluster);

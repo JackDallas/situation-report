@@ -730,6 +730,9 @@ impl SituationGraph {
                     anomaly_score: 0.0,
                     last_retro_sweep: None,
                     total_events_ingested: child_event_count,
+                    // Split children don't have direct ingestion history — start fresh
+                    direct_event_count: 0,
+                    direct_source_types: HashSet::new(),
                 };
 
                 for e in &entity_group {
@@ -911,6 +914,9 @@ impl SituationGraph {
             anomaly_score: 0.0,
             last_retro_sweep: None,
             total_events_ingested: split_event_count,
+            // Coherence-split children don't have direct ingestion history — start fresh
+            direct_event_count: 0,
+            direct_source_types: HashSet::new(),
         };
 
         // Update entity/topic indexes for the new child cluster

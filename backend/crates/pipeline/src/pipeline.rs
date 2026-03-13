@@ -470,6 +470,10 @@ fn cluster_from_db_row(row: &SituationDbRow) -> Option<SituationCluster> {
         total_events_ingested: props["total_events_ingested"]
             .as_u64()
             .unwrap_or(row.event_count_5m.max(0) as u64) as usize,
+        // Direct stats are not persisted — they default to zero.
+        // Clusters loaded from DB start fresh; direct stats accumulate as new events arrive.
+        direct_event_count: 0,
+        direct_source_types: HashSet::new(),
     })
 }
 
