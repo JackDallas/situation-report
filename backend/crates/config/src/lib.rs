@@ -27,6 +27,8 @@ pub struct PipelineConfig {
     pub certainty: CertaintyConfig,
     #[serde(default)]
     pub severity: SeverityConfig,
+    #[serde(default)]
+    pub alerts: AlertConfig,
 }
 
 // ---------------------------------------------------------------------------
@@ -872,6 +874,26 @@ impl Default for CertaintyConfig {
 }
 
 // ---------------------------------------------------------------------------
+// Alerts
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlertConfig {
+    /// ntfy.sh topic URL (e.g. "https://ntfy.sh/my-situationroom-alerts").
+    /// If empty/unset, alerting is disabled.
+    #[serde(default)]
+    pub ntfy_topic: String,
+}
+
+impl Default for AlertConfig {
+    fn default() -> Self {
+        Self {
+            ntfy_topic: String::new(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // PipelineConfig impl
 // ---------------------------------------------------------------------------
 
@@ -893,6 +915,7 @@ impl Default for PipelineConfig {
             sweep: SweepConfig::default(),
             certainty: CertaintyConfig::default(),
             severity: SeverityConfig::default(),
+            alerts: AlertConfig::default(),
         }
     }
 }
@@ -998,6 +1021,11 @@ impl PipelineConfig {
         env_override!(config.severity.high_min_events, "PIPELINE_SEVERITY_HIGH_MIN_EVENTS", usize);
         env_override!(config.severity.medium_min_sources, "PIPELINE_SEVERITY_MEDIUM_MIN_SOURCES", usize);
         env_override!(config.severity.medium_min_events, "PIPELINE_SEVERITY_MEDIUM_MIN_EVENTS", usize);
+
+        // Alerts
+        if let Ok(val) = std::env::var("NTFY_TOPIC") {
+            config.alerts.ntfy_topic = val;
+        }
 
         config
     }

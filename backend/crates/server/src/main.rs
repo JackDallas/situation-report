@@ -171,7 +171,8 @@ async fn main() -> anyhow::Result<()> {
     let registry = Arc::new(registry);
 
     // Start all registered sources
-    registry.start_all(pool.clone(), event_tx.clone(), health_tx);
+    let ntfy_topic = std::env::var("NTFY_TOPIC").unwrap_or_default();
+    registry.start_all(pool.clone(), event_tx.clone(), health_tx, ntfy_topic);
 
     // Intelligence layer — Claude API client + budget manager
     let claude_client = match ClaudeClient::from_env() {
