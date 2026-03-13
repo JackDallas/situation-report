@@ -1297,7 +1297,7 @@ mod tests {
         );
         // Image with empty-ish text
         assert_eq!(
-            should_filter("😂😂😂", &msg, false, true),
+            should_filter("pic", &msg, false, true),
             Some(FilterReason::ImageMeme),
         );
     }
