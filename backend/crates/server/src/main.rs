@@ -502,6 +502,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/situations/{id}", get(routes::situations::get_situation))
         .route("/api/situations/{id}/narratives", get(routes::situations::get_situation_narratives))
         .route("/api/situations/{id}/events", get(routes::situations::get_situation_events))
+        .route("/api/situations/{id}/timeline", get(routes::situations::get_situation_timeline))
         .route("/api/situations/{id}/cameras", get(routes::situations::get_situation_cameras))
         // Correlated incidents
         .route("/api/incidents", get(routes::incidents::list_incidents))

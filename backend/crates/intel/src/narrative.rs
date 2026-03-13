@@ -57,6 +57,9 @@ pub struct NarrativeContext {
     pub similar_historical: Option<String>,
     /// Impact propagation summary from the entity graph.
     pub impact_summary: Option<String>,
+    /// Cumulative summary from previous narrative cycles (situation memory).
+    /// Provides long-term continuity across narrative regenerations.
+    pub previous_summary: Option<String>,
 }
 
 /// Brief event description for narrative context.
@@ -228,6 +231,142 @@ pub async fn generate_narrative_tiered(
     Ok(None)
 }
 
+/// Determine if a cumulative summary should be regenerated.
+/// Triggers every 50 events or 6 hours, whichever comes first.
+pub fn should_regenerate_summary(
+    event_count: usize,
+    event_count_at_last_summary: usize,
+    last_summary_generated: Option<DateTime<Utc>>,
+) -> bool {
+    // Need at least some events before generating first summary
+    if event_count < 10 {
+        return false;
+    }
+
+    // Never generated — time for the first one
+    if last_summary_generated.is_none() {
+        return true;
+    }
+
+    // 50+ new events since last summary
+    if event_count.saturating_sub(event_count_at_last_summary) >= 50 {
+        return true;
+    }
+
+    // 6 hours elapsed
+    if let Some(last) = last_summary_generated {
+        let elapsed = Utc::now() - last;
+        if elapsed >= chrono::Duration::hours(6) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// System prompt for cumulative summary generation (cheap model).
+const SUMMARY_SYSTEM: &str = r#"You are an intelligence analyst creating a concise cumulative summary of a long-running situation. This summary will be used as memory context for future narrative generations.
+
+Produce a JSON object with exactly these fields:
+- "summary": A 3-5 sentence summary of the situation's full history and current state. Focus on key developments, turning points, and the current trajectory.
+- "key_entities": An array of the most important entity names (people, organizations, locations) involved.
+- "key_dates": An array of objects with "date" (ISO 8601) and "event" (brief description) for the most significant milestones.
+
+Rules:
+- Be factual and concise — this is reference material, not a narrative
+- Prioritize the most significant developments
+- Cap key_entities at 10 items
+- Cap key_dates at 8 items
+- Output valid JSON only, no markdown fencing"#;
+
+/// Generate a cumulative summary for a situation using the cheap model tier.
+/// Returns (summary_text, key_entities_json, key_dates_json) on success.
+pub async fn generate_summary(
+    gemini: Option<&GeminiClient>,
+    ollama: Option<&OllamaClient>,
+    budget: &Arc<BudgetManager>,
+    narrative_text: &str,
+    previous_summary: Option<&str>,
+    situation_title: &str,
+    event_count: usize,
+    entities: &[String],
+) -> Result<Option<(String, serde_json::Value, serde_json::Value)>> {
+    let mut prompt = format!(
+        "Situation: {situation_title}\nTotal events: {event_count}\nEntities: {}\n\n",
+        entities.join(", ")
+    );
+
+    if let Some(prev) = previous_summary {
+        prompt.push_str("## Previous Summary\n");
+        prompt.push_str(prev);
+        prompt.push_str("\n\n");
+    }
+
+    prompt.push_str("## Latest Narrative\n");
+    prompt.push_str(narrative_text);
+    prompt.push_str("\n\nGenerate the updated cumulative summary JSON.");
+
+    // Try Ollama first (cheap), then Gemini Flash-Lite
+    if let Some(oc) = ollama {
+        match oc.generate_narrative(SUMMARY_SYSTEM, &prompt).await {
+            Ok((text, _tokens)) => {
+                return parse_summary_response(&text);
+            }
+            Err(e) => {
+                tracing::debug!("Ollama summary generation failed: {e}");
+            }
+        }
+    }
+
+    if let Some(gc) = gemini {
+        if budget.can_afford_gemini().await {
+            match gc.generate_text(GeminiModel::FlashLite, SUMMARY_SYSTEM, &prompt, 800).await {
+                Ok(response) => {
+                    budget.record_gemini(GeminiModel::FlashLite, &response);
+                    return parse_summary_response(&response.text);
+                }
+                Err(e) => {
+                    tracing::debug!("Gemini summary generation failed: {e}");
+                }
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+/// Parse the LLM's JSON response into (summary_text, key_entities, key_dates).
+fn parse_summary_response(text: &str) -> Result<Option<(String, serde_json::Value, serde_json::Value)>> {
+    // Strip markdown code fences if present
+    let cleaned = text
+        .trim()
+        .strip_prefix("```json")
+        .or_else(|| text.trim().strip_prefix("```"))
+        .unwrap_or(text.trim())
+        .strip_suffix("```")
+        .unwrap_or(text.trim())
+        .trim();
+
+    let parsed: serde_json::Value = match serde_json::from_str(cleaned) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+
+    let summary = parsed["summary"].as_str().unwrap_or("").to_string();
+    if summary.is_empty() {
+        return Ok(None);
+    }
+
+    let key_entities = parsed.get("key_entities")
+        .cloned()
+        .unwrap_or(serde_json::json!([]));
+    let key_dates = parsed.get("key_dates")
+        .cloned()
+        .unwrap_or(serde_json::json!([]));
+
+    Ok(Some((summary, key_entities, key_dates)))
+}
+
 /// Determine if a narrative should be regenerated based on significance.
 pub fn should_regenerate(
     current_version: i32,
@@ -324,6 +463,14 @@ fn build_narrative_prompt(ctx: &NarrativeContext) -> String {
         prompt.push_str("\n");
     }
 
+    if let Some(ref summary) = ctx.previous_summary {
+        prompt.push_str("\n## Cumulative Summary (situation memory)\n");
+        prompt.push_str("This summary captures the full history of this long-running situation. ");
+        prompt.push_str("Use it to maintain continuity and avoid repeating old information.\n");
+        prompt.push_str(summary);
+        prompt.push_str("\n");
+    }
+
     if let Some(ref prev) = ctx.previous_narrative {
         prompt.push_str(&format!(
             "\n## Previous Narrative (version {})\n{prev}\n\nUpdate the narrative to reflect new developments. Maintain continuity.\n",
@@ -387,6 +534,7 @@ mod tests {
             hours_since_last_event: 0.5,
             similar_historical: Some("2014 Crimea annexation pattern".to_string()),
             impact_summary: Some("Directly affects: Northern Division (organization). Secondary impact: Base Omega (facility).".to_string()),
+            previous_summary: None,
         };
         let prompt = build_narrative_prompt(&ctx);
         assert!(prompt.contains("Test Situation"));
@@ -420,6 +568,7 @@ mod tests {
             hours_since_last_event: 0.0,
             similar_historical: None,
             impact_summary: None,
+            previous_summary: None,
         }
     }
 

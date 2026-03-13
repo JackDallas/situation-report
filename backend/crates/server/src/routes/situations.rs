@@ -169,6 +169,27 @@ pub struct SituationEventsParams {
     pub limit: Option<i64>,
 }
 
+/// GET /api/situations/:id/timeline — hourly activity timeline for a situation
+pub async fn get_situation_timeline(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> Json<serde_json::Value> {
+    match sr_sources::db::queries::query_situation_timeline(&state.db, id).await {
+        Ok(buckets) => {
+            let data: Vec<serde_json::Value> = buckets.into_iter().map(|b| {
+                serde_json::json!({
+                    "bucket": b.bucket,
+                    "event_count": b.event_count,
+                    "source_count": b.source_count,
+                    "max_severity": b.max_severity,
+                })
+            }).collect();
+            Json(serde_json::json!(data))
+        }
+        Err(e) => Json(serde_json::json!({"error": e.to_string()})),
+    }
+}
+
 /// GET /api/situations/:id/cameras — cameras near a situation
 pub async fn get_situation_cameras(
     State(state): State<AppState>,

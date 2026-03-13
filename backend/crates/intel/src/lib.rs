@@ -26,7 +26,7 @@ pub use search::{
 };
 pub use titles::generate_situation_title;
 pub use types::{AnalysisReport, BudgetStatus, EnrichedArticleV2, ExtractedRelationship, ExtractedStateChange};
-pub use narrative::{NarrativeContext, EventBrief, SituationNarrative, generate_narrative, generate_narrative_tiered, should_regenerate};
+pub use narrative::{NarrativeContext, EventBrief, SituationNarrative, generate_narrative, generate_narrative_tiered, should_regenerate, should_regenerate_summary, generate_summary};
 
 use std::sync::{Arc, RwLock};
 

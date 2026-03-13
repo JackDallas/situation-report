@@ -276,6 +276,14 @@ struct NarrativeResult {
     narrative: sr_intel::SituationNarrative,
 }
 
+/// Result from an async summary generation call.
+struct SummaryResult {
+    situation_id: uuid::Uuid,
+    summary_text: String,
+    key_entities: serde_json::Value,
+    key_dates: serde_json::Value,
+}
+
 /// Result from an async Qwen merge audit — contains merges that should be undone.
 struct MergeAuditResult {
     parent_id: uuid::Uuid,
@@ -953,6 +961,13 @@ async fn run_pipeline(
     // Narrative generation infrastructure
     let (narrative_tx, mut narrative_rx) = mpsc::channel::<NarrativeResult>(16);
 
+    // Summary generation infrastructure (situation memory)
+    let (summary_tx, mut summary_rx) = mpsc::channel::<SummaryResult>(16);
+
+    // Timeline materialization interval (every 5 minutes)
+    let mut timeline_interval = tokio::time::interval(Duration::from_secs(300));
+    timeline_interval.tick().await; // consume first tick
+
     // Merge audit infrastructure — Qwen post-hoc validation of situation merges
     let (merge_audit_tx, mut merge_audit_rx) = mpsc::channel::<MergeAuditResult>(32);
 
@@ -1128,10 +1143,48 @@ async fn run_pipeline(
                 last_generated: Some(row.generated_at),
                 signal_count_at_gen: signal_count,
                 last_narrative: Some(row.narrative_text),
+                previous_summary: None, // Loaded separately below
+                event_count_at_summary: 0,
+                last_summary_generated: None,
             });
         }
         if !core.narrative_state.is_empty() {
             info!(count = core.narrative_state.len(), "Loaded narrative state from DB — preventing cascade");
+        }
+    }
+
+    // Load existing situation summaries from DB for long-running situation memory
+    {
+        let summary_rows = sqlx::query_as::<_, (uuid::Uuid, String, chrono::DateTime<chrono::Utc>)>(
+            "SELECT situation_id, summary_text, updated_at FROM situation_summaries"
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap_or_default();
+
+        let summary_count = summary_rows.len();
+        for (sit_id, summary_text, updated_at) in summary_rows {
+            let event_count = core.graph.get_cluster(&sit_id)
+                .map(|c| c.event_count)
+                .unwrap_or(0);
+            if let Some(ns) = core.narrative_state.get_mut(&sit_id) {
+                ns.previous_summary = Some(summary_text);
+                ns.event_count_at_summary = event_count;
+                ns.last_summary_generated = Some(updated_at);
+            } else {
+                core.narrative_state.insert(sit_id, NarrativeState {
+                    version: 0,
+                    last_generated: None,
+                    signal_count_at_gen: 0,
+                    last_narrative: None,
+                    previous_summary: Some(summary_text),
+                    event_count_at_summary: event_count,
+                    last_summary_generated: Some(updated_at),
+                });
+            }
+        }
+        if summary_count > 0 {
+            info!(count = summary_count, "Loaded situation summaries from DB");
         }
     }
 
@@ -1425,10 +1478,78 @@ async fn run_pipeline(
                     }
                     ns.last_narrative = Some(result.narrative.narrative_text.clone());
                 }
+                // Check if cumulative summary needs regeneration
+                let event_count = core.graph.get_cluster(&result.situation_id)
+                    .map(|c| c.event_count).unwrap_or(0);
+                let (ec_at_summary, last_summary_gen) = core.narrative_state.get(&result.situation_id)
+                    .map(|ns| (ns.event_count_at_summary, ns.last_summary_generated))
+                    .unwrap_or((0, None));
+                if sr_intel::should_regenerate_summary(event_count, ec_at_summary, last_summary_gen) {
+                    let gemini = gemini_client.clone();
+                    let ollama = ollama_client.clone();
+                    let budget_clone = budget.clone();
+                    let stx = summary_tx.clone();
+                    let sid = result.situation_id;
+                    let narrative_text = result.narrative.narrative_text.clone();
+                    let prev_summary = core.narrative_state.get(&sid)
+                        .and_then(|ns| ns.previous_summary.clone());
+                    let sit_title = core.graph.get_cluster(&sid)
+                        .map(|c| c.title.clone()).unwrap_or_default();
+                    let entities: Vec<String> = core.graph.get_cluster(&sid)
+                        .map(|c| c.entities.iter().cloned().collect())
+                        .unwrap_or_default();
+                    tokio::spawn(async move {
+                        match sr_intel::generate_summary(
+                            gemini.as_deref(), ollama.as_deref(), &budget_clone,
+                            &narrative_text, prev_summary.as_deref(), &sit_title,
+                            event_count, &entities,
+                        ).await {
+                            Ok(Some((summary_text, key_entities, key_dates))) => {
+                                let _ = stx.send(SummaryResult {
+                                    situation_id: sid, summary_text, key_entities, key_dates,
+                                }).await;
+                            }
+                            Ok(None) => { tracing::debug!("Summary generation returned no result"); }
+                            Err(e) => { tracing::debug!("Summary generation failed: {e}"); }
+                        }
+                    });
+                }
+
                 // Persist to DB
                 let pool = pool.clone();
                 let narrative = result.narrative;
                 tokio::spawn(async move { persist_narrative(&pool, &narrative).await });
+            }
+            Some(result) = summary_rx.recv() => {
+                info!(
+                    situation_id = %result.situation_id,
+                    summary_len = result.summary_text.len(),
+                    "Cumulative summary generated"
+                );
+                // Update narrative state with new summary
+                if let Some(ns) = core.narrative_state.get_mut(&result.situation_id) {
+                    ns.previous_summary = Some(result.summary_text.clone());
+                    ns.last_summary_generated = Some(chrono::Utc::now());
+                    if let Some(cluster) = core.graph.get_cluster(&result.situation_id) {
+                        ns.event_count_at_summary = cluster.event_count;
+                    }
+                }
+                // Persist to DB
+                let pool = pool.clone();
+                let sid = result.situation_id;
+                let summary = result.summary_text;
+                let entities = result.key_entities;
+                let dates = result.key_dates;
+                tokio::spawn(async move {
+                    if let Err(e) = sr_sources::db::queries::upsert_situation_summary(
+                        &pool, sid, &summary, &entities, &dates,
+                    ).await {
+                        tracing::warn!(situation_id = %sid, "Failed to persist summary: {e}");
+                    }
+                });
+            }
+            _ = timeline_interval.tick() => {
+                tick_timeline(&core, &pool, &bg_semaphore);
             }
             Some(result) = merge_audit_rx.recv() => {
                 core.graph.unmerge(result.parent_id, result.child_id);
@@ -1724,6 +1845,50 @@ fn tick_analysis(
     }
 }
 
+/// Materialize timeline buckets for all active situations.
+/// Runs every 5 minutes, computes hourly bucket stats, and upserts to DB.
+fn tick_timeline(
+    core: &PipelineCore,
+    pool: &PgPool,
+    bg_semaphore: &Arc<tokio::sync::Semaphore>,
+) {
+    let clusters = core.active_clusters();
+    if clusters.is_empty() {
+        return;
+    }
+
+    let now = chrono::Utc::now();
+    // Truncate to the current hour for bucketing
+    use chrono::Timelike;
+    let bucket = now
+        .date_naive()
+        .and_hms_opt(now.time().hour(), 0, 0)
+        .map(|naive| chrono::DateTime::<chrono::Utc>::from_naive_utc_and_offset(naive, chrono::Utc));
+    let bucket = match bucket {
+        Some(b) => b,
+        None => return,
+    };
+
+    for cluster in &clusters {
+        let pool = pool.clone();
+        let sem = bg_semaphore.clone();
+        let sit_id = cluster.id;
+        let event_count = cluster.event_count as i32;
+        let source_count = cluster.source_count as i32;
+        let max_severity = cluster.severity.as_str().to_string();
+        tokio::spawn(async move {
+            let _permit = sem.acquire().await;
+            if let Err(e) = sr_sources::db::queries::upsert_timeline_bucket(
+                &pool, sit_id, bucket, event_count, source_count, &max_severity,
+            ).await {
+                tracing::debug!(situation_id = %sit_id, "Failed to upsert timeline bucket: {e}");
+            }
+        });
+    }
+
+    tracing::debug!(situations = clusters.len(), "Timeline buckets materialized");
+}
+
 /// Situation graph periodic tick: clustering via PipelineCore, then AI dispatch,
 /// search, narrative generation, and publish clusters via SSE.
 #[allow(clippy::too_many_arguments)]
@@ -1895,6 +2060,7 @@ fn tick_situations(
     for cluster in &clusters {
         let ns = core.narrative_state.entry(cluster.id).or_insert(NarrativeState {
             version: 0, last_generated: None, signal_count_at_gen: 0, last_narrative: None,
+            previous_summary: None, event_count_at_summary: 0, last_summary_generated: None,
         });
         let signal_count = core.graph.get_cluster(&cluster.id).map(|c| c.signal_event_count).unwrap_or(0);
         let events_since = signal_count.saturating_sub(ns.signal_count_at_gen);
@@ -1910,6 +2076,7 @@ fn tick_situations(
                 let sid = cluster.id;
                 let version = ns.version;
                 let prev_narrative = ns.last_narrative.clone();
+                let prev_summary = ns.previous_summary.clone();
                 let entity_context = build_entity_context(entity_resolver, entity_graph, &cluster.entities);
                 let impact_summary = build_impact_summary(entity_resolver, entity_graph, &cluster.entities);
 
@@ -1924,6 +2091,7 @@ fn tick_situations(
                     has_state_change: false, phase_history: vec![],
                     event_rate_trend: "steady".to_string(), hours_since_last_event: 0.0,
                     similar_historical: None, impact_summary,
+                    previous_summary: prev_summary,
                 };
 
                 tokio::spawn(async move {

@@ -35,6 +35,12 @@ pub struct NarrativeState {
     /// Cluster signal_event_count at last narrative generation.
     pub signal_count_at_gen: usize,
     pub last_narrative: Option<String>,
+    /// Cumulative summary for long-running situation memory.
+    pub previous_summary: Option<String>,
+    /// Event count at last summary generation (regenerate every 50 events).
+    pub event_count_at_summary: usize,
+    /// Timestamp of last summary generation (regenerate every 6 hours).
+    pub last_summary_generated: Option<DateTime<Utc>>,
 }
 
 /// Output from a single clustering tick — the caller (production or replay)
@@ -370,6 +376,9 @@ impl PipelineCore {
                     last_generated: None,
                     signal_count_at_gen: 0,
                     last_narrative: None,
+                    previous_summary: None,
+                    event_count_at_summary: 0,
+                    last_summary_generated: None,
                 });
             let signal_count = self
                 .graph
@@ -412,6 +421,7 @@ impl PipelineCore {
                 hours_since_last_event: 0.0,
                 similar_historical: None,
                 impact_summary: None,
+                previous_summary: None,
             };
 
             match generate_narrative_tiered(

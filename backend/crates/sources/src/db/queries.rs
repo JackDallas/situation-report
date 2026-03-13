@@ -1,5 +1,6 @@
 use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::PgPool;
+use uuid::Uuid;
 
 use serde::{Deserialize, Serialize};
 
@@ -834,4 +835,120 @@ pub async fn count_replay_events(
     .await?;
 
     Ok(row.0)
+}
+
+// =========================================================================
+// Situation summary queries (cumulative narrative memory)
+// =========================================================================
+
+/// A stored cumulative summary for a situation.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct SituationSummary {
+    pub situation_id: Uuid,
+    pub summary_text: String,
+    pub key_entities: serde_json::Value,
+    pub key_dates: serde_json::Value,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// Load the cumulative summary for a situation, if one exists.
+pub async fn query_situation_summary(
+    pool: &PgPool,
+    situation_id: Uuid,
+) -> anyhow::Result<Option<SituationSummary>> {
+    let row = sqlx::query_as::<_, SituationSummary>(
+        "SELECT situation_id, summary_text, key_entities, key_dates, updated_at \
+         FROM situation_summaries WHERE situation_id = $1",
+    )
+    .bind(situation_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row)
+}
+
+/// Upsert a cumulative summary for a situation.
+pub async fn upsert_situation_summary(
+    pool: &PgPool,
+    situation_id: Uuid,
+    summary_text: &str,
+    key_entities: &serde_json::Value,
+    key_dates: &serde_json::Value,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO situation_summaries (situation_id, summary_text, key_entities, key_dates, updated_at)
+        VALUES ($1, $2, $3, $4, NOW())
+        ON CONFLICT (situation_id) DO UPDATE SET
+            summary_text = EXCLUDED.summary_text,
+            key_entities = EXCLUDED.key_entities,
+            key_dates = EXCLUDED.key_dates,
+            updated_at = NOW()
+        "#,
+    )
+    .bind(situation_id)
+    .bind(summary_text)
+    .bind(key_entities)
+    .bind(key_dates)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+// =========================================================================
+// Situation timeline queries (materialized hourly buckets)
+// =========================================================================
+
+/// A single hourly bucket in a situation's timeline.
+#[derive(Debug, Clone, Serialize, Deserialize, sqlx::FromRow)]
+pub struct TimelineBucket {
+    pub situation_id: Uuid,
+    pub bucket: DateTime<Utc>,
+    pub event_count: i32,
+    pub source_count: i32,
+    pub max_severity: String,
+}
+
+/// Load the full timeline for a situation, ordered by bucket ascending.
+pub async fn query_situation_timeline(
+    pool: &PgPool,
+    situation_id: Uuid,
+) -> anyhow::Result<Vec<TimelineBucket>> {
+    let rows = sqlx::query_as::<_, TimelineBucket>(
+        "SELECT situation_id, bucket, event_count, source_count, max_severity \
+         FROM situation_timeline WHERE situation_id = $1 \
+         ORDER BY bucket ASC",
+    )
+    .bind(situation_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
+/// Upsert an hourly timeline bucket for a situation.
+pub async fn upsert_timeline_bucket(
+    pool: &PgPool,
+    situation_id: Uuid,
+    bucket: DateTime<Utc>,
+    event_count: i32,
+    source_count: i32,
+    max_severity: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO situation_timeline (situation_id, bucket, event_count, source_count, max_severity)
+        VALUES ($1, $2, $3, $4, $5)
+        ON CONFLICT (situation_id, bucket) DO UPDATE SET
+            event_count = EXCLUDED.event_count,
+            source_count = EXCLUDED.source_count,
+            max_severity = EXCLUDED.max_severity
+        "#,
+    )
+    .bind(situation_id)
+    .bind(bucket)
+    .bind(event_count)
+    .bind(source_count)
+    .bind(max_severity)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
