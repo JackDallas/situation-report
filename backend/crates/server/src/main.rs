@@ -84,8 +84,8 @@ async fn main() -> anyhow::Result<()> {
     registry.register(Arc::new(sr_sources::shodan::ShodanDiscovery::new()));
     registry.register(Arc::new(sr_sources::shodan::ShodanSearch::new()));
 
-    // Conflict data (ACLED disabled — requires paid Research tier)
-    // registry.register(Arc::new(sr_sources::acled::AcledSource::new()));
+    // Conflict data
+    registry.register(Arc::new(sr_sources::acled::AcledSource::new()));
     registry.register(Arc::new(sr_sources::gdelt::GdeltSource::new()));
     registry.register(Arc::new(sr_sources::geoconfirmed::GeoConfirmedSource::new()));
 
@@ -154,6 +154,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Maritime Security (NGA ASAM — piracy, missile attacks, hijackings)
     registry.register(Arc::new(sr_sources::ukmto::UkmtoSource::new()));
+
+    // UKMTO Maritime Warnings (UK Maritime Trade Operations — structured security warnings)
+    registry.register(Arc::new(sr_sources::ukmto_warnings::UkmtoWarningsSource::new()));
 
     // Copernicus Emergency Management Service (emergency mapping activations)
     registry.register(Arc::new(sr_sources::copernicus::CopernicusSource::new()));
