@@ -163,8 +163,15 @@ impl DataSource for FirmsSource {
                 }
             };
 
-            // Filter out low-confidence detections
-            let confidence = record.confidence.as_deref().unwrap_or("low");
+            // Filter out low-confidence detections.
+            // VIIRS uses single-letter codes: h=high, n=nominal, l=low.
+            // MODIS uses full words: high, nominal, low.
+            let confidence_raw = record.confidence.as_deref().unwrap_or("l");
+            let confidence = match confidence_raw {
+                "h" | "high" => "high",
+                "n" | "nominal" => "nominal",
+                "l" | "low" | _ => "low",
+            };
             if confidence == "low" {
                 continue;
             }
@@ -198,10 +205,17 @@ impl DataSource for FirmsSource {
             // (ON CONFLICT (source_type, source_id, event_time) DO NOTHING)
             let lat_rounded = (record.latitude * 10000.0).round() as i64;
             let lon_rounded = (record.longitude * 10000.0).round() as i64;
-            let satellite = record.satellite.as_deref().unwrap_or("unknown");
+            let satellite_raw = record.satellite.as_deref().unwrap_or("unknown");
+            // VIIRS satellite codes: N=NOAA-20, 1=NOAA-21, SN=Suomi NPP
+            let satellite = match satellite_raw {
+                "N" => "NOAA-20",
+                "1" => "NOAA-21",
+                "SN" | "Suomi NPP" => "Suomi NPP",
+                other => other,
+            };
             let source_id = format!(
                 "firms:{}:{}:{}:{}:{}",
-                satellite, acq_date_str, acq_time_str, lat_rounded, lon_rounded
+                satellite_raw, acq_date_str, acq_time_str, lat_rounded, lon_rounded
             );
 
             let frp = record.frp;
@@ -221,14 +235,19 @@ impl DataSource for FirmsSource {
             };
 
             let title = format!(
-                "Thermal anomaly (FRP: {:.1})",
-                frp.unwrap_or(0.0)
+                "Thermal anomaly — {} FRP {:.1} MW",
+                satellite, frp.unwrap_or(0.0)
             );
 
             let mut tags = vec!["fire".to_string()];
-            if let Some(ref sat) = record.satellite {
-                tags.push(sat.clone());
-            }
+            tags.push(satellite.to_string());
+
+            let daynight = match record.daynight.as_deref() {
+                Some("D") => "Day",
+                Some("N") => "Night",
+                Some(other) => other,
+                None => "Unknown",
+            };
 
             let data = json!({
                 "latitude": record.latitude,
@@ -237,8 +256,8 @@ impl DataSource for FirmsSource {
                 "confidence": confidence,
                 "acq_date": record.acq_date,
                 "acq_time": record.acq_time,
-                "satellite": record.satellite,
-                "daynight": record.daynight,
+                "satellite": satellite,
+                "daynight": daynight,
                 "bright_ti4": record.bright_ti4,
                 "bright_ti5": record.bright_ti5,
                 "region": region,

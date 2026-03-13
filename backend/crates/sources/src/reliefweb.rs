@@ -18,8 +18,9 @@ const API_BASE: &str = "https://api.reliefweb.int/v2";
 
 /// Application name sent to ReliefWeb API for tracking.
 /// Must be pre-approved via https://apidoc.reliefweb.int/parameters#appname
-fn app_name() -> String {
-    std::env::var("RELIEFWEB_APPNAME").unwrap_or_else(|_| "situationreport".to_string())
+/// Register at: https://docs.google.com/forms/d/e/1FAIpQLScR5EE_SBhweLLg_2xMCnXNbT6md4zxqIB00OL0yZWyrqX_Nw/viewform
+fn app_name() -> Option<String> {
+    std::env::var("RELIEFWEB_APPNAME").ok()
 }
 
 /// Maximum reports to fetch per poll cycle.
@@ -213,7 +214,13 @@ impl ReliefwebSource {
             "sort": ["date.created:desc"]
         });
 
-        let url = format!("{}/reports?appname={}", API_BASE, app_name());
+        let appname = app_name().ok_or_else(|| {
+            AuthError {
+                source: "reliefweb".into(),
+                message: "RELIEFWEB_APPNAME env var not set. Register at https://apidoc.reliefweb.int/parameters#appname".into(),
+            }
+        })?;
+        let url = format!("{}/reports?appname={}", API_BASE, appname);
         debug!(url = %url, "Polling ReliefWeb reports");
 
         let resp = ctx.http
@@ -424,7 +431,13 @@ impl ReliefwebSource {
             "sort": ["date.created:desc"]
         });
 
-        let url = format!("{}/disasters?appname={}", API_BASE, app_name());
+        let appname = app_name().ok_or_else(|| {
+            AuthError {
+                source: "reliefweb".into(),
+                message: "RELIEFWEB_APPNAME env var not set. Register at https://apidoc.reliefweb.int/parameters#appname".into(),
+            }
+        })?;
+        let url = format!("{}/disasters?appname={}", API_BASE, appname);
         debug!(url = %url, "Polling ReliefWeb disasters");
 
         let resp = ctx.http

@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use sqlx::PgPool;
 
 use serde::{Deserialize, Serialize};
@@ -220,6 +220,10 @@ pub async fn get_events_geojson(
     let features: Vec<serde_json::Value> = events
         .into_iter()
         .map(|e| {
+            // Promote frp (Fire Radiative Power) from payload to top-level property
+            // so Mapbox GL can use it in data-driven styling expressions.
+            let frp = e.payload.get("frp").and_then(|v| v.as_f64());
+
             serde_json::json!({
                 "type": "Feature",
                 "geometry": {
@@ -237,7 +241,8 @@ pub async fn get_events_geojson(
                     "confidence": e.confidence,
                     "title": e.title,
                     "region_code": e.region_code,
-                    "payload": e.payload
+                    "payload": e.payload,
+                    "frp": frp
                 }
             })
         })
@@ -468,6 +473,42 @@ pub async fn record_budget_tokens(
     .bind(sonnet_input)
     .bind(sonnet_output)
     .bind(sonnet_cache_read)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Load the current month's Gemini spend from DB. Returns 0 if no row exists.
+pub async fn load_gemini_monthly_spend(
+    pool: &PgPool,
+    month_start: NaiveDate,
+) -> anyhow::Result<i64> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT spend_micro_usd FROM gemini_monthly_spend WHERE month_start = $1",
+    )
+    .bind(month_start)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| r.0).unwrap_or(0))
+}
+
+/// Upsert the current month's Gemini spend (absolute value, not increment).
+pub async fn persist_gemini_monthly_spend(
+    pool: &PgPool,
+    month_start: NaiveDate,
+    spend_micro_usd: i64,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO gemini_monthly_spend (month_start, spend_micro_usd, updated_at)
+        VALUES ($1, $2, NOW())
+        ON CONFLICT (month_start) DO UPDATE SET
+            spend_micro_usd = $2,
+            updated_at = NOW()
+        "#,
+    )
+    .bind(month_start)
+    .bind(spend_micro_usd)
     .execute(pool)
     .await?;
     Ok(())
@@ -706,7 +747,7 @@ pub async fn query_backfill_events(
                   'gps_interference', 'seismic_event',
                   'internet_outage', 'censorship_event', 'notam_event',
                   'telegram_message', 'threat_intel', 'fishing_event',
-                  'bgp_leak', 'geo_event'
+                  'bgp_leak', 'geo_event', 'thermal_anomaly'
               )
           )
         ORDER BY event_time ASC
@@ -719,4 +760,89 @@ pub async fn query_backfill_events(
     .await?;
 
     Ok(events)
+}
+
+/// Export ALL events in a time range for replay — no filtering by severity or type.
+/// This preserves the complete raw event stream so replay can faithfully reproduce
+/// exactly what the pipeline saw in production.
+/// Returns events ordered by event_time ASC, ingested_at ASC (tie-break).
+pub async fn query_replay_events(
+    pool: &PgPool,
+    since: DateTime<Utc>,
+    until: DateTime<Utc>,
+    limit: i64,
+) -> anyhow::Result<Vec<Event>> {
+    let events = sqlx::query_as::<_, Event>(
+        r#"
+        SELECT event_time, ingested_at, source_type, source_id,
+               ST_Y(location::geometry) as latitude,
+               ST_X(location::geometry) as longitude,
+               region_code, entity_id, entity_name, event_type,
+               severity, confidence, tags, title, description, payload
+        FROM events
+        WHERE event_time >= $1 AND event_time < $2
+        ORDER BY event_time ASC, ingested_at ASC
+        LIMIT $3
+        "#,
+    )
+    .bind(since)
+    .bind(until)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(events)
+}
+
+/// Export pipeline-relevant events only (skips flight_position, vessel_position,
+/// shodan_banner, cert_issued, source_health — same filter as backfill).
+/// Much faster than `query_replay_events` for clustering replay since these
+/// high-volume types are rejected by `SituationGraph::ingest()` anyway.
+pub async fn query_replay_events_filtered(
+    pool: &PgPool,
+    since: DateTime<Utc>,
+    until: DateTime<Utc>,
+    limit: i64,
+) -> anyhow::Result<Vec<Event>> {
+    let events = sqlx::query_as::<_, Event>(
+        r#"
+        SELECT event_time, ingested_at, source_type, source_id,
+               ST_Y(location::geometry) as latitude,
+               ST_X(location::geometry) as longitude,
+               region_code, entity_id, entity_name, event_type,
+               severity, confidence, tags, title, description, payload
+        FROM events
+        WHERE event_time >= $1 AND event_time < $2
+          AND event_type NOT IN (
+              'flight_position', 'vessel_position', 'shodan_banner',
+              'cert_issued', 'source_health', 'shodan_count'
+          )
+        ORDER BY event_time ASC, ingested_at ASC
+        LIMIT $3
+        "#,
+    )
+    .bind(since)
+    .bind(until)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(events)
+}
+
+/// Count events in a time range (for progress estimation during export).
+pub async fn count_replay_events(
+    pool: &PgPool,
+    since: DateTime<Utc>,
+    until: DateTime<Utc>,
+) -> anyhow::Result<i64> {
+    let row: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM events WHERE event_time >= $1 AND event_time < $2",
+    )
+    .bind(since)
+    .bind(until)
+    .fetch_one(pool)
+    .await?;
+
+    Ok(row.0)
 }

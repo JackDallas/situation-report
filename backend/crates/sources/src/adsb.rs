@@ -5,6 +5,7 @@
 //! [`AdsbAggregator`] struct with convenience constructors for each service.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -18,6 +19,7 @@ use chrono::Utc;
 
 use sr_types::{EventType, Severity, SourceType};
 
+use crate::aircraft_db::AircraftDb;
 use crate::common::{callsign_country, icao_hex_country};
 use crate::{DataSource, InsertableEvent, SourceContext};
 
@@ -111,11 +113,17 @@ pub(crate) fn is_high_value_type(type_code: &str) -> bool {
 
 /// Convert a single aircraft JSON object from the readsb `ac` array
 /// into an `InsertableEvent`.
+///
+/// When `aircraft_db` is provided, the ICAO hex code is looked up in the
+/// Bellingcat modes.csv database to get authoritative registration, category,
+/// military flag, and owner information — replacing the unreliable
+/// callsign-prefix and dbFlags heuristics.
 pub(crate) fn aircraft_to_event(
     ac: &serde_json::Value,
     source_type: SourceType,
     source_label: &str,
     region: Option<&str>,
+    aircraft_db: Option<&AircraftDb>,
 ) -> Option<InsertableEvent> {
     // Require at least lat/lon to be useful
     let lat = ac.get("lat").and_then(|v| v.as_f64())?;
@@ -140,9 +148,41 @@ pub(crate) fn aircraft_to_event(
     let db_flags = ac.get("dbFlags").and_then(|v| v.as_u64()).unwrap_or(0);
     let emergency = ac.get("emergency").and_then(|v| v.as_str()).unwrap_or("none").to_string();
 
-    // Military if dbFlags bit 0 is set, or callsign matches known patterns
-    let military = (db_flags & 1) != 0 || is_military_callsign(&callsign);
-    let high_value = is_high_value_type(&type_code);
+    // Look up ICAO hex in the Bellingcat aircraft database
+    let db_entry = aircraft_db.and_then(|db| db.lookup(&hex));
+
+    // Military flag: Bellingcat DB is authoritative, fall back to API dbFlags / callsign heuristic
+    let military = if let Some(entry) = db_entry {
+        entry.military
+    } else {
+        (db_flags & 1) != 0 || is_military_callsign(&callsign)
+    };
+
+    // Type code: prefer API (live data), fall back to DB
+    let effective_typecode = if !type_code.is_empty() {
+        type_code.clone()
+    } else {
+        db_entry.and_then(|e| e.typecode.clone()).unwrap_or_default()
+    };
+
+    let high_value = is_high_value_type(&effective_typecode);
+
+    // Registration: prefer API (live), fall back to DB
+    let effective_registration = if !registration.is_empty() {
+        registration.clone()
+    } else {
+        db_entry.and_then(|e| e.registration.clone()).unwrap_or_default()
+    };
+
+    // Category: prefer DB (curated by Bellingcat), fall back to API
+    let effective_category = if let Some(entry) = db_entry {
+        entry.category.clone()
+    } else {
+        category.clone()
+    };
+
+    // Owner from DB (not available in API)
+    let owner = db_entry.and_then(|e| e.owner.clone());
 
     // Determine affiliation from callsign prefix, falling back to ICAO hex range
     let affiliation = callsign_country(&callsign)
@@ -163,9 +203,9 @@ pub(crate) fn aircraft_to_event(
         "track": track,
         "baro_rate": baro_rate,
         "squawk": squawk,
-        "category": category,
-        "type_code": type_code,
-        "registration": registration,
+        "category": effective_category,
+        "type_code": effective_typecode,
+        "registration": effective_registration,
         "db_flags": db_flags,
         "emergency": emergency,
         "military": military,
@@ -173,9 +213,22 @@ pub(crate) fn aircraft_to_event(
         "affiliation": affiliation,
     });
 
+    if let Some(ref o) = owner {
+        if let Some(obj) = data.as_object_mut() {
+            obj.insert("owner".to_string(), json!(o));
+        }
+    }
+
     if let Some(r) = region {
         if let Some(obj) = data.as_object_mut() {
             obj.insert("region".to_string(), json!(r));
+        }
+    }
+
+    // Flag whether this record was enriched by the Bellingcat DB
+    if db_entry.is_some() {
+        if let Some(obj) = data.as_object_mut() {
+            obj.insert("db_matched".to_string(), json!(true));
         }
     }
 
@@ -190,12 +243,28 @@ pub(crate) fn aircraft_to_event(
     if let Some(country) = affiliation {
         tags.push(format!("affiliation:{}", country));
     }
-    if !type_code.is_empty() {
-        tags.push(format!("type:{}", type_code));
+    if !effective_typecode.is_empty() {
+        tags.push(format!("type:{}", effective_typecode));
+    }
+    if let Some(ref entry) = db_entry {
+        tags.push(format!("aircraft_category:{}", entry.category));
     }
 
     let title = if !callsign.is_empty() {
         Some(format!("Flight {} ({})", callsign, hex))
+    } else {
+        None
+    };
+
+    // entity_name: prefer registration (authoritative identifier) over callsign
+    let entity_name = if !effective_registration.is_empty() {
+        if !callsign.is_empty() {
+            Some(format!("{} ({})", effective_registration, callsign))
+        } else {
+            Some(effective_registration.clone())
+        }
+    } else if !callsign.is_empty() {
+        Some(callsign.clone())
     } else {
         None
     };
@@ -208,7 +277,7 @@ pub(crate) fn aircraft_to_event(
         latitude: Some(lat),
         region_code: region.map(String::from),
         entity_id: if hex.is_empty() { None } else { Some(hex.clone()) },
-        entity_name: if callsign.is_empty() { None } else { Some(callsign.clone()) },
+        entity_name,
         event_type: EventType::FlightPosition,
         severity,
         confidence: None,
@@ -228,6 +297,7 @@ pub(crate) fn parse_aircraft_response(
     source_type: SourceType,
     source_label: &str,
     region: Option<&str>,
+    aircraft_db: Option<&AircraftDb>,
 ) -> Vec<InsertableEvent> {
     let ac_array = match body.get("ac").and_then(|v| v.as_array()) {
         Some(arr) => arr,
@@ -236,7 +306,7 @@ pub(crate) fn parse_aircraft_response(
 
     ac_array
         .iter()
-        .filter_map(|ac| aircraft_to_event(ac, source_type, source_label, region))
+        .filter_map(|ac| aircraft_to_event(ac, source_type, source_label, region, aircraft_db))
         .collect()
 }
 
@@ -266,6 +336,8 @@ pub struct AdsbAggregator {
     /// until the deadline passes, preventing the registry from stacking additive
     /// backoff on top of the API's Retry-After delay.
     rate_limit_until: std::sync::Mutex<Option<tokio::time::Instant>>,
+    /// Optional Bellingcat aircraft database for ICAO hex lookups.
+    aircraft_db: Option<Arc<AircraftDb>>,
 }
 
 /// Rate-limit a request, enforcing minimum gap between consecutive HTTP calls.
@@ -448,8 +520,9 @@ impl DataSource for AdsbAggregator {
         };
 
         let body: serde_json::Value = resp.json().await?;
+        let db_ref = self.aircraft_db.as_deref();
         let mut events =
-            parse_aircraft_response(&body, self.source_type, self.source_label, None);
+            parse_aircraft_response(&body, self.source_type, self.source_label, None, db_ref);
 
         let mil_count = events.len();
 
@@ -470,6 +543,7 @@ impl DataSource for AdsbAggregator {
                     self.source_type,
                     self.source_label,
                     Some(region),
+                    db_ref,
                 );
 
                 let existing_hexes: std::collections::HashSet<String> = events
@@ -513,6 +587,7 @@ impl DataSource for AdsbAggregator {
                     self.source_type,
                     self.source_label,
                     None,
+                    db_ref,
                 );
 
                 let existing_hexes: std::collections::HashSet<String> = events
@@ -560,7 +635,7 @@ impl DataSource for AdsbAggregator {
 ///
 /// - Primary: `https://api.airplanes.live/v2`
 /// - Failover: `https://api.adsb.one/v2`
-pub fn airplaneslive() -> AdsbAggregator {
+pub fn airplaneslive(aircraft_db: Option<Arc<AircraftDb>>) -> AdsbAggregator {
     AdsbAggregator {
         source_id: "airplaneslive",
         display_name: "Airplanes.live",
@@ -577,13 +652,14 @@ pub fn airplaneslive() -> AdsbAggregator {
         point_index: AtomicUsize::new(0),
         last_request: Mutex::new(tokio::time::Instant::now()),
         rate_limit_until: std::sync::Mutex::new(None),
+        aircraft_db,
     }
 }
 
 /// Create an [`AdsbAggregator`] for the adsb.lol service.
 ///
 /// - Primary: `https://api.adsb.lol/v2`
-pub fn adsb_lol() -> AdsbAggregator {
+pub fn adsb_lol(aircraft_db: Option<Arc<AircraftDb>>) -> AdsbAggregator {
     AdsbAggregator {
         source_id: "adsb-lol",
         display_name: "adsb.lol",
@@ -601,6 +677,7 @@ pub fn adsb_lol() -> AdsbAggregator {
         point_index: AtomicUsize::new(3),
         last_request: Mutex::new(tokio::time::Instant::now()),
         rate_limit_until: std::sync::Mutex::new(None),
+        aircraft_db,
     }
 }
 
@@ -608,7 +685,7 @@ pub fn adsb_lol() -> AdsbAggregator {
 ///
 /// - Primary: `https://opendata.adsb.fi/api/v2`
 /// - Geo queries use v3 endpoint: `https://opendata.adsb.fi/api/v3`
-pub fn adsb_fi() -> AdsbAggregator {
+pub fn adsb_fi(aircraft_db: Option<Arc<AircraftDb>>) -> AdsbAggregator {
     AdsbAggregator {
         source_id: "adsb-fi",
         display_name: "adsb.fi",
@@ -628,6 +705,7 @@ pub fn adsb_fi() -> AdsbAggregator {
         point_index: AtomicUsize::new(6),
         last_request: Mutex::new(tokio::time::Instant::now()),
         rate_limit_until: std::sync::Mutex::new(None),
+        aircraft_db,
     }
 }
 
@@ -710,13 +788,13 @@ mod tests {
             "emergency": "none",
         });
 
-        let event = aircraft_to_event(&ac, SourceType::AirplanesLive, "airplaneslive", None);
+        let event = aircraft_to_event(&ac, SourceType::AirplanesLive, "airplaneslive", None, None);
         assert!(event.is_some());
 
         let event = event.unwrap();
         assert_eq!(event.source_type, SourceType::AirplanesLive);
         assert_eq!(event.entity_id.as_deref(), Some("ae1234"));
-        assert_eq!(event.entity_name.as_deref(), Some("FORTE11"));
+        assert_eq!(event.entity_name.as_deref(), Some("11-2047 (FORTE11)"));
         assert!(event.tags.contains(&"military".to_string()));
         assert!(event.tags.contains(&"high_value".to_string()));
         assert_eq!(event.payload["type_code"], "RQ4");
@@ -735,7 +813,7 @@ mod tests {
             "dbFlags": 1,
         });
 
-        let event = aircraft_to_event(&ac, SourceType::AdsbLol, "adsb-lol", Some("levant"));
+        let event = aircraft_to_event(&ac, SourceType::AdsbLol, "adsb-lol", Some("levant"), None);
         assert!(event.is_some());
         let event = event.unwrap();
         assert_eq!(event.source_type, SourceType::AdsbLol);
@@ -755,7 +833,7 @@ mod tests {
             "dbFlags": 1,
         });
 
-        let event = aircraft_to_event(&ac, SourceType::AdsbFi, "adsb-fi", None);
+        let event = aircraft_to_event(&ac, SourceType::AdsbFi, "adsb-fi", None, None);
         assert!(event.is_some());
         let event = event.unwrap();
         assert_eq!(event.source_type, SourceType::AdsbFi);
@@ -770,7 +848,7 @@ mod tests {
             "hex": "ae1234",
             "flight": "TEST01",
         });
-        assert!(aircraft_to_event(&ac, SourceType::AirplanesLive, "airplaneslive", None).is_none());
+        assert!(aircraft_to_event(&ac, SourceType::AirplanesLive, "airplaneslive", None, None).is_none());
     }
 
     #[test]
@@ -782,7 +860,7 @@ mod tests {
             "lon": 51.0,
             "alt_baro": "ground",
         });
-        let event = aircraft_to_event(&ac, SourceType::AirplanesLive, "airplaneslive", None);
+        let event = aircraft_to_event(&ac, SourceType::AirplanesLive, "airplaneslive", None, None);
         assert!(event.is_some());
         let event = event.unwrap();
         assert_eq!(event.payload["alt_baro"], 0.0);
@@ -798,7 +876,7 @@ mod tests {
             "lon": 51.0,
             "dbFlags": 1,
         });
-        let event = aircraft_to_event(&ac, SourceType::AirplanesLive, "airplaneslive", None).unwrap();
+        let event = aircraft_to_event(&ac, SourceType::AirplanesLive, "airplaneslive", None, None).unwrap();
         assert_eq!(event.payload["military"], true);
         assert!(event.tags.contains(&"military".to_string()));
 
@@ -810,14 +888,14 @@ mod tests {
             "lon": 51.0,
             "dbFlags": 0,
         });
-        let event2 = aircraft_to_event(&ac2, SourceType::AirplanesLive, "airplaneslive", None).unwrap();
+        let event2 = aircraft_to_event(&ac2, SourceType::AirplanesLive, "airplaneslive", None, None).unwrap();
         assert_eq!(event2.payload["military"], false);
         assert!(!event2.tags.contains(&"military".to_string()));
     }
 
     #[test]
     fn test_region_rotation() {
-        let source = airplaneslive();
+        let source = airplaneslive(None);
         // Verify cycling through all regions and wrapping
         for expected in 0..POINT_QUERIES.len() {
             let idx = source.point_index.fetch_add(1, Ordering::Relaxed) % POINT_QUERIES.len();
@@ -861,7 +939,7 @@ mod tests {
             "ptime": 50,
         });
 
-        let events = parse_aircraft_response(&body, SourceType::AirplanesLive, "airplaneslive", Some("iran"));
+        let events = parse_aircraft_response(&body, SourceType::AirplanesLive, "airplaneslive", Some("iran"), None);
         assert_eq!(events.len(), 2);
 
         // Verify region is set
@@ -870,35 +948,35 @@ mod tests {
 
     #[test]
     fn test_point_url_normal() {
-        let agg = airplaneslive();
+        let agg = airplaneslive(None);
         let url = agg.point_url(32.5, 53.0, 250);
         assert_eq!(url, "https://api.airplanes.live/v2/point/32.5/53/250");
     }
 
     #[test]
     fn test_point_url_adsb_fi_uses_v3() {
-        let agg = adsb_fi();
+        let agg = adsb_fi(None);
         let url = agg.point_url(32.5, 53.0, 250);
         assert_eq!(url, "https://opendata.adsb.fi/api/v3/lat/32.5/lon/53/dist/250");
     }
 
     #[test]
     fn test_squawk_url() {
-        let agg = airplaneslive();
+        let agg = airplaneslive(None);
         let url = agg.squawk_url("7700");
         assert_eq!(url, "https://api.airplanes.live/v2/sqk/7700");
     }
 
     #[test]
     fn test_military_url() {
-        let agg = adsb_lol();
+        let agg = adsb_lol(None);
         let url = agg.military_url();
         assert_eq!(url, "https://api.adsb.lol/v2/mil");
     }
 
     #[test]
     fn test_adsb_lol_point_index_offset() {
-        let agg = adsb_lol();
+        let agg = adsb_lol(None);
         // Should start at index 3
         let idx = agg.point_index.load(Ordering::Relaxed);
         assert_eq!(idx, 3);
@@ -906,7 +984,7 @@ mod tests {
 
     #[test]
     fn test_adsb_fi_point_index_offset() {
-        let agg = adsb_fi();
+        let agg = adsb_fi(None);
         // Should start at index 6
         let idx = agg.point_index.load(Ordering::Relaxed);
         assert_eq!(idx, 6);

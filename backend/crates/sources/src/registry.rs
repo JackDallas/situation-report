@@ -11,6 +11,15 @@ use sr_types::EventType;
 use crate::rate_limit::{extract_rate_limit_delay, is_auth_error};
 use crate::{DataSource, InsertableEvent, SourceContext};
 
+/// Emitted whenever a source's health status changes.
+#[derive(Debug, Clone)]
+pub struct SourceHealthEvent {
+    pub source_id: String,
+    pub status: String,
+    pub consecutive_failures: u32,
+    pub last_error: Option<String>,
+}
+
 /// Registry of all data sources. Manages their lifecycle.
 pub struct SourceRegistry {
     sources: Vec<Arc<dyn DataSource>>,
@@ -86,6 +95,7 @@ impl SourceRegistry {
         &self,
         pool: PgPool,
         event_tx: broadcast::Sender<InsertableEvent>,
+        health_tx: broadcast::Sender<SourceHealthEvent>,
     ) {
         let http = reqwest::Client::builder()
             .user_agent("SituationReport/0.1")
@@ -97,6 +107,7 @@ impl SourceRegistry {
             let source = Arc::clone(source);
             let pool = pool.clone();
             let event_tx = event_tx.clone();
+            let health_tx = health_tx.clone();
             let http = http.clone();
 
             if source.is_streaming() {
@@ -105,6 +116,7 @@ impl SourceRegistry {
                 {
                     let pool = pool.clone();
                     let event_tx = event_tx.clone();
+                    let health_tx = health_tx.clone();
                     let http = http.clone();
                     let source = Arc::clone(&source);
                     tokio::spawn(async move {
@@ -118,8 +130,8 @@ impl SourceRegistry {
                             info!(source_id = source.id(), "Starting stream");
 
                             // Mark as "connecting" — only promoted to "healthy" when data flows
-                            let _ = sr_db::queries::update_source_health(
-                                &pool, source.id(), "connecting", None,
+                            update_and_emit_health(
+                                &pool, source.id(), "connecting", 0, None, &health_tx,
                             ).await;
 
                             match source.start_stream(&ctx, event_tx.clone()).await {
@@ -136,11 +148,9 @@ impl SourceRegistry {
                                             error = %e,
                                             "Stream auth error — source disabled until restart"
                                         );
-                                        let _ = sr_db::queries::update_source_health(
-                                            &pool,
-                                            source.id(),
-                                            "error",
-                                            Some(&format!("auth error (disabled): {}", e)),
+                                        let err_msg = format!("auth error (disabled): {}", e);
+                                        update_and_emit_health(
+                                            &pool, source.id(), "error", 1, Some(&err_msg), &health_tx,
                                         ).await;
                                         // Park this task forever — don't spam the server
                                         return;
@@ -154,11 +164,9 @@ impl SourceRegistry {
                                             consecutive_failures,
                                             "Stream exceeded max failures — giving up until restart"
                                         );
-                                        let _ = sr_db::queries::update_source_health(
-                                            &pool,
-                                            source.id(),
-                                            "error",
-                                            Some(&format!("exceeded max failures ({}): {}", consecutive_failures, e)),
+                                        let err_msg = format!("exceeded max failures ({}): {}", consecutive_failures, e);
+                                        update_and_emit_health(
+                                            &pool, source.id(), "error", consecutive_failures, Some(&err_msg), &health_tx,
                                         ).await;
                                         return;
                                     }
@@ -174,11 +182,9 @@ impl SourceRegistry {
                                         "Stream failed, reconnecting after backoff"
                                     );
 
-                                    let _ = sr_db::queries::update_source_health(
-                                        &pool,
-                                        source.id(),
-                                        "error",
-                                        Some(&e.to_string()),
+                                    update_and_emit_health(
+                                        &pool, source.id(), "error", consecutive_failures,
+                                        Some(&e.to_string()), &health_tx,
                                     ).await;
 
                                     tokio::time::sleep(backoff).await;
@@ -191,6 +197,7 @@ impl SourceRegistry {
                 // Task 2: subscribe to the broadcast channel and persist matching events to DB
                 {
                     let pool = pool.clone();
+                    let health_tx = health_tx.clone();
                     let mut event_rx = event_tx.subscribe();
                     tokio::spawn(async move {
                         let mut first_event_received = false;
@@ -205,8 +212,8 @@ impl SourceRegistry {
                                     if !first_event_received {
                                         first_event_received = true;
                                         info!(source_id = %source_id, "Stream data flowing — marking healthy");
-                                        let _ = sr_db::queries::update_source_health(
-                                            &pool, &source_id, "healthy", None,
+                                        update_and_emit_health(
+                                            &pool, &source_id, "healthy", 0, None, &health_tx,
                                         ).await;
                                     }
 
@@ -281,16 +288,9 @@ impl SourceRegistry {
                                 consecutive_failures = 0;
 
                                 // Update health to healthy
-                                if let Err(e) = sr_db::queries::update_source_health(
-                                    &pool,
-                                    source.id(),
-                                    "healthy",
-                                    None,
-                                )
-                                .await
-                                {
-                                    warn!(source_id = source.id(), error = %e, "Failed to update source health");
-                                }
+                                update_and_emit_health(
+                                    &pool, source.id(), "healthy", 0, None, &health_tx,
+                                ).await;
 
                                 let count = events.len();
                                 for event in events {
@@ -318,11 +318,9 @@ impl SourceRegistry {
                                         error = %e,
                                         "Poll auth error — source disabled until restart"
                                     );
-                                    let _ = sr_db::queries::update_source_health(
-                                        &pool,
-                                        source.id(),
-                                        "error",
-                                        Some(&format!("auth error (disabled): {}", e)),
+                                    let err_msg = format!("auth error (disabled): {}", e);
+                                    update_and_emit_health(
+                                        &pool, source.id(), "error", 1, Some(&err_msg), &health_tx,
                                     ).await;
                                     return;
                                 }
@@ -347,35 +345,24 @@ impl SourceRegistry {
                                     );
 
                                     // Update health to rate_limited
-                                    if let Err(he) = sr_db::queries::update_source_health(
-                                        &pool,
-                                        source.id(),
-                                        "rate_limited",
-                                        Some(&format!("429 x{} — backing off {}s", consecutive_failures, effective.as_secs())),
-                                    )
-                                    .await
-                                    {
-                                        warn!(source_id = source.id(), error = %he, "Failed to update source health");
-                                    }
+                                    let err_msg = format!("429 x{} — backing off {}s", consecutive_failures, effective.as_secs());
+                                    update_and_emit_health(
+                                        &pool, source.id(), "rate_limited", consecutive_failures,
+                                        Some(&err_msg), &health_tx,
+                                    ).await;
 
                                     effective
                                 } else {
                                     error!(source_id = source.id(), error = %e, "Poll failed");
 
-                                    // Update health to error
-                                    if let Err(he) = sr_db::queries::update_source_health(
-                                        &pool,
-                                        source.id(),
-                                        "error",
-                                        Some(&e.to_string()),
-                                    )
-                                    .await
-                                    {
-                                        warn!(source_id = source.id(), error = %he, "Failed to update source health");
-                                    }
-
                                     // Exponential backoff: 30s * 2^min(failures, 4), capped at 300s
                                     consecutive_failures = consecutive_failures.saturating_add(1);
+
+                                    // Update health to error
+                                    update_and_emit_health(
+                                        &pool, source.id(), "error", consecutive_failures,
+                                        Some(&e.to_string()), &health_tx,
+                                    ).await;
                                     std::time::Duration::from_secs(
                                         (30u64 * 2u64.pow(consecutive_failures.min(4))).min(300),
                                     )
@@ -387,11 +374,10 @@ impl SourceRegistry {
                                         consecutive_failures,
                                         "Poll source exceeded max failures — giving up until restart"
                                     );
-                                    let _ = sr_db::queries::update_source_health(
-                                        &pool,
-                                        source.id(),
-                                        "error",
-                                        Some(&format!("exceeded max failures ({})", consecutive_failures)),
+                                    let err_msg = format!("exceeded max failures ({})", consecutive_failures);
+                                    update_and_emit_health(
+                                        &pool, source.id(), "error", consecutive_failures,
+                                        Some(&err_msg), &health_tx,
                                     ).await;
                                     return;
                                 }
@@ -410,6 +396,26 @@ impl SourceRegistry {
             }
         }
     }
+}
+
+/// Update source health in DB and emit a health event on the broadcast channel.
+async fn update_and_emit_health(
+    pool: &PgPool,
+    source_id: &str,
+    status: &str,
+    consecutive_failures: u32,
+    last_error: Option<&str>,
+    health_tx: &broadcast::Sender<SourceHealthEvent>,
+) {
+    if let Err(e) = sr_db::queries::update_source_health(pool, source_id, status, last_error).await {
+        warn!(source_id, error = %e, "Failed to update source health");
+    }
+    let _ = health_tx.send(SourceHealthEvent {
+        source_id: source_id.to_owned(),
+        status: status.to_owned(),
+        consecutive_failures,
+        last_error: last_error.map(|s| s.to_owned()),
+    });
 }
 
 /// Persist an InsertableEvent to the database.

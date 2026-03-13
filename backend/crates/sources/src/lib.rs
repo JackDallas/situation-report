@@ -2,6 +2,7 @@ pub mod db;
 pub mod registry;
 pub mod common;
 pub mod rate_limit;
+pub mod aircraft_db;
 
 pub mod adsb;
 pub mod shodan;

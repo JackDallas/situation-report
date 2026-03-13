@@ -28,6 +28,7 @@ pub enum EventType {
     ShodanBanner,
     ShodanCount,
     SourceHealth,
+    BlueskyPost,
 }
 
 impl EventType {
@@ -55,6 +56,7 @@ impl EventType {
             Self::ShodanBanner => "shodan_banner",
             Self::ShodanCount => "shodan_count",
             Self::SourceHealth => "source_health",
+            Self::BlueskyPost => "bluesky_post",
         }
     }
 
@@ -100,6 +102,7 @@ impl EventType {
                 | Self::NotamEvent
                 | Self::ThreatIntel
                 | Self::FishingEvent
+                | Self::BlueskyPost
         )
     }
 }
@@ -111,7 +114,7 @@ impl std::fmt::Display for EventType {
 }
 
 /// All variants of [`EventType`] for exhaustive testing.
-pub const ALL_EVENT_TYPES: [EventType; 22] = [
+pub const ALL_EVENT_TYPES: [EventType; 23] = [
     EventType::ConflictEvent,
     EventType::ThermalAnomaly,
     EventType::GeoEvent,
@@ -134,6 +137,7 @@ pub const ALL_EVENT_TYPES: [EventType; 22] = [
     EventType::ShodanBanner,
     EventType::ShodanCount,
     EventType::SourceHealth,
+    EventType::BlueskyPost,
 ];
 
 #[cfg(test)]
@@ -218,6 +222,6 @@ mod tests {
 
     #[test]
     fn variant_count() {
-        assert_eq!(ALL_EVENT_TYPES.len(), 22, "Expected 22 event type variants");
+        assert_eq!(ALL_EVENT_TYPES.len(), 23, "Expected 23 event type variants");
     }
 }
