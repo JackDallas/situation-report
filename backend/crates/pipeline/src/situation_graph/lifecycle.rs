@@ -242,8 +242,9 @@ pub(crate) fn recompute_cluster_severity(cluster: &mut SituationCluster, severit
     } else if is_active_or_developing
         && (has_conflict_sources || has_conflict_topics)
         && cluster.event_count >= severity_config.high_min_events
+        && source_diversity >= severity_config.medium_min_sources
     {
-        // Developing/active conflict situation
+        // Developing/active conflict situation with multi-source corroboration
         Severity::High.min(severity_cap)
     } else if is_active_or_developing
         && (has_cyber_sources || is_natural_disaster)

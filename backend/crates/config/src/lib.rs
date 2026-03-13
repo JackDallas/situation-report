@@ -776,7 +776,7 @@ impl Default for SeverityConfig {
         Self {
             critical_min_events: 40,
             critical_min_sources: 4,
-            high_min_events: 10,
+            high_min_events: 25,
             medium_min_sources: 2,
             medium_min_events: 5,
         }
