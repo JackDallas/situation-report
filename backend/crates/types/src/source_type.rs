@@ -65,6 +65,8 @@ pub enum SourceType {
     Copernicus,
     #[serde(rename = "bluesky")]
     Bluesky,
+    #[serde(rename = "imb-piracy")]
+    ImbPiracy,
 }
 
 impl SourceType {
@@ -105,6 +107,7 @@ impl SourceType {
             Self::Usgs => "usgs",
             Self::Copernicus => "copernicus",
             Self::Bluesky => "bluesky",
+            Self::ImbPiracy => "imb-piracy",
         }
     }
 }
@@ -116,7 +119,7 @@ impl std::fmt::Display for SourceType {
 }
 
 /// All variants of [`SourceType`] for exhaustive testing.
-pub const ALL_SOURCE_TYPES: [SourceType; 30] = [
+pub const ALL_SOURCE_TYPES: [SourceType; 31] = [
     SourceType::Acled,
     SourceType::AdsbFi,
     SourceType::AdsbLol,
@@ -147,6 +150,7 @@ pub const ALL_SOURCE_TYPES: [SourceType; 30] = [
     SourceType::Usgs,
     SourceType::Copernicus,
     SourceType::Bluesky,
+    SourceType::ImbPiracy,
 ];
 
 #[cfg(test)]
@@ -197,6 +201,6 @@ mod tests {
 
     #[test]
     fn variant_count() {
-        assert_eq!(ALL_SOURCE_TYPES.len(), 30, "Expected 30 source type variants");
+        assert_eq!(ALL_SOURCE_TYPES.len(), 31, "Expected 31 source type variants");
     }
 }

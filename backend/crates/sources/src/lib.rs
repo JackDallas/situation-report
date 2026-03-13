@@ -32,6 +32,7 @@ pub mod ukmto;
 pub mod ukmto_warnings;
 pub mod copernicus;
 pub mod bluesky;
+pub mod imb;
 
 use std::time::Duration;
 

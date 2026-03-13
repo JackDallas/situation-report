@@ -85,9 +85,7 @@ async fn main() -> anyhow::Result<()> {
     registry.register(Arc::new(sr_sources::shodan::ShodanSearch::new()));
 
     // Conflict data
-    // ACLED disabled — free tier lacks API access, burns error logs every poll.
-    // Needs Research tier (institutional email) or contact access@acleddata.com.
-    // registry.register(Arc::new(sr_sources::acled::AcledSource::new()));
+    registry.register(Arc::new(sr_sources::acled::AcledSource::new()));
     registry.register(Arc::new(sr_sources::gdelt::GdeltSource::new()));
     registry.register(Arc::new(sr_sources::geoconfirmed::GeoConfirmedSource::new()));
 
@@ -165,6 +163,9 @@ async fn main() -> anyhow::Result<()> {
 
     // Bluesky OSINT (Jetstream WebSocket — curated account list)
     registry.register(Arc::new(sr_sources::bluesky::BlueskySource::new()));
+
+    // IMB Piracy Reporting Centre (ICC-CCS — piracy, armed robbery, hijackings)
+    registry.register(Arc::new(sr_sources::imb::ImbPiracySource::new()));
 
     let registry = Arc::new(registry);
 
