@@ -618,8 +618,8 @@ impl UkmtoWarningsSource {
             longitude: warning.longitude,
             latitude: warning.latitude,
             region_code,
-            entity_id: None,
-            entity_name: None,
+            entity_id: Some(format!("UKMTO-{}", warning.reference)),
+            entity_name: Some(format!("UKMTO Warning {}", warning.reference)),
             event_type: EventType::MaritimeSecurity,
             severity,
             confidence: Some(0.95), // UKMTO data is authoritative
@@ -703,9 +703,25 @@ impl DataSource for UkmtoWarningsSource {
             return Ok(Vec::new());
         }
 
+        // Only ingest warnings from the last 30 days. Older warnings would
+        // insert into potentially-compressed TimescaleDB chunks, and stale
+        // maritime security events have limited value for the live situation graph.
+        let cutoff = Utc::now() - chrono::Duration::days(30);
+
         let mut events = Vec::new();
+        let mut skipped_old = 0usize;
 
         for meta in &entries {
+            // Skip warnings older than the cutoff date
+            if let Some(date) = meta.date {
+                if let Some(dt) = date.and_hms_opt(0, 0, 0).map(|dt| dt.and_utc()) {
+                    if dt < cutoff {
+                        skipped_old += 1;
+                        continue;
+                    }
+                }
+            }
+
             // Deduplication by source_id (full filename-based key)
             {
                 let mut seen = self.seen.lock().unwrap_or_else(|e| e.into_inner());
@@ -715,10 +731,8 @@ impl DataSource for UkmtoWarningsSource {
                 seen.insert(meta.source_id.clone());
             }
 
-            // Try to fetch the PDF and extract text via parse_warning_text.
-            // The MSCIO PDFs are small (200-300 KB) but we cannot parse PDF
-            // binary without a PDF crate. Instead, create event from filename
-            // metadata and store the PDF URL in the payload for reference.
+            // Create event from filename metadata and store the PDF URL in the
+            // payload for reference. PDF text extraction is not yet implemented.
             let warning = self.warning_from_metadata(meta);
             let mut event = Self::warning_to_event(&warning);
 
@@ -727,6 +741,10 @@ impl DataSource for UkmtoWarningsSource {
             event.source_id = Some(meta.source_id.clone());
 
             events.push(event);
+        }
+
+        if skipped_old > 0 {
+            debug!(skipped = skipped_old, "Skipped UKMTO warnings older than 30 days");
         }
 
         // Prune seen set if it grows too large
@@ -988,6 +1006,8 @@ to the port side but remains underway."#;
         assert_eq!(event.source_type, SourceType::UkmtoWarnings);
         assert_eq!(event.event_type, EventType::MaritimeSecurity);
         assert_eq!(event.source_id, Some("ukmto:019-26".to_string()));
+        assert_eq!(event.entity_id, Some("UKMTO-019-26".to_string()));
+        assert_eq!(event.entity_name, Some("UKMTO Warning 019-26".to_string()));
         // Missile keyword should escalate to Critical
         assert_eq!(event.severity, Severity::Critical);
         assert!(event.title.unwrap().contains("UKMTO ATTACK 019-26"));
