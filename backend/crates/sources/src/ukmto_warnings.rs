@@ -6,7 +6,7 @@ use async_trait::async_trait;
 use chrono::{NaiveDate, Utc};
 use regex::Regex;
 use serde_json::json;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use sr_types::{EventType, Severity, SourceType};
 
@@ -30,7 +30,6 @@ const MSCIO_BASE: &str = "https://mscio.eu";
 
 /// Warning types extracted from UKMTO reference lines.
 #[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
 enum WarningType {
     Attack,
     SuspiciousApproach,
@@ -44,7 +43,6 @@ enum WarningType {
 }
 
 impl WarningType {
-    #[allow(dead_code)]
     fn from_str(s: &str) -> Self {
         match s.to_uppercase().as_str() {
             "ATTACK" => Self::Attack,
@@ -131,7 +129,6 @@ struct FilenameMetadata {
 /// Parse a UKMTO reference line like "019-26 – ATTACK – UPDATE 002".
 ///
 /// Returns (reference, warning_type, update_number).
-#[allow(dead_code)]
 fn parse_reference_line(line: &str) -> Option<(String, WarningType, Option<String>)> {
     // Pattern: NNN-YY followed by separator and type
     let re = Regex::new(
@@ -152,7 +149,6 @@ fn parse_reference_line(line: &str) -> Option<(String, WarningType, Option<Strin
 /// - "12.3456N 045.6789E"
 /// - "12° 34.5' N, 045° 67.8' E"
 /// - "Lat: 12.345 Lon: 45.678"
-#[allow(dead_code)]
 fn extract_coordinates(text: &str) -> Option<(f64, f64)> {
     // Pattern 1: Decimal degrees with N/S/E/W suffixes
     // e.g. "12.3456N 045.6789E" or "12.3456 N, 45.6789 E"
@@ -214,7 +210,6 @@ fn extract_coordinates(text: &str) -> Option<(f64, f64)> {
 ///
 /// Looks for common UKMTO patterns like "in the Straits of Hormuz",
 /// "Red Sea", "Gulf of Aden", "Gulf of Oman", "Arabian Sea", etc.
-#[allow(dead_code)]
 fn extract_location_text(text: &str) -> Option<String> {
     let text_lower = text.to_lowercase();
 
@@ -297,7 +292,6 @@ fn extract_tags_from_body(text: &str) -> Vec<String> {
 
 /// Parse a date string in common UKMTO formats.
 /// Used by `parse_warning_text` for PDF-extracted content.
-#[allow(dead_code)]
 fn parse_report_date(s: &str) -> Option<NaiveDate> {
     // Try "DD MMM YYYY" (e.g. "11 Mar 2026")
     if let Ok(d) = NaiveDate::parse_from_str(s.trim(), "%d %b %Y") {
@@ -325,7 +319,6 @@ fn parse_report_date(s: &str) -> Option<NaiveDate> {
 ///
 /// Body text describing the incident...
 /// ```
-#[allow(dead_code)]
 fn parse_warning_text(text: &str) -> Option<UkmtoWarning> {
     let lines: Vec<&str> = text.lines().collect();
     if lines.is_empty() {
@@ -633,6 +626,58 @@ impl UkmtoWarningsSource {
         }
     }
 
+    /// Download a PDF and extract structured warning data from its text.
+    ///
+    /// Returns `None` if download or extraction fails (caller should fall back
+    /// to metadata-only). Limits download to 5 MB to avoid memory issues.
+    async fn extract_warning_from_pdf(
+        http: &reqwest::Client,
+        meta: &FilenameMetadata,
+    ) -> Option<UkmtoWarning> {
+        let resp = http
+            .get(&meta.pdf_url)
+            .timeout(Duration::from_secs(30))
+            .send()
+            .await
+            .ok()?;
+
+        if !resp.status().is_success() {
+            debug!(url = %meta.pdf_url, status = %resp.status(), "PDF download failed");
+            return None;
+        }
+
+        // Guard against oversized PDFs (UKMTO warnings are typically <100 KB)
+        if let Some(len) = resp.content_length() {
+            if len > 5_000_000 {
+                debug!(url = %meta.pdf_url, bytes = len, "PDF too large, skipping extraction");
+                return None;
+            }
+        }
+
+        let bytes = resp.bytes().await.ok()?;
+        let text = pdf_extract::extract_text_from_mem(&bytes)
+            .map_err(|e| {
+                debug!(url = %meta.pdf_url, error = %e, "PDF text extraction failed");
+                e
+            })
+            .ok()?;
+
+        if text.trim().is_empty() {
+            debug!(url = %meta.pdf_url, "PDF yielded empty text");
+            return None;
+        }
+
+        let mut warning = parse_warning_text(&text)?;
+        warning.pdf_url = Some(meta.pdf_url.clone());
+
+        // If the PDF text didn't provide a date, use the filename date
+        if warning.report_date.is_none() {
+            warning.report_date = meta.date;
+        }
+
+        Some(warning)
+    }
+
     /// Create a warning from MSCIO filename metadata (no PDF text available).
     fn warning_from_metadata(&self, meta: &FilenameMetadata) -> UkmtoWarning {
         // The filename itself is the only type hint we have without PDF text.
@@ -731,9 +776,18 @@ impl DataSource for UkmtoWarningsSource {
                 seen.insert(meta.source_id.clone());
             }
 
-            // Create event from filename metadata and store the PDF URL in the
-            // payload for reference. PDF text extraction is not yet implemented.
-            let warning = self.warning_from_metadata(meta);
+            // Try to download and parse the PDF for structured data (coordinates,
+            // warning type, description). Fall back to metadata-only on failure.
+            let warning = match Self::extract_warning_from_pdf(&ctx.http, meta).await {
+                Some(w) => {
+                    debug!(reference = %w.reference, "Extracted warning from PDF");
+                    w
+                }
+                None => {
+                    warn!(url = %meta.pdf_url, "PDF extraction failed, using filename metadata");
+                    self.warning_from_metadata(meta)
+                }
+            };
             let mut event = Self::warning_to_event(&warning);
 
             // Override the source_id to use the full filename-based key
