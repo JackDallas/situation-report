@@ -1,0 +1,14 @@
+[package]
+name = "telegram-auth"
+edition.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "telegram-auth"
+path = "src/main.rs"
+
+[dependencies]
+grammers-client = { version = "0.9", default-features = false }
+grammers-session = { version = "0.9", features = ["sqlite-storage"] }
+tokio = { workspace = true }
+anyhow = { workspace = true }

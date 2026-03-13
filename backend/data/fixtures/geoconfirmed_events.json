@@ -1,0 +1,542 @@
+[
+  {
+    "event_time": "2026-03-04T00:00:00+00:00",
+    "source_type": "geoconfirmed",
+    "source_id": "geoconfirmed:06a0feed-baf1-4e03-81b1-08de789a650e",
+    "latitude": 48.934655,
+    "longitude": 40.372803,
+    "region_code": "eastern-europe",
+    "entity_id": "06a0feed-baf1-4e03-81b1-08de789a650e",
+    "entity_name": null,
+    "event_type": "geo_event",
+    "severity": "medium",
+    "confidence": null,
+    "tags": [
+      "Ukraine"
+    ],
+    "title": "Armored vehicle spotted (Ukraine)",
+    "description": null,
+    "payload": {
+      "id": "06a0feed-baf1-4e03-81b1-08de789a650e",
+      "lat": 48.934655,
+      "lon": 40.372803,
+      "date": "2026-03-04",
+      "icon": "/icons/666666/False/icons/transparent/20.png",
+      "region": "eastern-europe",
+      "conflict": "Ukraine"
+    }
+  },
+  {
+    "event_time": "2026-03-03T00:00:00+00:00",
+    "source_type": "geoconfirmed",
+    "source_id": "geoconfirmed:02524475-b4de-4f38-818f-08de789a650e",
+    "latitude": 50.41744,
+    "longitude": 37.02034,
+    "region_code": "eastern-europe",
+    "entity_id": "02524475-b4de-4f38-818f-08de789a650e",
+    "entity_name": null,
+    "event_type": "geo_event",
+    "severity": "medium",
+    "confidence": null,
+    "tags": [
+      "Ukraine"
+    ],
+    "title": "Logistics vehicle spotted (Ukraine)",
+    "description": null,
+    "payload": {
+      "id": "02524475-b4de-4f38-818f-08de789a650e",
+      "lat": 50.41744,
+      "lon": 37.02034,
+      "date": "2026-03-03",
+      "icon": "/icons/0051CA/False/icons/transparent/111.png",
+      "region": "eastern-europe",
+      "conflict": "Ukraine"
+    }
+  },
+  {
+    "event_time": "2026-03-03T00:00:00+00:00",
+    "source_type": "geoconfirmed",
+    "source_id": "geoconfirmed:4bd08e27-beb6-435b-819c-08de789a650e",
+    "latitude": 48.182582,
+    "longitude": 36.913097,
+    "region_code": "eastern-europe",
+    "entity_id": "4bd08e27-beb6-435b-819c-08de789a650e",
+    "entity_name": null,
+    "event_type": "geo_event",
+    "severity": "medium",
+    "confidence": null,
+    "tags": [
+      "Ukraine"
+    ],
+    "title": "Logistics vehicle spotted (Ukraine)",
+    "description": null,
+    "payload": {
+      "id": "4bd08e27-beb6-435b-819c-08de789a650e",
+      "lat": 48.182582,
+      "lon": 36.913097,
+      "date": "2026-03-03",
+      "icon": "/icons/E00000/False/icons/transparent/111.png",
+      "region": "eastern-europe",
+      "conflict": "Ukraine"
+    }
+  },
+  {
+    "event_time": "2026-03-03T00:00:00+00:00",
+    "source_type": "geoconfirmed",
+    "source_id": "geoconfirmed:39d728c1-860b-42d2-81b2-08de789a650e",
+    "latitude": 48.795441,
+    "longitude": 44.590509,
+    "region_code": "eastern-europe",
+    "entity_id": "39d728c1-860b-42d2-81b2-08de789a650e",
+    "entity_name": null,
+    "event_type": "geo_event",
+    "severity": "medium",
+    "confidence": null,
+    "tags": [
+      "Ukraine"
+    ],
+    "title": "Explosion spotted (Ukraine)",
+    "description": null,
+    "payload": {
+      "id": "39d728c1-860b-42d2-81b2-08de789a650e",
+      "lat": 48.795441,
+      "lon": 44.590509,
+      "date": "2026-03-03",
+      "icon": "/icons/AC7339/False/icons/transparent/193.png",
+      "region": "eastern-europe",
+      "conflict": "Ukraine"
+    }
+  },
+  {
+    "event_time": "2026-03-02T00:00:00+00:00",
+    "source_type": "geoconfirmed",
+    "source_id": "geoconfirmed:f24acf7c-b219-4e3d-819a-08de789a650e",
+    "latitude": 50.379434,
+    "longitude": 37.215681,
+    "region_code": "eastern-europe",
+    "entity_id": "f24acf7c-b219-4e3d-819a-08de789a650e",
+    "entity_name": null,
+    "event_type": "geo_event",
+    "severity": "medium",
+    "confidence": null,
+    "tags": [
+      "Ukraine"
+    ],
+    "title": "Tank spotted (Ukraine)",
+    "description": null,
+    "payload": {
+      "id": "f24acf7c-b219-4e3d-819a-08de789a650e",
+      "lat": 50.379434,
+      "lon": 37.215681,
+      "date": "2026-03-02",
+      "icon": "/icons/0051CA/False/icons/transparent/10.png",
+      "region": "eastern-europe",
+      "conflict": "Ukraine"
+    }
+  },
+  {
+    "event_time": "2026-03-02T00:00:00+00:00",
+    "source_type": "geoconfirmed",
+    "source_id": "geoconfirmed:51ab2385-568d-4dc3-819b-08de789a650e",
+    "latitude": 47.722053,
+    "longitude": 36.200371,
+    "region_code": "eastern-europe",
+    "entity_id": "51ab2385-568d-4dc3-819b-08de789a650e",
+    "entity_name": null,
+    "event_type": "geo_event",
+    "severity": "medium",
+    "confidence": null,
+    "tags": [
+      "Ukraine"
+    ],
+    "title": "Logistics vehicle spotted (Ukraine)",
+    "description": null,
+    "payload": {
+      "id": "51ab2385-568d-4dc3-819b-08de789a650e",
+      "lat": 47.722053,
+      "lon": 36.200371,
+      "date": "2026-03-02",
+      "icon": "/icons/0051CA/False/icons/transparent/111.png",
+      "region": "eastern-europe",
+      "conflict": "Ukraine"
+    }
+  },
+  {
+    "event_time": "2026-03-02T00:00:00+00:00",
+    "source_type": "geoconfirmed",
+    "source_id": "geoconfirmed:a8a3a75b-3716-4678-819d-08de789a650e",
+    "latitude": 47.631266,
+    "longitude": 35.922161,
+    "region_code": "eastern-europe",
+    "entity_id": "a8a3a75b-3716-4678-819d-08de789a650e",
+    "entity_name": null,
+    "event_type": "geo_event",
+    "severity": "medium",
+    "confidence": null,
+    "tags": [
+      "Ukraine"
+    ],
+    "title": "Aircraft spotted (Ukraine)",
+    "description": null,
+    "payload": {
+      "id": "a8a3a75b-3716-4678-819d-08de789a650e",
+      "lat": 47.631266,
+      "lon": 35.922161,
+      "date": "2026-03-02",
+      "icon": "/icons/0051CA/False/icons/transparent/61.png",
+      "region": "eastern-europe",
+      "conflict": "Ukraine"
+    }
+  },
+  {
+    "event_time": "2026-03-02T00:00:00+00:00",
+    "source_type": "geoconfirmed",
+    "source_id": "geoconfirmed:7ad604df-4fec-4fc5-8196-08de789a650e",
+    "latitude": 48.621739,
+    "longitude": 37.557978,
+    "region_code": "eastern-europe",
+    "entity_id": "7ad604df-4fec-4fc5-8196-08de789a650e",
+    "entity_name": null,
+    "event_type": "geo_event",
+    "severity": "medium",
+    "confidence": null,
+    "tags": [
+      "Ukraine"
+    ],
+    "title": "Helicopter spotted (Ukraine)",
+    "description": null,
+    "payload": {
+      "id": "7ad604df-4fec-4fc5-8196-08de789a650e",
+      "lat": 48.621739,
+      "lon": 37.557978,
+      "date": "2026-03-02",
+      "icon": "/icons/E00000/False/icons/transparent/50.png",
+      "region": "eastern-europe",
+      "conflict": "Ukraine"
+    }
+  },
+  {
+    "event_time": "2026-03-02T00:00:00+00:00",
+    "source_type": "geoconfirmed",
+    "source_id": "geoconfirmed:e4949d30-900c-4c01-819e-08de789a650e",
+    "latitude": 47.872552,
+    "longitude": 36.313874,
+    "region_code": "eastern-europe",
+    "entity_id": "e4949d30-900c-4c01-819e-08de789a650e",
+    "entity_name": null,
+    "event_type": "geo_event",
+    "severity": "medium",
+    "confidence": null,
+    "tags": [
+      "Ukraine"
+    ],
+    "title": "Logistics vehicle spotted (Ukraine)",
+    "description": null,
+    "payload": {
+      "id": "e4949d30-900c-4c01-819e-08de789a650e",
+      "lat": 47.872552,
+      "lon": 36.313874,
+      "date": "2026-03-02",
+      "icon": "/icons/0051CA/False/icons/transparent/111.png",
+      "region": "eastern-europe",
+      "conflict": "Ukraine"
+    }
+  },
+  {
+    "event_time": "2026-03-02T00:00:00+00:00",
+    "source_type": "geoconfirmed",
+    "source_id": "geoconfirmed:a7a43ce8-0662-4de9-81b3-08de789a650e",
+    "latitude": 44.67511199075771,
+    "longitude": 37.77976226320279,
+    "region_code": "eastern-europe",
+    "entity_id": "a7a43ce8-0662-4de9-81b3-08de789a650e",
+    "entity_name": null,
+    "event_type": "geo_event",
+    "severity": "medium",
+    "confidence": null,
+    "tags": [
+      "Ukraine"
+    ],
+    "title": "Artillery spotted (Ukraine)",
+    "description": null,
+    "payload": {
+      "id": "a7a43ce8-0662-4de9-81b3-08de789a650e",
+      "lat": 44.67511199075771,
+      "lon": 37.77976226320279,
+      "date": "2026-03-02",
+      "icon": "/icons/0051CA/False/icons/transparent/30.png",
+      "region": "eastern-europe",
+      "conflict": "Ukraine"
+    }
+  },
+  {
+    "event_time": "2026-03-01T00:00:00+00:00",
+    "source_type": "geoconfirmed",
+    "source_id": "geoconfirmed:0ce9ba55-5603-4dce-9b72-08de77060c79",
+    "latitude": 47.046108,
+    "longitude": 37.362137,
+    "region_code": "eastern-europe",
+    "entity_id": "0ce9ba55-5603-4dce-9b72-08de77060c79",
+    "entity_name": null,
+    "event_type": "geo_event",
+    "severity": "medium",
+    "confidence": null,
+    "tags": [
+      "Ukraine"
+    ],
+    "title": "Bridge spotted (Ukraine)",
+    "description": null,
+    "payload": {
+      "id": "0ce9ba55-5603-4dce-9b72-08de77060c79",
+      "lat": 47.046108,
+      "lon": 37.362137,
+      "date": "2026-03-01",
+      "icon": "/icons/0051CA/False/icons/transparent/181.png",
+      "region": "eastern-europe",
+      "conflict": "Ukraine"
+    }
+  },
+  {
+    "event_time": "2026-03-01T00:00:00+00:00",
+    "source_type": "geoconfirmed",
+    "source_id": "geoconfirmed:6b4fe23e-287b-42db-9b8b-08de77060c79",
+    "latitude": 49.54423,
+    "longitude": 37.96953,
+    "region_code": "eastern-europe",
+    "entity_id": "6b4fe23e-287b-42db-9b8b-08de77060c79",
+    "entity_name": null,
+    "event_type": "geo_event",
+    "severity": "medium",
+    "confidence": null,
+    "tags": [
+      "Ukraine"
+    ],
+    "title": "Air defense spotted (Ukraine)",
+    "description": null,
+    "payload": {
+      "id": "6b4fe23e-287b-42db-9b8b-08de77060c79",
+      "lat": 49.54423,
+      "lon": 37.96953,
+      "date": "2026-03-01",
+      "icon": "/icons/E00000/False/icons/transparent/42.png",
+      "region": "eastern-europe",
+      "conflict": "Ukraine"
+    }
+  },
+  {
+    "event_time": "2026-03-01T00:00:00+00:00",
+    "source_type": "geoconfirmed",
+    "source_id": "geoconfirmed:a29f2b33-d97a-4f58-8182-08de789a650e",
+    "latitude": 44.676748,
+    "longitude": 37.797849,
+    "region_code": "eastern-europe",
+    "entity_id": "a29f2b33-d97a-4f58-8182-08de789a650e",
+    "entity_name": null,
+    "event_type": "geo_event",
+    "severity": "medium",
+    "confidence": null,
+    "tags": [
+      "Ukraine"
+    ],
+    "title": "Artillery spotted (Ukraine)",
+    "description": null,
+    "payload": {
+      "id": "a29f2b33-d97a-4f58-8182-08de789a650e",
+      "lat": 44.676748,
+      "lon": 37.797849,
+      "date": "2026-03-01",
+      "icon": "/icons/E00000/False/icons/transparent/30.png",
+      "region": "eastern-europe",
+      "conflict": "Ukraine"
+    }
+  },
+  {
+    "event_time": "2026-03-01T00:00:00+00:00",
+    "source_type": "geoconfirmed",
+    "source_id": "geoconfirmed:ee701eff-54ca-4b0e-8185-08de789a650e",
+    "latitude": 44.668667,
+    "longitude": 37.783579,
+    "region_code": "eastern-europe",
+    "entity_id": "ee701eff-54ca-4b0e-8185-08de789a650e",
+    "entity_name": null,
+    "event_type": "geo_event",
+    "severity": "medium",
+    "confidence": null,
+    "tags": [
+      "Ukraine"
+    ],
+    "title": "Artillery spotted (Ukraine)",
+    "description": null,
+    "payload": {
+      "id": "ee701eff-54ca-4b0e-8185-08de789a650e",
+      "lat": 44.668667,
+      "lon": 37.783579,
+      "date": "2026-03-01",
+      "icon": "/icons/0051CA/False/icons/transparent/30.png",
+      "region": "eastern-europe",
+      "conflict": "Ukraine"
+    }
+  },
+  {
+    "event_time": "2026-03-01T00:00:00+00:00",
+    "source_type": "geoconfirmed",
+    "source_id": "geoconfirmed:671e776d-a3d9-405b-9b7b-08de77060c79",
+    "latitude": 47.79985,
+    "longitude": 36.07393,
+    "region_code": "eastern-europe",
+    "entity_id": "671e776d-a3d9-405b-9b7b-08de77060c79",
+    "entity_name": null,
+    "event_type": "geo_event",
+    "severity": "medium",
+    "confidence": null,
+    "tags": [
+      "Ukraine"
+    ],
+    "title": "Missile spotted (Ukraine)",
+    "description": null,
+    "payload": {
+      "id": "671e776d-a3d9-405b-9b7b-08de77060c79",
+      "lat": 47.79985,
+      "lon": 36.07393,
+      "date": "2026-03-01",
+      "icon": "/icons/E00000/False/icons/transparent/100.png",
+      "region": "eastern-europe",
+      "conflict": "Ukraine"
+    }
+  },
+  {
+    "event_time": "2026-03-01T00:00:00+00:00",
+    "source_type": "geoconfirmed",
+    "source_id": "geoconfirmed:4e57100d-2a43-4c37-6a51-08de77e5badc",
+    "latitude": 47.643783,
+    "longitude": 35.283065,
+    "region_code": "eastern-europe",
+    "entity_id": "4e57100d-2a43-4c37-6a51-08de77e5badc",
+    "entity_name": null,
+    "event_type": "geo_event",
+    "severity": "medium",
+    "confidence": null,
+    "tags": [
+      "Ukraine"
+    ],
+    "title": "Logistics vehicle spotted (Ukraine)",
+    "description": null,
+    "payload": {
+      "id": "4e57100d-2a43-4c37-6a51-08de77e5badc",
+      "lat": 47.643783,
+      "lon": 35.283065,
+      "date": "2026-03-01",
+      "icon": "/icons/0051CA/False/icons/transparent/111.png",
+      "region": "eastern-europe",
+      "conflict": "Ukraine"
+    }
+  },
+  {
+    "event_time": "2026-03-01T00:00:00+00:00",
+    "source_type": "geoconfirmed",
+    "source_id": "geoconfirmed:22ece979-0665-47e5-9b73-08de77060c79",
+    "latitude": 47.049185,
+    "longitude": 37.35457,
+    "region_code": "eastern-europe",
+    "entity_id": "22ece979-0665-47e5-9b73-08de77060c79",
+    "entity_name": null,
+    "event_type": "geo_event",
+    "severity": "medium",
+    "confidence": null,
+    "tags": [
+      "Ukraine"
+    ],
+    "title": "Bridge spotted (Ukraine)",
+    "description": null,
+    "payload": {
+      "id": "22ece979-0665-47e5-9b73-08de77060c79",
+      "lat": 47.049185,
+      "lon": 37.35457,
+      "date": "2026-03-01",
+      "icon": "/icons/0051CA/False/icons/transparent/181.png",
+      "region": "eastern-europe",
+      "conflict": "Ukraine"
+    }
+  },
+  {
+    "event_time": "2026-03-01T00:00:00+00:00",
+    "source_type": "geoconfirmed",
+    "source_id": "geoconfirmed:a551d07e-52ec-4342-9b8c-08de77060c79",
+    "latitude": 48.362067,
+    "longitude": 37.24167,
+    "region_code": "eastern-europe",
+    "entity_id": "a551d07e-52ec-4342-9b8c-08de77060c79",
+    "entity_name": null,
+    "event_type": "geo_event",
+    "severity": "medium",
+    "confidence": null,
+    "tags": [
+      "Ukraine"
+    ],
+    "title": "Tank spotted (Ukraine)",
+    "description": null,
+    "payload": {
+      "id": "a551d07e-52ec-4342-9b8c-08de77060c79",
+      "lat": 48.362067,
+      "lon": 37.24167,
+      "date": "2026-03-01",
+      "icon": "/icons/0051CA/False/icons/transparent/10.png",
+      "region": "eastern-europe",
+      "conflict": "Ukraine"
+    }
+  },
+  {
+    "event_time": "2026-03-01T00:00:00+00:00",
+    "source_type": "geoconfirmed",
+    "source_id": "geoconfirmed:6ed6771b-f002-4840-8195-08de789a650e",
+    "latitude": 46.769864432,
+    "longitude": 36.3161556406,
+    "region_code": "eastern-europe",
+    "entity_id": "6ed6771b-f002-4840-8195-08de789a650e",
+    "entity_name": null,
+    "event_type": "geo_event",
+    "severity": "medium",
+    "confidence": null,
+    "tags": [
+      "Ukraine"
+    ],
+    "title": "Geolocated event spotted (Ukraine)",
+    "description": null,
+    "payload": {
+      "id": "6ed6771b-f002-4840-8195-08de789a650e",
+      "lat": 46.769864432,
+      "lon": 36.3161556406,
+      "date": "2026-03-01",
+      "icon": "/icons/E00000/False/icons/transparent/202.png",
+      "region": "eastern-europe",
+      "conflict": "Ukraine"
+    }
+  },
+  {
+    "event_time": "2026-03-01T00:00:00+00:00",
+    "source_type": "geoconfirmed",
+    "source_id": "geoconfirmed:56976f97-c154-4f70-8197-08de789a650e",
+    "latitude": 47.538866,
+    "longitude": 35.756091,
+    "region_code": "eastern-europe",
+    "entity_id": "56976f97-c154-4f70-8197-08de789a650e",
+    "entity_name": null,
+    "event_type": "geo_event",
+    "severity": "medium",
+    "confidence": null,
+    "tags": [
+      "Ukraine"
+    ],
+    "title": "Logistics vehicle spotted (Ukraine)",
+    "description": null,
+    "payload": {
+      "id": "56976f97-c154-4f70-8197-08de789a650e",
+      "lat": 47.538866,
+      "lon": 35.756091,
+      "date": "2026-03-01",
+      "icon": "/icons/E00000/False/icons/transparent/111.png",
+      "region": "eastern-europe",
+      "conflict": "Ukraine"
+    }
+  }
+]

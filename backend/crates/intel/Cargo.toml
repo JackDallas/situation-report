@@ -1,0 +1,19 @@
+[package]
+name = "sr-intel"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+sr-config = { path = "../config" }
+sr-sources = { path = "../sources" }
+sr-types = { path = "../types" }
+sqlx.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+reqwest.workspace = true
+anyhow.workspace = true
+ts-rs.workspace = true

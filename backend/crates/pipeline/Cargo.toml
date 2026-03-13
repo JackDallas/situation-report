@@ -1,0 +1,24 @@
+[package]
+name = "sr-pipeline"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+sr-sources = { path = "../sources" }
+sr-types = { path = "../types" }
+sr-config = { path = "../config" }
+sr-intel = { path = "../intel" }
+sr-embeddings = { path = "../embeddings" }
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+uuid.workspace = true
+reqwest.workspace = true
+sqlx.workspace = true
+pgvector.workspace = true
+ts-rs.workspace = true
+anyhow.workspace = true
+petgraph.workspace = true
+unicode-normalization.workspace = true

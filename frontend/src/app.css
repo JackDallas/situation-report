@@ -1,0 +1,87 @@
+@import 'tailwindcss';
+
+@theme {
+	--color-bg-primary: hsl(222 47% 6%);
+	--color-bg-card: hsl(222 30% 10%);
+	--color-bg-card-hover: hsl(222 30% 13%);
+	--color-bg-surface: hsl(222 30% 14%);
+	--color-border-default: hsl(222 20% 18%);
+	--color-border-hover: hsl(222 20% 25%);
+
+	--color-accent: hsl(210 100% 50%);
+	--color-accent-muted: hsl(210 100% 30%);
+	--color-alert: hsl(0 72% 51%);
+	--color-alert-muted: hsl(0 72% 30%);
+	--color-success: hsl(142 71% 45%);
+	--color-success-muted: hsl(142 71% 25%);
+	--color-warning: hsl(38 92% 50%);
+	--color-warning-muted: hsl(38 92% 30%);
+
+	--color-text-primary: hsl(210 40% 96%);
+	--color-text-secondary: hsl(215 20% 65%);
+	--color-text-muted: hsl(215 15% 45%);
+}
+
+body {
+	background-color: var(--color-bg-primary);
+	color: var(--color-text-primary);
+	font-family: 'Inter', ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+	width: 6px;
+	height: 6px;
+}
+::-webkit-scrollbar-track {
+	background: transparent;
+}
+::-webkit-scrollbar-thumb {
+	background: var(--color-border-default);
+	border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+	background: var(--color-border-hover);
+}
+
+/* MapLibre popup dark theme */
+.sr-popup .maplibregl-popup-content {
+	background: hsl(222 30% 10%);
+	border: 1px solid hsl(222 20% 20%);
+	border-radius: 8px;
+	padding: 12px;
+	box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+}
+
+.sr-popup .maplibregl-popup-close-button {
+	color: hsl(215 15% 45%);
+	font-size: 18px;
+	padding: 2px 6px;
+	right: 4px;
+	top: 4px;
+}
+
+.sr-popup .maplibregl-popup-close-button:hover {
+	color: hsl(210 40% 96%);
+	background: transparent;
+}
+
+.sr-popup .maplibregl-popup-tip {
+	border-top-color: hsl(222 30% 10%);
+}
+
+.sr-popup.maplibregl-popup-anchor-bottom .maplibregl-popup-tip {
+	border-top-color: hsl(222 30% 10%);
+}
+
+.sr-popup.maplibregl-popup-anchor-top .maplibregl-popup-tip {
+	border-bottom-color: hsl(222 30% 10%);
+}
+
+.sr-popup.maplibregl-popup-anchor-left .maplibregl-popup-tip {
+	border-right-color: hsl(222 30% 10%);
+}
+
+.sr-popup.maplibregl-popup-anchor-right .maplibregl-popup-tip {
+	border-left-color: hsl(222 30% 10%);
+}

@@ -1,0 +1,203 @@
+services:
+  postgres:
+    image: timescale/timescaledb-ha:pg17
+    environment:
+      POSTGRES_DB: situationreport
+      POSTGRES_USER: sitrep
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - ${PG_DATA_DIR:-pgdata}:/home/postgres/pgdata/data
+      # Optional: mount external storage for tiered data management
+      # - /path/to/cold-storage:/mnt/cold
+      # - /path/to/backups:/mnt/backups
+      # - /path/to/wal-archive:/mnt/wal
+    ports:
+      - "5432:5432"
+    shm_size: "18g"
+    command:
+      - "postgres"
+      # -- Memory --
+      - "-c"
+      - "shared_buffers=${PG_SHARED_BUFFERS:-16GB}"
+      - "-c"
+      - "effective_cache_size=${PG_EFFECTIVE_CACHE:-48GB}"
+      - "-c"
+      - "work_mem=16MB"
+      - "-c"
+      - "maintenance_work_mem=2GB"
+      - "-c"
+      - "huge_pages=try"
+      # -- WAL / Checkpoints --
+      - "-c"
+      - "wal_buffers=64MB"
+      - "-c"
+      - "max_wal_size=4GB"
+      - "-c"
+      - "min_wal_size=1GB"
+      - "-c"
+      - "checkpoint_timeout=15min"
+      - "-c"
+      - "checkpoint_completion_target=0.9"
+      - "-c"
+      - "synchronous_commit=off"
+      - "-c"
+      - "wal_level=replica"
+      # -- WAL Archiving (to SATA backup drive) --
+      - "-c"
+      - "archive_mode=on"
+      - "-c"
+      - "archive_command=test ! -f /mnt/wal/%f && cp %p /mnt/wal/%f"
+      - "-c"
+      - "archive_timeout=300"
+      # -- Connections --
+      - "-c"
+      - "max_connections=50"
+      # -- Parallelism --
+      - "-c"
+      - "max_worker_processes=16"
+      - "-c"
+      - "max_parallel_workers=8"
+      - "-c"
+      - "max_parallel_workers_per_gather=4"
+      - "-c"
+      - "max_parallel_maintenance_workers=4"
+      # -- I/O --
+      - "-c"
+      - "random_page_cost=1.1"
+      - "-c"
+      - "effective_io_concurrency=200"
+      # -- Autovacuum --
+      - "-c"
+      - "autovacuum_max_workers=5"
+      - "-c"
+      - "autovacuum_vacuum_scale_factor=0.01"
+      - "-c"
+      - "autovacuum_vacuum_cost_delay=0"
+      - "-c"
+      - "autovacuum_naptime=30s"
+      # -- TimescaleDB --
+      - "-c"
+      - "timescaledb.max_background_workers=8"
+      # -- pgvector --
+      - "-c"
+      - "hnsw.ef_search=100"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sitrep"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    environment:
+      OLLAMA_KEEP_ALIVE: "24h"
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - ollama-models:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "ollama list >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+  # Pull the enrichment model on first start (runs once, then exits)
+  ollama-pull:
+    image: ollama/ollama:latest
+    container_name: ollama-pull
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        OLLAMA_HOST=http://ollama:11434 ollama pull ${OLLAMA_MODEL:-qwen3.5:9b-q8_0}
+        echo "Model pull complete"
+    restart: "no"
+
+  app:
+    build: .
+    image: situationreport:latest
+    container_name: situationreport
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgres://sitrep:${DB_PASSWORD}@postgres/situationreport
+      BIND_ADDR: 0.0.0.0:3000
+      STATIC_DIR: /app/static
+      RUST_LOG: ${RUST_LOG:-info}
+      # Intelligence layer (Claude API — used for analysis/narrative only)
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      INTEL_DAILY_BUDGET_USD: ${INTEL_DAILY_BUDGET_USD:-10}
+      INTEL_ANALYSIS_MODEL: ${INTEL_ANALYSIS_MODEL:-claude-sonnet-4-6}
+      # Local LLM for enrichment (Ollama)
+      OLLAMA_URL: http://ollama:11434
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen3.5:9b-q8_0}
+      # Source API keys
+      SHODAN_API_KEY: ${SHODAN_API_KEY:-}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
+      ACLED_EMAIL: ${ACLED_EMAIL:-}
+      ACLED_PASSWORD: ${ACLED_PASSWORD:-}
+      FIRMS_MAP_KEY: ${FIRMS_MAP_KEY:-}
+      OTX_API_KEY: ${OTX_API_KEY:-}
+      OPENSKY_CLIENT_ID: ${OPENSKY_CLIENT_ID:-}
+      OPENSKY_CLIENT_SECRET: ${OPENSKY_CLIENT_SECRET:-}
+      AISSTREAM_API_KEY: ${AISSTREAM_API_KEY:-}
+      GFW_API_TOKEN: ${GFW_API_TOKEN:-}
+      EXA_API_KEY: ${EXA_API_KEY:-}
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
+      TELEGRAM_SESSION_PATH: /app/data/telegram.session
+      # Vector embeddings (BGE-M3)
+      EMBEDDINGS_ENABLED: ${EMBEDDINGS_ENABLED:-true}
+      EMBEDDINGS_CACHE_DIR: /app/models
+      # NVIDIA GPU (CUDA EP for ONNX Runtime)
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    volumes:
+      - embeddings-cache:/app/models
+      - ./data:/app/data
+    ports:
+      - "3001:3000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+volumes:
+  pgdata:
+  embeddings-cache:
+  ollama-models:

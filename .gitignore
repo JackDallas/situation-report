@@ -1,0 +1,42 @@
+# Rust
+backend/target/
+backend/.sqlx/
+
+# Node
+frontend/node_modules/
+frontend/build/
+frontend/.svelte-kit/
+
+# Environment & secrets
+.env
+.env.*
+!.env.example
+ssh_key
+*.pem
+*.session
+
+# Data (runtime state)
+data/
+backend/data/
+
+# Deployment scripts (host-specific)
+deploy.sh
+monitor.sh
+
+# Claude Code
+.claude/
+
+# Playwright
+.playwright-mcp/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Development screenshots
+*.png
+!frontend/static/**/*.png
+
+# Logs
+monitor-log.txt
+*.log

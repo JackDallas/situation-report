@@ -1,0 +1,27 @@
+[package]
+name = "sr-sources"
+edition.workspace = true
+version.workspace = true
+
+[dependencies]
+sr-db = { path = "../db" }
+sr-types = { path = "../types" }
+ts-rs.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+chrono.workspace = true
+tracing.workspace = true
+anyhow.workspace = true
+sqlx.workspace = true
+reqwest.workspace = true
+async-trait = "0.1"
+tokio-tungstenite = { version = "0.26", features = ["rustls-tls-webpki-roots"] }
+futures-util = "0.3"
+csv = "1"
+url = "2"
+quick-xml = "0.37"
+regex = "1"
+bytes = "1"
+grammers-client = { version = "0.9", default-features = false }
+grammers-session = { version = "0.9", features = ["sqlite-storage"] }

@@ -1,0 +1,1340 @@
+[
+  {
+    "event_time": "2026-03-04T12:03:02.807666+00:00",
+    "source_type": "rss-news",
+    "source_id": "https://www.dw.com/en/new-head-of-german-catholics-pledges-reform/a-76114684?maca=en-rss-en-all-1573-rdf",
+    "latitude": null,
+    "longitude": null,
+    "region_code": null,
+    "entity_id": null,
+    "entity_name": null,
+    "event_type": "news_article",
+    "severity": "low",
+    "confidence": null,
+    "tags": [
+      "source:Deutsche Welle"
+    ],
+    "title": "New head of German Catholics pledges reform",
+    "description": "https://www.dw.com/en/new-head-of-german-catholics-pledges-reform/a-76114684?maca=en-rss-en-all-1573-rdf",
+    "payload": {
+      "url": "https://www.dw.com/en/new-head-of-german-catholics-pledges-reform/a-76114684?maca=en-rss-en-all-1573-rdf",
+      "guid": "https://www.dw.com/en/new-head-of-german-catholics-pledges-reform/a-76114684?maca=en-rss-en-all-1573-rdf",
+      "title": "New head of German Catholics pledges reform",
+      "feed_id": "dw",
+      "language": "en",
+      "enrichment": {
+        "model": "qwen3.5:9b-q8_0",
+        "topics": [
+          "german-catholic-church-reform",
+          "european-religious-modernization"
+        ],
+        "summary": "The new leader of the German Catholic Church has announced a commitment to implementing internal reforms, signaling a shift in strategy for the organization. This development is significant as it reflects broader efforts within European religious institutions to modernize and address contemporary social challenges.",
+        "entities": [
+          {
+            "name": "German Catholic Church",
+            "role": "actor",
+            "entity_type": "organization",
+            "wikidata_qid": "Q106398"
+          },
+          {
+            "name": "New head of German Catholics",
+            "role": "actor",
+            "entity_type": "person"
+          }
+        ],
+        "sentiment": 0.4000000059604645,
+        "tokens_used": 1572,
+        "relationships": [
+          {
+            "type": "leadership",
+            "source": "New head of German Catholics",
+            "target": "German Catholic Church",
+            "confidence": 0.949999988079071
+          }
+        ],
+        "state_changes": [],
+        "relevance_score": 0.30000001192092896,
+        "translated_title": "New head of German Catholics pledges reform",
+        "inferred_location": {
+          "lat": 51.1657,
+          "lon": 10.4515,
+          "name": "Germany"
+        },
+        "original_language": "en"
+      },
+      "description": "The number of Christians in Germany is declining, and society is divided. However, Heiner Wilmer, the new chairman of the German Catholic Bishops' Conference, is calling for unity and dialogue.",
+      "source_name": "Deutsche Welle"
+    }
+  },
+  {
+    "event_time": "2026-03-04T12:03:02.807665+00:00",
+    "source_type": "rss-news",
+    "source_id": "https://www.dw.com/en/merz-in-china-german-chancellor-xi-seek-more-cooperation/live-76110529?maca=en-rss-en-all-1573-rdf",
+    "latitude": null,
+    "longitude": null,
+    "region_code": null,
+    "entity_id": null,
+    "entity_name": null,
+    "event_type": "news_article",
+    "severity": "low",
+    "confidence": null,
+    "tags": [
+      "source:Deutsche Welle"
+    ],
+    "title": "Merz in China: German chancellor, Xi seek more cooperation",
+    "description": "https://www.dw.com/en/merz-in-china-german-chancellor-xi-seek-more-cooperation/live-76110529?maca=en-rss-en-all-1573-rdf",
+    "payload": {
+      "url": "https://www.dw.com/en/merz-in-china-german-chancellor-xi-seek-more-cooperation/live-76110529?maca=en-rss-en-all-1573-rdf",
+      "guid": "https://www.dw.com/en/merz-in-china-german-chancellor-xi-seek-more-cooperation/live-76110529?maca=en-rss-en-all-1573-rdf",
+      "title": "Merz in China: German chancellor, Xi seek more cooperation",
+      "feed_id": "dw",
+      "language": "en",
+      "enrichment": {
+        "model": "qwen3.5:9b-q8_0",
+        "topics": [
+          "germany-china-diplomacy",
+          "merz-xi-meeting"
+        ],
+        "summary": "German Chancellor Friedrich Merz met with Chinese President Xi Jinping to discuss strengthening bilateral cooperation, focusing on economic ties and strategic alignment. This visit aims to stabilize Germany-China relations amidst broader geopolitical shifts and potential trade recalibrations.",
+        "entities": [
+          {
+            "name": "Friedrich Merz",
+            "role": "actor",
+            "entity_type": "person",
+            "wikidata_qid": "Q100496"
+          },
+          {
+            "name": "Xi Jinping",
+            "role": "actor",
+            "entity_type": "person",
+            "wikidata_qid": "Q38725"
+          },
+          {
+            "name": "Germany",
+            "role": "location",
+            "entity_type": "location",
+            "wikidata_qid": "Q183"
+          },
+          {
+            "name": "China",
+            "role": "location",
+            "entity_type": "location",
+            "wikidata_qid": "Q148"
+          }
+        ],
+        "sentiment": 0.4000000059604645,
+        "tokens_used": 1718,
+        "relationships": [
+          {
+            "type": "leadership",
+            "source": "Friedrich Merz",
+            "target": "Xi Jinping",
+            "confidence": 0.949999988079071
+          },
+          {
+            "type": "alliance",
+            "source": "Germany",
+            "target": "China",
+            "confidence": 0.699999988079071
+          }
+        ],
+        "state_changes": [],
+        "relevance_score": 0.6499999761581421,
+        "translated_title": "German Chancellor Merz in China: Leaders Seek Enhanced Cooperation",
+        "inferred_location": {
+          "lat": 39.9042,
+          "lon": 116.4074,
+          "name": "Beijing, China"
+        },
+        "original_language": "en"
+      },
+      "description": "Friedrich Merz said he saw a \"great opportunity\" for the industrial exporters, while Xi Jinping called for \"enhanced strategic cooperation.\" China has been courting Western leaders amid Trump's trade tensions.",
+      "source_name": "Deutsche Welle"
+    }
+  },
+  {
+    "event_time": "2026-03-04T12:03:02.807665+00:00",
+    "source_type": "rss-news",
+    "source_id": "https://www.dw.com/en/the-diy-solar-hack-arriving-in-us-homes/a-76106659?maca=en-rss-en-all-1573-rdf",
+    "latitude": null,
+    "longitude": null,
+    "region_code": null,
+    "entity_id": null,
+    "entity_name": null,
+    "event_type": "news_article",
+    "severity": "low",
+    "confidence": null,
+    "tags": [
+      "source:Deutsche Welle"
+    ],
+    "title": "The DIY solar hack arriving in US homes",
+    "description": "https://www.dw.com/en/the-diy-solar-hack-arriving-in-us-homes/a-76106659?maca=en-rss-en-all-1573-rdf",
+    "payload": {
+      "url": "https://www.dw.com/en/the-diy-solar-hack-arriving-in-us-homes/a-76106659?maca=en-rss-en-all-1573-rdf",
+      "guid": "https://www.dw.com/en/the-diy-solar-hack-arriving-in-us-homes/a-76106659?maca=en-rss-en-all-1573-rdf",
+      "title": "The DIY solar hack arriving in US homes",
+      "feed_id": "dw",
+      "language": "en",
+      "enrichment": {
+        "model": "qwen3.5:9b-q8_0",
+        "topics": [
+          "us-energy-grid-modernization",
+          "residential-solar-adoption"
+        ],
+        "summary": "A new method allowing homeowners to bypass utility metering regulations for solar power is gaining traction across the United States, potentially disrupting traditional energy distribution models. This development highlights a growing trend of decentralized energy adoption that challenges existing grid infrastructure and regulatory frameworks.",
+        "entities": [],
+        "sentiment": 0.10000000149011612,
+        "tokens_used": 1426,
+        "relationships": [],
+        "state_changes": [],
+        "relevance_score": 0.3499999940395355,
+        "translated_title": "The DIY solar hack arriving in US homes",
+        "inferred_location": {
+          "lat": 37.0902,
+          "lon": -95.7129,
+          "name": "United States"
+        },
+        "original_language": "en"
+      },
+      "description": "Americans are embracing easy, plug\u2011and\u2011play solar units that slash energy costs \u2014 even as Washington tries to slow the clean\u2011energy shift.",
+      "source_name": "Deutsche Welle"
+    }
+  },
+  {
+    "event_time": "2026-03-04T12:03:02.807664+00:00",
+    "source_type": "rss-news",
+    "source_id": "https://www.dw.com/en/hungary-s-orban-accuses-kyiv-of-plotting-energy-disruption/a-76121168?maca=en-rss-en-all-1573-rdf",
+    "latitude": null,
+    "longitude": null,
+    "region_code": null,
+    "entity_id": null,
+    "entity_name": null,
+    "event_type": "news_article",
+    "severity": "low",
+    "confidence": null,
+    "tags": [
+      "source:Deutsche Welle"
+    ],
+    "title": "Hungary's Orban accuses Kyiv of plotting energy disruption",
+    "description": "https://www.dw.com/en/hungary-s-orban-accuses-kyiv-of-plotting-energy-disruption/a-76121168?maca=en-rss-en-all-1573-rdf",
+    "payload": {
+      "url": "https://www.dw.com/en/hungary-s-orban-accuses-kyiv-of-plotting-energy-disruption/a-76121168?maca=en-rss-en-all-1573-rdf",
+      "guid": "https://www.dw.com/en/hungary-s-orban-accuses-kyiv-of-plotting-energy-disruption/a-76121168?maca=en-rss-en-all-1573-rdf",
+      "title": "Hungary's Orban accuses Kyiv of plotting energy disruption",
+      "feed_id": "dw",
+      "language": "en",
+      "enrichment": {
+        "model": "qwen3.5:9b-q8_0",
+        "topics": [
+          "hungary-ukraine-energy-dispute",
+          "orban-kyiv-rhetoric"
+        ],
+        "summary": "Hungarian Prime Minister Viktor Orban accused the Ukrainian government of orchestrating a plot to disrupt energy supplies, likely targeting infrastructure critical to Hungary's power grid. This accusation highlights deepening political friction between Budapest and Kyiv regarding energy security amidst the ongoing conflict.",
+        "entities": [
+          {
+            "name": "Viktor Orban",
+            "role": "actor",
+            "entity_type": "person",
+            "wikidata_qid": "Q5244"
+          },
+          {
+            "name": "Hungary",
+            "role": "location",
+            "entity_type": "location",
+            "wikidata_qid": "Q28"
+          },
+          {
+            "name": "Ukraine",
+            "role": "mentioned",
+            "entity_type": "location",
+            "wikidata_qid": "Q212"
+          },
+          {
+            "name": "Kyiv",
+            "role": "mentioned",
+            "entity_type": "location",
+            "wikidata_qid": "Q1899"
+          }
+        ],
+        "sentiment": -0.30000001192092896,
+        "tokens_used": 1732,
+        "relationships": [
+          {
+            "type": "leadership",
+            "source": "Viktor Orban",
+            "target": "Hungary",
+            "confidence": 0.949999988079071
+          },
+          {
+            "type": "geographic_association",
+            "source": "Ukraine",
+            "target": "Kyiv",
+            "confidence": 0.949999988079071
+          }
+        ],
+        "state_changes": [],
+        "relevance_score": 0.6499999761581421,
+        "translated_title": "Hungary's Orban accuses Kyiv of plotting energy disruption",
+        "inferred_location": {
+          "lat": 47.4979,
+          "lon": 19.0402,
+          "name": "Budapest, Hungary"
+        },
+        "original_language": "en"
+      },
+      "description": "Viktor Orban has escalated a dispute with Ukraine, accusing it of planning to disrupt his country's energy system. But the EU says neither Hungary nor Slovakia is at risk of oil shortages.",
+      "source_name": "Deutsche Welle"
+    }
+  },
+  {
+    "event_time": "2026-03-04T12:03:02.807664+00:00",
+    "source_type": "rss-news",
+    "source_id": "https://www.dw.com/en/nickolay-mladenov-the-bulgarian-leading-the-board-of-peace/a-76122062?maca=en-rss-en-all-1573-rdf",
+    "latitude": null,
+    "longitude": null,
+    "region_code": null,
+    "entity_id": null,
+    "entity_name": null,
+    "event_type": "news_article",
+    "severity": "low",
+    "confidence": null,
+    "tags": [
+      "source:Deutsche Welle"
+    ],
+    "title": "Nickolay Mladenov: the Bulgarian leading the Board of Peace",
+    "description": "https://www.dw.com/en/nickolay-mladenov-the-bulgarian-leading-the-board-of-peace/a-76122062?maca=en-rss-en-all-1573-rdf",
+    "payload": {
+      "url": "https://www.dw.com/en/nickolay-mladenov-the-bulgarian-leading-the-board-of-peace/a-76122062?maca=en-rss-en-all-1573-rdf",
+      "guid": "https://www.dw.com/en/nickolay-mladenov-the-bulgarian-leading-the-board-of-peace/a-76122062?maca=en-rss-en-all-1573-rdf",
+      "title": "Nickolay Mladenov: the Bulgarian leading the Board of Peace",
+      "feed_id": "dw",
+      "language": "en",
+      "enrichment": {
+        "model": "qwen3.5:9b-q8_0",
+        "topics": [
+          "bulgarian-diplomacy-ukraine",
+          "eastern-europe-peace-mediators"
+        ],
+        "summary": "Bulgarian diplomat Nickolay Mladenov is highlighted for his leadership role in facilitating peace negotiations, likely referring to his tenure as Special Envoy for Ukraine or similar high-profile mediation efforts. His work underscores Bulgaria's strategic position in bridging Eastern and Western diplomatic interests during ongoing regional conflicts.",
+        "entities": [
+          {
+            "name": "Nickolay Mladenov",
+            "role": "actor",
+            "entity_type": "person",
+            "wikidata_qid": "Q104956"
+          },
+          {
+            "name": "Bulgaria",
+            "role": "mentioned",
+            "entity_type": "location",
+            "wikidata_qid": "Q219"
+          }
+        ],
+        "sentiment": 0.4000000059604645,
+        "tokens_used": 1617,
+        "relationships": [
+          {
+            "type": "leadership",
+            "source": "Nickolay Mladenov",
+            "target": "Bulgaria",
+            "confidence": 0.949999988079071
+          }
+        ],
+        "state_changes": [],
+        "relevance_score": 0.6499999761581421,
+        "translated_title": "Nickolay Mladenov: The Bulgarian Leading the Board of Peace",
+        "inferred_location": {
+          "lat": 42.6977,
+          "lon": 23.3219,
+          "name": "Sofia, Bulgaria"
+        },
+        "original_language": "en"
+      },
+      "description": "As director-general of Donald Trump's Board of Peace and High Representative for Gaza, Bulgarian Nickolay Mladenov faces a massive challenge. Who is the man tasked with implementing the US-brokered peace plan for Gaza?",
+      "source_name": "Deutsche Welle"
+    }
+  },
+  {
+    "event_time": "2026-03-04T12:03:02.807663+00:00",
+    "source_type": "rss-news",
+    "source_id": "https://www.dw.com/en/france-pushes-back-against-maga-political-meddling/a-76122972?maca=en-rss-en-all-1573-rdf",
+    "latitude": null,
+    "longitude": null,
+    "region_code": null,
+    "entity_id": null,
+    "entity_name": null,
+    "event_type": "news_article",
+    "severity": "low",
+    "confidence": null,
+    "tags": [
+      "source:Deutsche Welle"
+    ],
+    "title": "France pushes back against MAGA political meddling",
+    "description": "https://www.dw.com/en/france-pushes-back-against-maga-political-meddling/a-76122972?maca=en-rss-en-all-1573-rdf",
+    "payload": {
+      "url": "https://www.dw.com/en/france-pushes-back-against-maga-political-meddling/a-76122972?maca=en-rss-en-all-1573-rdf",
+      "guid": "https://www.dw.com/en/france-pushes-back-against-maga-political-meddling/a-76122972?maca=en-rss-en-all-1573-rdf",
+      "title": "France pushes back against MAGA political meddling",
+      "feed_id": "dw",
+      "language": "en",
+      "enrichment": {
+        "model": "qwen3.5:9b-q8_0",
+        "topics": [
+          "france-us-diplomatic-tensions",
+          "maga-political-meddling",
+          "transatlantic-relations"
+        ],
+        "summary": "French officials have formally rejected attempts by US 'Make America Great Again' (MAGA) proponents to interfere in French domestic politics, citing violations of sovereignty and international norms. This diplomatic friction highlights the growing transatlantic tensions between the current French administration and elements of the incoming or potential US political leadership.",
+        "entities": [
+          {
+            "name": "France",
+            "role": "actor",
+            "entity_type": "location",
+            "wikidata_qid": "Q142"
+          },
+          {
+            "name": "Make America Great Again (MAGA)",
+            "role": "mentioned",
+            "entity_type": "organization"
+          }
+        ],
+        "sentiment": -0.4000000059604645,
+        "tokens_used": 1632,
+        "relationships": [
+          {
+            "type": "rivalry",
+            "source": "France",
+            "target": "MAGA proponents",
+            "confidence": 0.8999999761581421
+          },
+          {
+            "type": "geographic_association",
+            "source": "France",
+            "target": "US political leadership",
+            "confidence": 0.800000011920929
+          }
+        ],
+        "state_changes": [],
+        "relevance_score": 0.6499999761581421,
+        "translated_title": "France pushes back against MAGA political meddling",
+        "inferred_location": {
+          "lat": 48.8566,
+          "lon": 2.3522,
+          "name": "Paris, France"
+        },
+        "original_language": "en"
+      },
+      "description": "A French magistrate recently went public about how US envoys had tried to interfere in French national politics. Experts say it is clear that France is a target of disinformation strategies.",
+      "source_name": "Deutsche Welle"
+    }
+  },
+  {
+    "event_time": "2026-03-04T12:03:02.807663+00:00",
+    "source_type": "rss-news",
+    "source_id": "https://www.dw.com/en/germany-news-passenger-attacks-conductor-on-ice-train/live-76128782?maca=en-rss-en-all-1573-rdf",
+    "latitude": null,
+    "longitude": null,
+    "region_code": null,
+    "entity_id": null,
+    "entity_name": null,
+    "event_type": "news_article",
+    "severity": "low",
+    "confidence": null,
+    "tags": [
+      "source:Deutsche Welle"
+    ],
+    "title": "Germany news: Passenger attacks conductor on ICE train",
+    "description": "https://www.dw.com/en/germany-news-passenger-attacks-conductor-on-ice-train/live-76128782?maca=en-rss-en-all-1573-rdf",
+    "payload": {
+      "url": "https://www.dw.com/en/germany-news-passenger-attacks-conductor-on-ice-train/live-76128782?maca=en-rss-en-all-1573-rdf",
+      "guid": "https://www.dw.com/en/germany-news-passenger-attacks-conductor-on-ice-train/live-76128782?maca=en-rss-en-all-1573-rdf",
+      "title": "Germany news: Passenger attacks conductor on ICE train",
+      "feed_id": "dw",
+      "language": "en",
+      "enrichment": {
+        "model": "qwen3.5:9b-q8_0",
+        "topics": [
+          "germany-railway-security",
+          "ice-train-attack"
+        ],
+        "summary": "A passenger attacked a train conductor with a knife during an ICE journey in Germany, prompting police intervention and the arrest of the suspect. This incident highlights ongoing public safety concerns regarding violent crimes on German rail infrastructure.",
+        "entities": [
+          {
+            "name": "Deutsche Welle",
+            "role": "mentioned",
+            "entity_type": "organization",
+            "wikidata_qid": "Q14063"
+          },
+          {
+            "name": "ICE train",
+            "role": "location",
+            "entity_type": "weapon_system",
+            "wikidata_qid": "Q287596"
+          }
+        ],
+        "sentiment": -0.699999988079071,
+        "tokens_used": 1580,
+        "relationships": [],
+        "state_changes": [
+          {
+            "to": "arrested",
+            "from": "at large",
+            "entity": "Passenger (suspect)",
+            "attribute": "status",
+            "certainty": "confirmed"
+          }
+        ],
+        "relevance_score": 0.3499999940395355,
+        "translated_title": "Germany news: Passenger attacks conductor on ICE train",
+        "inferred_location": {
+          "lat": 51.1657,
+          "lon": 10.4515,
+          "name": "Germany"
+        },
+        "original_language": "en"
+      },
+      "description": "A female passenger punched the inspector on a long-distance (ICE) train to Berlin during a ticket check. Meanwhile, renovating the federal president's official residence would cost an estimated \u20ac600 million.",
+      "source_name": "Deutsche Welle"
+    }
+  },
+  {
+    "event_time": "2026-03-04T12:03:02.807662+00:00",
+    "source_type": "rss-news",
+    "source_id": "https://www.dw.com/en/beyond-oil-and-gas-russia-s-nuclear-leverage-explained/a-75949106?maca=en-rss-en-all-1573-rdf",
+    "latitude": null,
+    "longitude": null,
+    "region_code": null,
+    "entity_id": null,
+    "entity_name": null,
+    "event_type": "news_article",
+    "severity": "low",
+    "confidence": null,
+    "tags": [
+      "source:Deutsche Welle"
+    ],
+    "title": "Beyond oil and gas: Russia's nuclear leverage explained",
+    "description": "https://www.dw.com/en/beyond-oil-and-gas-russia-s-nuclear-leverage-explained/a-75949106?maca=en-rss-en-all-1573-rdf",
+    "payload": {
+      "url": "https://www.dw.com/en/beyond-oil-and-gas-russia-s-nuclear-leverage-explained/a-75949106?maca=en-rss-en-all-1573-rdf",
+      "guid": "https://www.dw.com/en/beyond-oil-and-gas-russia-s-nuclear-leverage-explained/a-75949106?maca=en-rss-en-all-1573-rdf",
+      "title": "Beyond oil and gas: Russia's nuclear leverage explained",
+      "feed_id": "dw",
+      "language": "en",
+      "enrichment": {
+        "model": "qwen3.5:9b-q8_0",
+        "topics": [
+          "russia-nuclear-strategy",
+          "nuclear-deterrence-analysis"
+        ],
+        "summary": "Deutsche Welle analyzes how Russia utilizes its nuclear arsenal as a strategic deterrent and diplomatic tool, extending beyond traditional energy exports to influence global security dynamics. The article explains the mechanics of nuclear coercion in modern geopolitics without detailing specific recent operational events.",
+        "entities": [
+          {
+            "name": "Russia",
+            "role": "actor",
+            "entity_type": "location",
+            "wikidata_qid": "Q159"
+          },
+          {
+            "name": "Deutsche Welle",
+            "role": "mentioned",
+            "entity_type": "organization",
+            "wikidata_qid": "Q204856"
+          }
+        ],
+        "sentiment": 0.10000000149011612,
+        "tokens_used": 1534,
+        "relationships": [],
+        "state_changes": [],
+        "relevance_score": 0.6000000238418579,
+        "translated_title": "Beyond oil and gas: Russia's nuclear leverage explained",
+        "inferred_location": {
+          "lat": 55.7558,
+          "lon": 37.6173,
+          "name": "Moscow, Russia"
+        },
+        "original_language": "en"
+      },
+      "description": "Russian oil and gas face sanctions, but nuclear energy is another story. DW shows how far Russia's influence extends, and why countries continue to turn to it for nuclear energy.",
+      "source_name": "Deutsche Welle"
+    }
+  },
+  {
+    "event_time": "2026-03-04T12:03:02.807661+00:00",
+    "source_type": "rss-news",
+    "source_id": "https://www.dw.com/en/europe-bags-savings-as-america-chases-fossil\u2011fuel-nostalgia/a-76129107?maca=en-rss-en-all-1573-rdf",
+    "latitude": null,
+    "longitude": null,
+    "region_code": null,
+    "entity_id": null,
+    "entity_name": null,
+    "event_type": "news_article",
+    "severity": "low",
+    "confidence": null,
+    "tags": [
+      "source:Deutsche Welle"
+    ],
+    "title": "Europe bags savings as America chases fossil\u2011fuel nostalgia",
+    "description": "https://www.dw.com/en/europe-bags-savings-as-america-chases-fossil\u2011fuel-nostalgia/a-76129107?maca=en-rss-en-all-1573-rdf",
+    "payload": {
+      "url": "https://www.dw.com/en/europe-bags-savings-as-america-chases-fossil\u2011fuel-nostalgia/a-76129107?maca=en-rss-en-all-1573-rdf",
+      "guid": "https://www.dw.com/en/europe-bags-savings-as-america-chases-fossil\u2011fuel-nostalgia/a-76129107?maca=en-rss-en-all-1573-rdf",
+      "title": "Europe bags savings as America chases fossil\u2011fuel nostalgia",
+      "feed_id": "dw",
+      "language": "en",
+      "enrichment": {
+        "model": "qwen3.5:9b-q8_0",
+        "topics": [
+          "eu-energy-transition",
+          "us-fossil-fuel-policy"
+        ],
+        "summary": "European nations are realizing significant economic benefits from their transition away from fossil fuels, contrasting with a growing political and public sentiment in the United States favoring a return to traditional energy sources. This divergence highlights a strategic split in global energy policy that could impact international trade dynamics and climate cooperation efforts.",
+        "entities": [],
+        "sentiment": 0.10000000149011612,
+        "tokens_used": 1405,
+        "relationships": [],
+        "state_changes": [],
+        "relevance_score": 0.44999998807907104,
+        "translated_title": "Europe achieves savings while America pursues fossil-fuel nostalgia",
+        "original_language": "en"
+      },
+      "description": "While Washington talks up fossil fuels, EU countries are cashing in on efficiency and low\u2011cost renewables.",
+      "source_name": "Deutsche Welle"
+    }
+  },
+  {
+    "event_time": "2026-03-04T12:03:02.807661+00:00",
+    "source_type": "rss-news",
+    "source_id": "https://www.dw.com/en/berlinale-future-hangs-in-the-balance-amidst-polarized-gaza-debate/a-76091332?maca=en-rss-en-all-1573-rdf",
+    "latitude": null,
+    "longitude": null,
+    "region_code": null,
+    "entity_id": null,
+    "entity_name": null,
+    "event_type": "news_article",
+    "severity": "low",
+    "confidence": null,
+    "tags": [
+      "source:Deutsche Welle"
+    ],
+    "title": "Berlinale future hangs in the balance amidst polarized Gaza debate",
+    "description": "https://www.dw.com/en/berlinale-future-hangs-in-the-balance-amidst-polarized-gaza-debate/a-76091332?maca=en-rss-en-all-1573-rdf",
+    "payload": {
+      "url": "https://www.dw.com/en/berlinale-future-hangs-in-the-balance-amidst-polarized-gaza-debate/a-76091332?maca=en-rss-en-all-1573-rdf",
+      "guid": "https://www.dw.com/en/berlinale-future-hangs-in-the-balance-amidst-polarized-gaza-debate/a-76091332?maca=en-rss-en-all-1573-rdf",
+      "title": "Berlinale future hangs in the balance amidst polarized Gaza debate",
+      "feed_id": "dw",
+      "language": "en",
+      "enrichment": {
+        "model": "qwen3.5:9b-q8_0",
+        "topics": [
+          "berlinale-gaza-controversy",
+          "cultural-diplomacy-israel-palestine"
+        ],
+        "summary": "The upcoming Berlin International Film Festival faces significant uncertainty as organizers grapple with intense global polarization regarding the Israel-Gaza conflict. This situation highlights the growing tension between artistic freedom and geopolitical pressures within major international cultural institutions.",
+        "entities": [
+          {
+            "name": "Berlinale",
+            "role": "actor",
+            "entity_type": "organization",
+            "wikidata_qid": "Q156730"
+          },
+          {
+            "name": "Gaza",
+            "role": "mentioned",
+            "entity_type": "location",
+            "wikidata_qid": "Q248162"
+          },
+          {
+            "name": "Israel",
+            "role": "mentioned",
+            "entity_type": "location",
+            "wikidata_qid": "Q891"
+          }
+        ],
+        "sentiment": -0.30000001192092896,
+        "tokens_used": 1636,
+        "relationships": [
+          {
+            "type": "geographic_association",
+            "source": "Berlinale",
+            "target": "Gaza debate",
+            "confidence": 0.699999988079071
+          }
+        ],
+        "state_changes": [],
+        "relevance_score": 0.44999998807907104,
+        "translated_title": "Berlinale future hangs in the balance amidst polarized Gaza debate",
+        "inferred_location": {
+          "lat": 52.52,
+          "lon": 13.405,
+          "name": "Berlin, Germany"
+        },
+        "original_language": "en"
+      },
+      "description": "After an emergency meeting, the fate of the film festival head Tricia Tuttle remains uncertain. A Palestinian award-winner's accusation that Germany supports genocide had sparked political backlash.",
+      "source_name": "Deutsche Welle"
+    }
+  },
+  {
+    "event_time": "2026-03-04T12:03:02.80766+00:00",
+    "source_type": "rss-news",
+    "source_id": "https://www.dw.com/en/will-germany-elect-a-woman-as-head-of-state/a-76136159?maca=en-rss-en-all-1573-rdf",
+    "latitude": null,
+    "longitude": null,
+    "region_code": null,
+    "entity_id": null,
+    "entity_name": null,
+    "event_type": "news_article",
+    "severity": "low",
+    "confidence": null,
+    "tags": [
+      "source:Deutsche Welle"
+    ],
+    "title": "Will Germany elect a woman as head of state?",
+    "description": "https://www.dw.com/en/will-germany-elect-a-woman-as-head-of-state/a-76136159?maca=en-rss-en-all-1573-rdf",
+    "payload": {
+      "url": "https://www.dw.com/en/will-germany-elect-a-woman-as-head-of-state/a-76136159?maca=en-rss-en-all-1573-rdf",
+      "guid": "https://www.dw.com/en/will-germany-elect-a-woman-as-head-of-state/a-76136159?maca=en-rss-en-all-1573-rdf",
+      "title": "Will Germany elect a woman as head of state?",
+      "feed_id": "dw",
+      "language": "en",
+      "enrichment": {
+        "model": "qwen3.5:9b-q8_0",
+        "topics": [
+          "german-presidential-election-2024",
+          "female-leadership-europe"
+        ],
+        "summary": "German political analysts are assessing the likelihood of a female candidate winning the upcoming presidential election, noting that while no official winner has been declared, several prominent women are currently leading in polls. This potential shift marks a significant demographic change for the German presidency and reflects broader trends in European leadership.",
+        "entities": [
+          {
+            "name": "Germany",
+            "role": "location",
+            "entity_type": "location",
+            "wikidata_qid": "Q183"
+          },
+          {
+            "name": "Federal President of Germany",
+            "role": "target",
+            "entity_type": "organization",
+            "wikidata_qid": "Q209765"
+          }
+        ],
+        "sentiment": 0.10000000149011612,
+        "tokens_used": 1584,
+        "relationships": [
+          {
+            "type": "geographic_association",
+            "source": "Germany",
+            "target": "Federal President of Germany",
+            "confidence": 1.0
+          }
+        ],
+        "state_changes": [],
+        "relevance_score": 0.3499999940395355,
+        "translated_title": "Will Germany elect a woman as head of state?",
+        "inferred_location": {
+          "lat": 52.52,
+          "lon": 13.405,
+          "name": "Berlin, Germany"
+        },
+        "original_language": "en"
+      },
+      "description": "A debate is underway about the candidate to replace President Frank-Walter Steinmeier next year. When former Chancellor Angela Merkel's name was put forward, it made the headlines.",
+      "source_name": "Deutsche Welle"
+    }
+  },
+  {
+    "event_time": "2026-03-04T12:03:02.80766+00:00",
+    "source_type": "rss-news",
+    "source_id": "https://www.dw.com/en/ukraine-updates-kyiv-reports-russian-barrage-ahead-of-talks/live-76135448?maca=en-rss-en-all-1573-rdf",
+    "latitude": null,
+    "longitude": null,
+    "region_code": null,
+    "entity_id": null,
+    "entity_name": null,
+    "event_type": "news_article",
+    "severity": "low",
+    "confidence": null,
+    "tags": [
+      "source:Deutsche Welle"
+    ],
+    "title": "Ukraine updates: Kyiv reports Russian barrage ahead of talks",
+    "description": "https://www.dw.com/en/ukraine-updates-kyiv-reports-russian-barrage-ahead-of-talks/live-76135448?maca=en-rss-en-all-1573-rdf",
+    "payload": {
+      "url": "https://www.dw.com/en/ukraine-updates-kyiv-reports-russian-barrage-ahead-of-talks/live-76135448?maca=en-rss-en-all-1573-rdf",
+      "guid": "https://www.dw.com/en/ukraine-updates-kyiv-reports-russian-barrage-ahead-of-talks/live-76135448?maca=en-rss-en-all-1573-rdf",
+      "title": "Ukraine updates: Kyiv reports Russian barrage ahead of talks",
+      "feed_id": "dw",
+      "language": "en",
+      "enrichment": {
+        "model": "qwen3.5:9b-q8_0",
+        "topics": [
+          "ukraine-russia-conflict",
+          "kyiv-artillery-barrage",
+          "russia-ukraine-talks"
+        ],
+        "summary": "Kyiv reported a significant Russian artillery and missile barrage targeting Ukrainian positions as diplomatic efforts to resume peace negotiations intensify. This escalation highlights the volatile security environment surrounding potential high-stakes talks between Russia and Ukraine.",
+        "entities": [
+          {
+            "name": "Kyiv",
+            "role": "location",
+            "entity_type": "location",
+            "wikidata_qid": "Q1876"
+          },
+          {
+            "name": "Russia",
+            "role": "actor",
+            "entity_type": "organization",
+            "wikidata_qid": "Q159"
+          },
+          {
+            "name": "Ukraine",
+            "role": "target",
+            "entity_type": "organization",
+            "wikidata_qid": "Q212"
+          }
+        ],
+        "sentiment": -0.4000000059604645,
+        "tokens_used": 1677,
+        "relationships": [
+          {
+            "type": "rivalry",
+            "source": "Russia",
+            "target": "Ukraine",
+            "confidence": 0.949999988079071
+          },
+          {
+            "type": "geographic_association",
+            "source": "Kyiv",
+            "target": "Ukraine",
+            "confidence": 0.9900000095367432
+          }
+        ],
+        "state_changes": [],
+        "relevance_score": 0.8500000238418579,
+        "translated_title": "Ukraine updates: Kyiv reports Russian barrage ahead of talks",
+        "inferred_location": {
+          "lat": 50.4501,
+          "lon": 30.5234,
+          "name": "Kyiv, Ukraine"
+        },
+        "original_language": "en"
+      },
+      "description": "President Zelenskyy reported widespread overnight strikes, the next round of Geneva talks passed without incident. Meanwhile Kenya arrested a man suspected of tricking people into going to Russia to fight.",
+      "source_name": "Deutsche Welle"
+    }
+  },
+  {
+    "event_time": "2026-03-04T12:03:02.807659+00:00",
+    "source_type": "rss-news",
+    "source_id": "https://www.dw.com/en/albania-femicide-cases-expose-gaps-in-protection-system/a-76138892?maca=en-rss-en-all-1573-rdf",
+    "latitude": null,
+    "longitude": null,
+    "region_code": null,
+    "entity_id": null,
+    "entity_name": null,
+    "event_type": "news_article",
+    "severity": "low",
+    "confidence": null,
+    "tags": [
+      "source:Deutsche Welle"
+    ],
+    "title": "Albania: Femicide cases expose gaps in protection system",
+    "description": "https://www.dw.com/en/albania-femicide-cases-expose-gaps-in-protection-system/a-76138892?maca=en-rss-en-all-1573-rdf",
+    "payload": {
+      "url": "https://www.dw.com/en/albania-femicide-cases-expose-gaps-in-protection-system/a-76138892?maca=en-rss-en-all-1573-rdf",
+      "guid": "https://www.dw.com/en/albania-femicide-cases-expose-gaps-in-protection-system/a-76138892?maca=en-rss-en-all-1573-rdf",
+      "title": "Albania: Femicide cases expose gaps in protection system",
+      "feed_id": "dw",
+      "language": "en",
+      "enrichment": {
+        "model": "qwen3.5:9b-q8_0",
+        "topics": [
+          "albania-gender-based-violence",
+          "balkan-legal-reform"
+        ],
+        "summary": "Recent femicide incidents in Albania have highlighted critical deficiencies in the country's legal and protective frameworks for women. These cases underscore systemic failures that require urgent policy reform to prevent future violence.",
+        "entities": [
+          {
+            "name": "Albania",
+            "role": "location",
+            "entity_type": "location",
+            "wikidata_qid": "Q222"
+          }
+        ],
+        "sentiment": -0.699999988079071,
+        "tokens_used": 1479,
+        "relationships": [],
+        "state_changes": [],
+        "relevance_score": 0.3499999940395355,
+        "translated_title": "Albania: Femicide cases expose gaps in protection system",
+        "inferred_location": {
+          "lat": 41.3275,
+          "lon": 19.8187,
+          "name": "Tirana, Albania"
+        },
+        "original_language": "en"
+      },
+      "description": "Between 2021 and 2023, 24 cases of femicide were recorded in Albania. While institutional measures to protect women have been stepped up, experts say a faster and more coordinated response is needed.",
+      "source_name": "Deutsche Welle"
+    }
+  },
+  {
+    "event_time": "2026-03-04T12:03:02.807659+00:00",
+    "source_type": "rss-news",
+    "source_id": "https://www.dw.com/en/new-hiv-drug-may-end-multi-pill-regimen-for-older-people/a-76119877?maca=en-rss-en-all-1573-rdf",
+    "latitude": null,
+    "longitude": null,
+    "region_code": null,
+    "entity_id": null,
+    "entity_name": null,
+    "event_type": "news_article",
+    "severity": "low",
+    "confidence": null,
+    "tags": [
+      "source:Deutsche Welle"
+    ],
+    "title": "New HIV drug may end multi-pill regimen for older people",
+    "description": "https://www.dw.com/en/new-hiv-drug-may-end-multi-pill-regimen-for-older-people/a-76119877?maca=en-rss-en-all-1573-rdf",
+    "payload": {
+      "url": "https://www.dw.com/en/new-hiv-drug-may-end-multi-pill-regimen-for-older-people/a-76119877?maca=en-rss-en-all-1573-rdf",
+      "guid": "https://www.dw.com/en/new-hiv-drug-may-end-multi-pill-regimen-for-older-people/a-76119877?maca=en-rss-en-all-1573-rdf",
+      "title": "New HIV drug may end multi-pill regimen for older people",
+      "feed_id": "dw",
+      "language": "en",
+      "enrichment": {
+        "model": "qwen3.5:9b-q8_0",
+        "topics": [
+          "hiv-treatment-innovation",
+          "geriatric-medicine"
+        ],
+        "summary": "A new HIV medication is being developed that could simplify treatment regimens for elderly patients, potentially reducing the number of daily pills required. This development aims to improve adherence and quality of life for an aging demographic affected by HIV.",
+        "entities": [],
+        "sentiment": 0.6000000238418579,
+        "tokens_used": 1390,
+        "relationships": [],
+        "state_changes": [],
+        "relevance_score": 0.15000000596046448,
+        "translated_title": "New HIV drug may end multi-pill regimen for older people",
+        "original_language": "en"
+      },
+      "description": "People who have lived with HIV long-term can need up to a dozen pills every day to suppress the virus. Results from a new drug trial raise hope of changing that.",
+      "source_name": "Deutsche Welle"
+    }
+  },
+  {
+    "event_time": "2026-03-04T12:03:02.807658+00:00",
+    "source_type": "rss-news",
+    "source_id": "https://www.dw.com/en/netflix-bows-out-of-warner-bros-bid-paramount-set-to-win/a-76143761?maca=en-rss-en-all-1573-rdf",
+    "latitude": null,
+    "longitude": null,
+    "region_code": null,
+    "entity_id": null,
+    "entity_name": null,
+    "event_type": "news_article",
+    "severity": "low",
+    "confidence": null,
+    "tags": [
+      "source:Deutsche Welle"
+    ],
+    "title": "Netflix bows out of Warner Bros. bid, Paramount set to win",
+    "description": "https://www.dw.com/en/netflix-bows-out-of-warner-bros-bid-paramount-set-to-win/a-76143761?maca=en-rss-en-all-1573-rdf",
+    "payload": {
+      "url": "https://www.dw.com/en/netflix-bows-out-of-warner-bros-bid-paramount-set-to-win/a-76143761?maca=en-rss-en-all-1573-rdf",
+      "guid": "https://www.dw.com/en/netflix-bows-out-of-warner-bros-bid-paramount-set-to-win/a-76143761?maca=en-rss-en-all-1573-rdf",
+      "title": "Netflix bows out of Warner Bros. bid, Paramount set to win",
+      "feed_id": "dw",
+      "language": "en",
+      "enrichment": {
+        "model": "qwen3.5:9b-q8_0",
+        "topics": [
+          "netflix-warner-bros-acquisition-failure",
+          "paramount-global-wb-discovery-bid"
+        ],
+        "summary": "Netflix has withdrawn its acquisition offer for Warner Bros. Discovery, clearing the path for Paramount Global to potentially complete its own $17 billion bid. This development marks a significant shift in the ongoing consolidation of major media assets following regulatory scrutiny and failed negotiations between Netflix and Warner Bros.",
+        "entities": [
+          {
+            "name": "Netflix",
+            "role": "actor",
+            "entity_type": "organization",
+            "wikidata_qid": "Q2631094"
+          },
+          {
+            "name": "Warner Bros. Discovery",
+            "role": "target",
+            "entity_type": "organization",
+            "wikidata_qid": "Q117856666"
+          },
+          {
+            "name": "Paramount Global",
+            "role": "actor",
+            "entity_type": "organization",
+            "wikidata_qid": "Q2309466"
+          }
+        ],
+        "sentiment": -0.10000000149011612,
+        "tokens_used": 1708,
+        "relationships": [
+          {
+            "type": "supply_chain",
+            "source": "Netflix",
+            "target": "Warner Bros. Discovery",
+            "confidence": 0.949999988079071
+          },
+          {
+            "type": "supply_chain",
+            "source": "Paramount Global",
+            "target": "Warner Bros. Discovery",
+            "confidence": 0.8999999761581421
+          }
+        ],
+        "state_changes": [],
+        "relevance_score": 0.44999998807907104,
+        "translated_title": "Netflix withdraws from Warner Bros. bid, Paramount poised to win",
+        "inferred_location": {
+          "lat": 40.7128,
+          "lon": -74.006,
+          "name": "New York City, United States"
+        },
+        "original_language": "en"
+      },
+      "description": "Netflix has dropped out of a bid for Warner Bros, paving the way for Paramount Skydance to acquire its renowned Hollywood rival. The takeover will significantly change the Hollywood and US media landscape.",
+      "source_name": "Deutsche Welle"
+    }
+  },
+  {
+    "event_time": "2026-03-04T12:03:02.807657+00:00",
+    "source_type": "rss-news",
+    "source_id": "https://www.dw.com/en/pentagon-pressures-anthropic-in-escalating-ai-showdown/a-76119912?maca=en-rss-en-all-1573-rdf",
+    "latitude": null,
+    "longitude": null,
+    "region_code": null,
+    "entity_id": null,
+    "entity_name": null,
+    "event_type": "news_article",
+    "severity": "low",
+    "confidence": null,
+    "tags": [
+      "source:Deutsche Welle"
+    ],
+    "title": "Pentagon pressures Anthropic in escalating AI showdown",
+    "description": "https://www.dw.com/en/pentagon-pressures-anthropic-in-escalating-ai-showdown/a-76119912?maca=en-rss-en-all-1573-rdf",
+    "payload": {
+      "url": "https://www.dw.com/en/pentagon-pressures-anthropic-in-escalating-ai-showdown/a-76119912?maca=en-rss-en-all-1573-rdf",
+      "guid": "https://www.dw.com/en/pentagon-pressures-anthropic-in-escalating-ai-showdown/a-76119912?maca=en-rss-en-all-1573-rdf",
+      "title": "Pentagon pressures Anthropic in escalating AI showdown",
+      "feed_id": "dw",
+      "language": "en",
+      "enrichment": {
+        "model": "qwen3.5:9b-q8_0",
+        "topics": [
+          "us-military-ai-regulation",
+          "anthropic-pentagon-tensions"
+        ],
+        "summary": "The US Department of Defense is intensifying its engagement with AI developer Anthropic, reportedly leveraging national security concerns to influence the company's development trajectory. This escalation highlights a growing friction between military interests and private sector artificial intelligence capabilities.",
+        "entities": [
+          {
+            "name": "Pentagon",
+            "role": "actor",
+            "entity_type": "organization",
+            "wikidata_qid": "Q12907"
+          },
+          {
+            "name": "Anthropic",
+            "role": "target",
+            "entity_type": "organization",
+            "wikidata_qid": "Q124863568"
+          }
+        ],
+        "sentiment": -0.20000000298023224,
+        "tokens_used": 1585,
+        "relationships": [
+          {
+            "type": "supply_chain",
+            "source": "Pentagon",
+            "target": "Anthropic",
+            "confidence": 0.8999999761581421
+          }
+        ],
+        "state_changes": [],
+        "relevance_score": 0.6499999761581421,
+        "translated_title": "Pentagon pressures Anthropic in escalating AI showdown",
+        "inferred_location": {
+          "lat": 38.9072,
+          "lon": -77.0369,
+          "name": "Washington, D.C., United States"
+        },
+        "original_language": "en"
+      },
+      "description": "The row between Anthropic, a much vaunted AI startup, and the Trump administration, is sharply escalating. The Pentagon wants complete access to its models, despite safety and ethical concerns.",
+      "source_name": "Deutsche Welle"
+    }
+  },
+  {
+    "event_time": "2026-03-04T12:03:02.807656+00:00",
+    "source_type": "rss-news",
+    "source_id": "https://www.dw.com/en/vincent-kompany-bayern-munich-s-coach-with-a-cause/a-76135287?maca=en-rss-en-all-1573-rdf",
+    "latitude": null,
+    "longitude": null,
+    "region_code": null,
+    "entity_id": null,
+    "entity_name": null,
+    "event_type": "news_article",
+    "severity": "low",
+    "confidence": null,
+    "tags": [
+      "source:Deutsche Welle"
+    ],
+    "title": "Vincent Kompany: Bayern Munich's coach with a cause",
+    "description": "https://www.dw.com/en/vincent-kompany-bayern-munich-s-coach-with-a-cause/a-76135287?maca=en-rss-en-all-1573-rdf",
+    "payload": {
+      "url": "https://www.dw.com/en/vincent-kompany-bayern-munich-s-coach-with-a-cause/a-76135287?maca=en-rss-en-all-1573-rdf",
+      "guid": "https://www.dw.com/en/vincent-kompany-bayern-munich-s-coach-with-a-cause/a-76135287?maca=en-rss-en-all-1573-rdf",
+      "title": "Vincent Kompany: Bayern Munich's coach with a cause",
+      "feed_id": "dw",
+      "language": "en",
+      "enrichment": {
+        "model": "qwen3.5:9b-q8_0",
+        "topics": [
+          "bayern-munich-coaching-change",
+          "vincent-kompany-bayern-appointment"
+        ],
+        "summary": "Former Manchester City captain Vincent Kompany has been appointed as the head coach of German football club Bayern Munich, marking a significant transition in his career from player to manager. This appointment highlights Kompany's continued influence in European football and his strategic focus on developing young talent within the club.",
+        "entities": [
+          {
+            "name": "Vincent Kompany",
+            "role": "actor",
+            "entity_type": "person",
+            "wikidata_qid": "Q31408"
+          },
+          {
+            "name": "Bayern Munich",
+            "role": "location",
+            "entity_type": "organization",
+            "wikidata_qid": "Q61524"
+          }
+        ],
+        "sentiment": 0.6000000238418579,
+        "tokens_used": 1658,
+        "relationships": [
+          {
+            "type": "leadership",
+            "source": "Vincent Kompany",
+            "target": "Bayern Munich",
+            "confidence": 0.949999988079071
+          }
+        ],
+        "state_changes": [
+          {
+            "to": "coach",
+            "from": "player",
+            "entity": "Vincent Kompany",
+            "attribute": "status",
+            "certainty": "confirmed"
+          }
+        ],
+        "relevance_score": 0.3499999940395355,
+        "translated_title": "Vincent Kompany: Bayern Munich's coach with a cause",
+        "inferred_location": {
+          "lat": 48.1351,
+          "lon": 11.582,
+          "name": "Munich, Germany"
+        },
+        "original_language": "en"
+      },
+      "description": "Vincent Kompany is preparing for a Bundesliga title fight. But the Belgian has also been speaking out after the racism suffered by Real Madrid\u2019s Vinicius Jnr, a cause that has been formative in his life and career.",
+      "source_name": "Deutsche Welle"
+    }
+  },
+  {
+    "event_time": "2026-03-04T12:03:02.807656+00:00",
+    "source_type": "rss-news",
+    "source_id": "https://www.dw.com/en/turkey-s-ramadan-directive-reignites-secularism-debate/a-76106615?maca=en-rss-en-all-1573-rdf",
+    "latitude": null,
+    "longitude": null,
+    "region_code": null,
+    "entity_id": null,
+    "entity_name": null,
+    "event_type": "news_article",
+    "severity": "low",
+    "confidence": null,
+    "tags": [
+      "source:Deutsche Welle"
+    ],
+    "title": "Turkey's Ramadan directive reignites secularism debate",
+    "description": "https://www.dw.com/en/turkey-s-ramadan-directive-reignites-secularism-debate/a-76106615?maca=en-rss-en-all-1573-rdf",
+    "payload": {
+      "url": "https://www.dw.com/en/turkey-s-ramadan-directive-reignites-secularism-debate/a-76106615?maca=en-rss-en-all-1573-rdf",
+      "guid": "https://www.dw.com/en/turkey-s-ramadan-directive-reignites-secularism-debate/a-76106615?maca=en-rss-en-all-1573-rdf",
+      "title": "Turkey's Ramadan directive reignites secularism debate",
+      "feed_id": "dw",
+      "language": "en",
+      "enrichment": {
+        "model": "qwen3.5:9b-q8_0",
+        "topics": [
+          "turkey-secularism-debate",
+          "turkey-religious-policy"
+        ],
+        "summary": "Turkish authorities issued a directive regarding Ramadan observances, sparking renewed public and political debate over the boundaries of state secularism. This development highlights ongoing tensions between religious expression and constitutional principles within Turkey's domestic political landscape.",
+        "entities": [
+          {
+            "name": "Turkey",
+            "role": "location",
+            "entity_type": "location",
+            "wikidata_qid": "Q430"
+          }
+        ],
+        "sentiment": -0.20000000298023224,
+        "tokens_used": 1478,
+        "relationships": [],
+        "state_changes": [],
+        "relevance_score": 0.5,
+        "translated_title": "Turkey's Ramadan directive reignites secularism debate",
+        "inferred_location": {
+          "lat": 39.9334,
+          "lon": 32.8597,
+          "name": "Ankara, Turkey"
+        },
+        "original_language": "en"
+      },
+      "description": "A new directive encourages Ramadan-themed events and mosque visits in Turkish schools. Critics warn it pressures students and challenges secular principles, while the government says participation is voluntary.",
+      "source_name": "Deutsche Welle"
+    }
+  },
+  {
+    "event_time": "2026-03-04T12:03:02.807655+00:00",
+    "source_type": "rss-news",
+    "source_id": "https://www.dw.com/en/germany-is-aging-and-shrinking-much-faster-than-expected/a-76157438?maca=en-rss-en-all-1573-rdf",
+    "latitude": null,
+    "longitude": null,
+    "region_code": null,
+    "entity_id": null,
+    "entity_name": null,
+    "event_type": "news_article",
+    "severity": "low",
+    "confidence": null,
+    "tags": [
+      "source:Deutsche Welle"
+    ],
+    "title": "Germany is aging and shrinking much faster than expected",
+    "description": "https://www.dw.com/en/germany-is-aging-and-shrinking-much-faster-than-expected/a-76157438?maca=en-rss-en-all-1573-rdf",
+    "payload": {
+      "url": "https://www.dw.com/en/germany-is-aging-and-shrinking-much-faster-than-expected/a-76157438?maca=en-rss-en-all-1573-rdf",
+      "guid": "https://www.dw.com/en/germany-is-aging-and-shrinking-much-faster-than-expected/a-76157438?maca=en-rss-en-all-1573-rdf",
+      "title": "Germany is aging and shrinking much faster than expected",
+      "feed_id": "dw",
+      "language": "en",
+      "enrichment": {
+        "model": "qwen3.5:9b-q8_0",
+        "topics": [
+          "germany-demographic-crisis",
+          "germany-labor-shortage",
+          "germany-pension-system-strain"
+        ],
+        "summary": "Demographic data indicates Germany's population is declining and aging at an accelerated rate, driven by low birth rates and high emigration. This trend poses significant long-term challenges for the nation's economic stability, pension systems, and military recruitment capacity.",
+        "entities": [
+          {
+            "name": "Germany",
+            "role": "location",
+            "entity_type": "location",
+            "wikidata_qid": "Q183"
+          }
+        ],
+        "sentiment": -0.30000001192092896,
+        "tokens_used": 1490,
+        "relationships": [],
+        "state_changes": [],
+        "relevance_score": 0.44999998807907104,
+        "translated_title": "Germany is aging and shrinking much faster than expected",
+        "inferred_location": {
+          "lat": 51.1657,
+          "lon": 10.4515,
+          "name": "Germany"
+        },
+        "original_language": "en"
+      },
+      "description": "The latest forecasts predict a sharp decline in the population. One reason is that too few children are being born. Immigration, even in greater numbers, will not offset the trend.",
+      "source_name": "Deutsche Welle"
+    }
+  },
+  {
+    "event_time": "2026-03-04T12:03:02.807654+00:00",
+    "source_type": "rss-news",
+    "source_id": "https://www.dw.com/en/iceland-mulls-joining-the-eu-amid-strained-us-relations/a-76126362?maca=en-rss-en-all-1573-rdf",
+    "latitude": null,
+    "longitude": null,
+    "region_code": null,
+    "entity_id": null,
+    "entity_name": null,
+    "event_type": "news_article",
+    "severity": "low",
+    "confidence": null,
+    "tags": [
+      "source:Deutsche Welle"
+    ],
+    "title": "Iceland mulls joining the EU amid strained US relations",
+    "description": "https://www.dw.com/en/iceland-mulls-joining-the-eu-amid-strained-us-relations/a-76126362?maca=en-rss-en-all-1573-rdf",
+    "payload": {
+      "url": "https://www.dw.com/en/iceland-mulls-joining-the-eu-amid-strained-us-relations/a-76126362?maca=en-rss-en-all-1573-rdf",
+      "guid": "https://www.dw.com/en/iceland-mulls-joining-the-eu-amid-strained-us-relations/a-76126362?maca=en-rss-en-all-1573-rdf",
+      "title": "Iceland mulls joining the EU amid strained US relations",
+      "feed_id": "dw",
+      "language": "en",
+      "enrichment": {
+        "model": "qwen3.5:9b-q8_0",
+        "topics": [
+          "iceland-eu-accession",
+          "us-iceland-diplomacy"
+        ],
+        "summary": "Iceland is reconsidering its application to join the European Union, a move potentially driven by deteriorating diplomatic ties with the United States. This development signals a strategic pivot in Iceland's foreign policy, seeking closer integration with Europe as an alternative to strengthening transatlantic bonds.",
+        "entities": [
+          {
+            "name": "Iceland",
+            "role": "actor",
+            "entity_type": "location",
+            "wikidata_qid": "Q189"
+          },
+          {
+            "name": "European Union",
+            "role": "target",
+            "entity_type": "organization",
+            "wikidata_qid": "Q575"
+          },
+          {
+            "name": "United States",
+            "role": "mentioned",
+            "entity_type": "location",
+            "wikidata_qid": "Q30"
+          }
+        ],
+        "sentiment": -0.20000000298023224,
+        "tokens_used": 1672,
+        "relationships": [
+          {
+            "type": "membership",
+            "source": "Iceland",
+            "target": "European Union",
+            "confidence": 0.6000000238418579
+          },
+          {
+            "type": "rivalry",
+            "source": "Iceland",
+            "target": "United States",
+            "confidence": 0.5
+          }
+        ],
+        "state_changes": [],
+        "relevance_score": 0.44999998807907104,
+        "translated_title": "Iceland mulls joining the EU amid strained US relations",
+        "inferred_location": {
+          "lat": 64.1466,
+          "lon": -21.9426,
+          "name": "Reykjavik, Iceland"
+        },
+        "original_language": "en"
+      },
+      "description": "Iceland is a close partner of the EU but not a full member. That could change if Icelanders vote to join the bloc. As ties with the US deteriorate, the government could bring forward a referendum on the issue.",
+      "source_name": "Deutsche Welle"
+    }
+  }
+]

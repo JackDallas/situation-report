@@ -1,0 +1,9 @@
+.git
+.claude
+.playwright-mcp
+target
+node_modules
+*.png
+docs
+.env
+.env.1p
