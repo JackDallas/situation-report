@@ -3529,6 +3529,7 @@ dependencies = [
  "futures-util",
  "grammers-client",
  "grammers-session",
+ "http",
  "quick-xml",
  "regex",
  "reqwest",
