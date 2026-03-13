@@ -2226,6 +2226,34 @@ fn spawn_enrichment(
             }
         }
 
+        // OCR: extract text from Bluesky post images before enrichment
+        let mut article_input = article_input;
+        if enrichable_event.event_type == EventType::BlueskyPost {
+            if let Some(ocr_text) = ocr_bluesky_images(
+                &enrichable_event,
+                gemini.as_deref(),
+                &budget,
+            ).await {
+                // Append OCR text to the description for enrichment context
+                if !article_input.description.is_empty() {
+                    article_input.description.push_str("\n\n[OCR from image] ");
+                }
+                article_input.description.push_str(&ocr_text);
+
+                // Also update the event description
+                let desc = enrichable_event.description.get_or_insert_with(String::new);
+                if !desc.is_empty() {
+                    desc.push_str("\n\n[OCR from image] ");
+                }
+                desc.push_str(&ocr_text);
+
+                // Store OCR text in payload
+                if let Some(obj) = enrichable_event.payload.as_object_mut() {
+                    obj.insert("ocr_text".to_string(), serde_json::Value::String(ocr_text));
+                }
+            }
+        }
+
         // Tiered enrichment: Ollama -> Gemini Flash-Lite -> Claude
         let enrichment_result = enrich_article_tiered(
             claude.as_deref(),
@@ -2511,4 +2539,71 @@ async fn embedding_worker(
     }
 
     info!("Embedding worker shut down");
+}
+
+/// Extract text from Bluesky post images via Gemini Vision OCR.
+///
+/// Reads `payload.image_urls` (set by the Bluesky source), downloads each image,
+/// and sends it to Gemini Flash-Lite for text extraction. Returns the combined
+/// OCR text from all images, or `None` if no text was found or OCR is unavailable.
+///
+/// Constraints: max 3 images per post, 5 MB per image, budget-gated.
+async fn ocr_bluesky_images(
+    event: &InsertableEvent,
+    gemini: Option<&GeminiClient>,
+    budget: &BudgetManager,
+) -> Option<String> {
+    let gemini = gemini?;
+
+    let image_urls = event
+        .payload
+        .get("image_urls")
+        .and_then(|v| v.as_array())?;
+
+    if image_urls.is_empty() {
+        return None;
+    }
+
+    let mut ocr_parts: Vec<String> = Vec::new();
+
+    for url_val in image_urls.iter().take(3) {
+        let url = url_val.as_str().unwrap_or("");
+        if url.is_empty() {
+            continue;
+        }
+
+        // Budget gate before each OCR call
+        if !budget.can_afford_gemini().await {
+            debug!("Gemini budget exhausted, skipping Bluesky image OCR");
+            break;
+        }
+
+        match gemini.ocr_image_url(url).await {
+            Ok(Some(response)) => {
+                budget.record_gemini(sr_intel::GeminiModel::FlashLite, &response);
+                let text = response.text.trim().to_string();
+                if !text.is_empty() {
+                    debug!(
+                        url = %url,
+                        text_len = text.len(),
+                        "Bluesky image OCR extracted text"
+                    );
+                    ocr_parts.push(text);
+                }
+            }
+            Ok(None) => {
+                // No text in image or image too large/unreachable
+                debug!(url = %url, "Bluesky image OCR: no text found or image skipped");
+            }
+            Err(e) => {
+                debug!(url = %url, error = %e, "Bluesky image OCR failed");
+            }
+        }
+    }
+
+    if ocr_parts.is_empty() {
+        None
+    } else {
+        Some(ocr_parts.join("\n\n"))
+    }
 }

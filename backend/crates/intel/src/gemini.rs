@@ -87,9 +87,19 @@ struct Content {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct Part {
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    inline_data: Option<InlineData>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct InlineData {
+    mime_type: String,
+    data: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -214,11 +224,11 @@ impl GeminiClient {
         let request = GenerateRequest {
             system_instruction: Some(Content {
                 role: None,
-                parts: vec![Part { text: Some(system_prompt.to_string()) }],
+                parts: vec![Part { text: Some(system_prompt.to_string()), inline_data: None }],
             }),
             contents: vec![Content {
                 role: Some("user".to_string()),
-                parts: vec![Part { text: Some(user_message.to_string()) }],
+                parts: vec![Part { text: Some(user_message.to_string()), inline_data: None }],
             }],
             generation_config: GenerationConfig {
                 temperature: Some(0.2),
@@ -328,6 +338,181 @@ impl GeminiClient {
         self.generate(model, system_prompt, user_message, max_tokens, None).await
     }
 
+    /// Maximum image size for OCR (5 MB).
+    const MAX_IMAGE_BYTES: usize = 5 * 1024 * 1024;
+
+    /// OCR prompt sent to Gemini Vision.
+    const OCR_PROMPT: &'static str =
+        "Extract all text from this image. Return only the extracted text, nothing else. If there is no text, return an empty string.";
+
+    /// Download an image and extract text via Gemini Vision (Flash-Lite).
+    ///
+    /// Returns `Ok(None)` if the image is too large, unreachable, or contains
+    /// no text. Only returns `Err` on Gemini API failures.
+    pub async fn ocr_image_url(&self, image_url: &str) -> Result<Option<GeminiResponse>> {
+        // Download the image
+        let resp = self
+            .http
+            .get(image_url)
+            .timeout(Duration::from_secs(15))
+            .send()
+            .await
+            .context("Failed to download image for OCR")?;
+
+        if !resp.status().is_success() {
+            debug!(url = %image_url, status = %resp.status(), "Image download failed, skipping OCR");
+            return Ok(None);
+        }
+
+        // Determine MIME type from Content-Type header, default to jpeg
+        let mime_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .map(|ct| {
+                // Strip parameters like "; charset=utf-8"
+                ct.split(';').next().unwrap_or(ct).trim().to_string()
+            })
+            .unwrap_or_else(|| "image/jpeg".to_string());
+
+        let image_bytes = resp
+            .bytes()
+            .await
+            .context("Failed to read image bytes")?;
+
+        if image_bytes.len() > Self::MAX_IMAGE_BYTES {
+            debug!(
+                url = %image_url,
+                size_bytes = image_bytes.len(),
+                "Image too large for OCR, skipping"
+            );
+            return Ok(None);
+        }
+
+        if image_bytes.is_empty() {
+            return Ok(None);
+        }
+
+        self.ocr_image_bytes(&image_bytes, &mime_type).await
+    }
+
+    /// Extract text from raw image bytes via Gemini Vision (Flash-Lite).
+    ///
+    /// Returns `Ok(None)` if the response is empty (no text in image).
+    pub async fn ocr_image_bytes(
+        &self,
+        image_bytes: &[u8],
+        mime_type: &str,
+    ) -> Result<Option<GeminiResponse>> {
+        use base64::Engine;
+        let b64 = base64::engine::general_purpose::STANDARD.encode(image_bytes);
+
+        let request = GenerateRequest {
+            system_instruction: None,
+            contents: vec![Content {
+                role: Some("user".to_string()),
+                parts: vec![
+                    Part {
+                        text: None,
+                        inline_data: Some(InlineData {
+                            mime_type: mime_type.to_string(),
+                            data: b64,
+                        }),
+                    },
+                    Part {
+                        text: Some(Self::OCR_PROMPT.to_string()),
+                        inline_data: None,
+                    },
+                ],
+            }],
+            generation_config: GenerationConfig {
+                temperature: Some(0.0),
+                max_output_tokens: Some(1024),
+                response_mime_type: None,
+                response_schema: None,
+                thinking_config: Some(ThinkingConfig {
+                    thinking_budget: 0,
+                }),
+            },
+        };
+
+        let model = GeminiModel::FlashLite;
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
+            model.api_id()
+        );
+
+        // Retry with exponential backoff on 429/503
+        let mut last_err = String::new();
+        for attempt in 0..3u32 {
+            if attempt > 0 {
+                let base = 500 * 2u64.pow(attempt);
+                let jitter = rand::thread_rng().gen_range(0..500);
+                let delay = Duration::from_millis(base + jitter);
+                tokio::time::sleep(delay).await;
+            }
+
+            let resp = self
+                .http
+                .post(&url)
+                .header("x-goog-api-key", &self.api_key)
+                .header("content-type", "application/json")
+                .json(&request)
+                .send()
+                .await
+                .context("Gemini OCR request failed")?;
+
+            let status = resp.status();
+            if status.is_success() {
+                let api_resp: GenerateResponse = resp
+                    .json()
+                    .await
+                    .context("Failed to parse Gemini OCR response")?;
+
+                let text = api_resp
+                    .candidates
+                    .into_iter()
+                    .next()
+                    .and_then(|c| c.content.parts.into_iter().next())
+                    .and_then(|p| p.text)
+                    .unwrap_or_default();
+
+                let usage = api_resp.usage_metadata.unwrap_or(UsageMetadata {
+                    prompt_token_count: 0,
+                    candidates_token_count: 0,
+                    total_token_count: 0,
+                    cached_content_token_count: 0,
+                });
+
+                debug!(
+                    input_tokens = usage.prompt_token_count,
+                    output_tokens = usage.candidates_token_count,
+                    text_len = text.len(),
+                    "Gemini OCR complete"
+                );
+
+                if text.trim().is_empty() {
+                    return Ok(None);
+                }
+
+                return Ok(Some(GeminiResponse { text, usage, model }));
+            }
+
+            let body = resp.text().await.unwrap_or_default();
+            if status.as_u16() == 429 || status.as_u16() == 503 {
+                debug!(attempt, status = %status, "Gemini OCR rate limited, retrying");
+                last_err = format!("rate limited ({status})");
+                continue;
+            }
+
+            if let Ok(err_resp) = serde_json::from_str::<ErrorResponse>(&body) {
+                bail!("Gemini OCR error {}: {}", err_resp.error.code, err_resp.error.message);
+            }
+            bail!("Gemini OCR error {status}: {body}");
+        }
+        bail!("Gemini OCR {last_err} after 3 attempts")
+    }
+
     /// Health check: verify the API key works by listing models.
     pub async fn health_check(&self) -> bool {
         let url = "https://generativelanguage.googleapis.com/v1beta/models";
@@ -386,11 +571,11 @@ mod tests {
         let req = GenerateRequest {
             system_instruction: Some(Content {
                 role: None,
-                parts: vec![Part { text: Some("You are helpful.".to_string()) }],
+                parts: vec![Part { text: Some("You are helpful.".to_string()), inline_data: None }],
             }),
             contents: vec![Content {
                 role: Some("user".to_string()),
-                parts: vec![Part { text: Some("Hello".to_string()) }],
+                parts: vec![Part { text: Some("Hello".to_string()), inline_data: None }],
             }],
             generation_config: GenerationConfig {
                 temperature: Some(0.2),

@@ -461,7 +461,58 @@ impl BlueskySource {
         (embed_data, content_tags)
     }
 
+    /// Maximum number of images to OCR per post.
+    const MAX_OCR_IMAGES: usize = 3;
+
+    /// Extract image CDN URLs from a Jetstream commit record.
+    ///
+    /// Bluesky image embeds contain blob refs with CIDs. The CDN URL is:
+    /// `https://cdn.bsky.app/img/feed_fullsize/plain/{did}/{cid}@jpeg`
+    fn extract_image_urls(record: &serde_json::Value, did: &str) -> Vec<String> {
+        let mut urls = Vec::new();
+
+        let images_array = record
+            .get("embed")
+            .and_then(|embed| {
+                let embed_type = embed.get("$type").and_then(|v| v.as_str()).unwrap_or("");
+                match embed_type {
+                    "app.bsky.embed.images" => embed.get("images"),
+                    "app.bsky.embed.recordWithMedia" => embed
+                        .get("media")
+                        .filter(|m| {
+                            m.get("$type").and_then(|v| v.as_str()) == Some("app.bsky.embed.images")
+                        })
+                        .and_then(|m| m.get("images")),
+                    _ => None,
+                }
+            })
+            .and_then(|v| v.as_array());
+
+        if let Some(images) = images_array {
+            for img in images.iter().take(Self::MAX_OCR_IMAGES) {
+                // Try ref.$link (Jetstream format)
+                let cid = img
+                    .get("image")
+                    .and_then(|blob| blob.get("ref"))
+                    .and_then(|r| r.get("$link"))
+                    .and_then(|v| v.as_str());
+
+                if let Some(cid) = cid {
+                    urls.push(format!(
+                        "https://cdn.bsky.app/img/feed_fullsize/plain/{}/{}@jpeg",
+                        did, cid
+                    ));
+                }
+            }
+        }
+
+        urls
+    }
+
     /// Process a Jetstream commit event into an InsertableEvent.
+    ///
+    /// Image URLs (if any) are included in `payload.image_urls` for downstream
+    /// OCR processing by the pipeline's enrichment layer.
     fn process_commit(
         msg: &serde_json::Value,
         did_to_name: &HashMap<String, String>,
@@ -614,6 +665,14 @@ impl BlueskySource {
         }
         if embed_data != serde_json::json!({}) {
             payload["embed"] = embed_data;
+        }
+
+        // Include image CDN URLs for downstream OCR processing
+        if has_images {
+            let image_urls = Self::extract_image_urls(record, did);
+            if !image_urls.is_empty() {
+                payload["image_urls"] = serde_json::json!(image_urls);
+            }
         }
         if is_reply {
             if let Some(reply) = record.get("reply") {
@@ -1522,5 +1581,190 @@ mod tests {
 
         // Short text but has OSINT keyword -> passes
         assert!(BlueskySource::process_commit(&msg, &did_map).is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // Image URL extraction tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_extract_image_urls_basic() {
+        let record = serde_json::json!({
+            "text": "Satellite image of military buildup near the northern border region",
+            "embed": {
+                "$type": "app.bsky.embed.images",
+                "images": [
+                    {
+                        "alt": "Satellite image",
+                        "image": {
+                            "$type": "blob",
+                            "ref": {"$link": "bafkreiaaaa"},
+                            "mimeType": "image/jpeg",
+                            "size": 123456
+                        }
+                    },
+                    {
+                        "alt": "Map",
+                        "image": {
+                            "$type": "blob",
+                            "ref": {"$link": "bafkreibbbb"},
+                            "mimeType": "image/png",
+                            "size": 654321
+                        }
+                    }
+                ]
+            }
+        });
+
+        let urls = BlueskySource::extract_image_urls(&record, "did:plc:testuser");
+        assert_eq!(urls.len(), 2);
+        assert_eq!(
+            urls[0],
+            "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:testuser/bafkreiaaaa@jpeg"
+        );
+        assert_eq!(
+            urls[1],
+            "https://cdn.bsky.app/img/feed_fullsize/plain/did:plc:testuser/bafkreibbbb@jpeg"
+        );
+    }
+
+    #[test]
+    fn test_extract_image_urls_no_embed() {
+        let record = serde_json::json!({
+            "text": "Just text, no embed"
+        });
+        let urls = BlueskySource::extract_image_urls(&record, "did:plc:test");
+        assert!(urls.is_empty());
+    }
+
+    #[test]
+    fn test_extract_image_urls_external_embed() {
+        let record = serde_json::json!({
+            "text": "Link post",
+            "embed": {
+                "$type": "app.bsky.embed.external",
+                "external": {"uri": "https://example.com", "title": "T", "description": "D"}
+            }
+        });
+        let urls = BlueskySource::extract_image_urls(&record, "did:plc:test");
+        assert!(urls.is_empty());
+    }
+
+    #[test]
+    fn test_extract_image_urls_max_three() {
+        let mut images = Vec::new();
+        for i in 0..5 {
+            images.push(serde_json::json!({
+                "alt": "",
+                "image": {
+                    "$type": "blob",
+                    "ref": {"$link": format!("bafkrei{}", i)},
+                    "mimeType": "image/jpeg",
+                    "size": 1000
+                }
+            }));
+        }
+        let record = serde_json::json!({
+            "text": "Many images",
+            "embed": {
+                "$type": "app.bsky.embed.images",
+                "images": images
+            }
+        });
+        let urls = BlueskySource::extract_image_urls(&record, "did:plc:test");
+        assert_eq!(urls.len(), 3); // capped at MAX_OCR_IMAGES
+    }
+
+    #[test]
+    fn test_extract_image_urls_record_with_media() {
+        let record = serde_json::json!({
+            "text": "Quote with image of military operation near border",
+            "embed": {
+                "$type": "app.bsky.embed.recordWithMedia",
+                "record": {
+                    "record": {"uri": "at://did:plc:abc/app.bsky.feed.post/xyz"}
+                },
+                "media": {
+                    "$type": "app.bsky.embed.images",
+                    "images": [
+                        {
+                            "alt": "Photo",
+                            "image": {
+                                "$type": "blob",
+                                "ref": {"$link": "bafkreicccc"},
+                                "mimeType": "image/jpeg",
+                                "size": 50000
+                            }
+                        }
+                    ]
+                }
+            }
+        });
+        let urls = BlueskySource::extract_image_urls(&record, "did:plc:test");
+        assert_eq!(urls.len(), 1);
+        assert!(urls[0].contains("bafkreicccc"));
+    }
+
+    #[test]
+    fn test_process_commit_with_images_includes_urls() {
+        let mut did_map = HashMap::new();
+        did_map.insert("did:plc:test".to_string(), "Tester".to_string());
+
+        let msg = serde_json::json!({
+            "kind": "commit",
+            "did": "did:plc:test",
+            "time_us": 1710000000000000_u64,
+            "commit": {
+                "operation": "create",
+                "collection": "app.bsky.feed.post",
+                "rkey": "img1",
+                "record": {
+                    "text": "Satellite imagery shows new military buildup near the northern border region, significant vehicle movement visible.",
+                    "createdAt": "2026-03-10T12:00:00Z",
+                    "embed": {
+                        "$type": "app.bsky.embed.images",
+                        "images": [
+                            {
+                                "alt": "Satellite photo",
+                                "image": {
+                                    "$type": "blob",
+                                    "ref": {"$link": "bafkreitest"},
+                                    "mimeType": "image/jpeg",
+                                    "size": 200000
+                                }
+                            }
+                        ]
+                    }
+                }
+            }
+        });
+
+        let event = BlueskySource::process_commit(&msg, &did_map).unwrap();
+        let image_urls = event.payload.get("image_urls").unwrap().as_array().unwrap();
+        assert_eq!(image_urls.len(), 1);
+        assert!(image_urls[0].as_str().unwrap().contains("bafkreitest"));
+    }
+
+    #[test]
+    fn test_extract_image_urls_missing_ref() {
+        // Image without ref.$link should be skipped
+        let record = serde_json::json!({
+            "text": "Image post",
+            "embed": {
+                "$type": "app.bsky.embed.images",
+                "images": [
+                    {
+                        "alt": "No ref",
+                        "image": {
+                            "$type": "blob",
+                            "mimeType": "image/jpeg",
+                            "size": 1000
+                        }
+                    }
+                ]
+            }
+        });
+        let urls = BlueskySource::extract_image_urls(&record, "did:plc:test");
+        assert!(urls.is_empty());
     }
 }
