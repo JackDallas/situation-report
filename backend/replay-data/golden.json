@@ -1,0 +1,1117 @@
+{
+  "name": "72h-baseline",
+  "description": "Baseline from 72h production data, March 8 2026",
+  "expectations": [
+    {
+      "title_pattern": "Fire in IRAN",
+      "min_events": 25,
+      "min_sources": null,
+      "min_severity": "high",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 50 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Africa, Ali Khamenei — Africa\\-geopolitical\\-alignment",
+      "min_events": 25,
+      "min_sources": null,
+      "min_severity": "high",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 50 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Fire in OCEANIA",
+      "min_events": 29,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 59 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "China, Christian Democratic Union — Ai\\-generated\\-disinformation",
+      "min_events": 37,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 75 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Fire in EASTERN\\-EUROPE",
+      "min_events": 80,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 161 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Fire in NORTH\\-AMERICA",
+      "min_events": 25,
+      "min_sources": null,
+      "min_severity": "high",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 50 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Afula, Al Aqsa Compound — Baalbek\\-residential\\-targeting",
+      "min_events": 40,
+      "min_sources": null,
+      "min_severity": "high",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 80 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Anthropic, Argo — Ai\\-regulatory\\-conflict",
+      "min_events": 41,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 83 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Afghanistan, Annalena Baerbock — Afghanistan\\-cultural\\-expression",
+      "min_events": 25,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 50 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Afghanistan, Afghanistan Pakistan Health Cluster — Afghanistan\\-humanitarian\\-crisis",
+      "min_events": 28,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 56 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Andriy Sybiha, Anti Terrorist Center — Balkans\\-illicit\\-cash\\-transit",
+      "min_events": 71,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 143 events, 3 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Fire in SOUTHEAST\\-ASIA",
+      "min_events": 100,
+      "min_sources": null,
+      "min_severity": "medium",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 200 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Al Dhafra Air Base, Avian Influenza \\(h5n1\\) — Al\\-dhafra\\-air\\-base\\-attack",
+      "min_events": 28,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 57 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Fire in MIDDLE\\-EAST",
+      "min_events": 100,
+      "min_sources": null,
+      "min_severity": "medium",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 200 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Potential_explosion in NORTH\\-AMERICA",
+      "min_events": 25,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 50 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Ali Khamenei, Assembly Of Experts — Asymmetric\\-warfare\\-doctrine",
+      "min_events": 56,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 113 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Fire in SOUTH\\-ASIA",
+      "min_events": 100,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 200 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Ariel, Ashkelon — Asia\\-pacific\\-manufacturing\\-recovery",
+      "min_events": 69,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 138 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Abbas Araghchi, Ai Superpower — 2026\\-middle\\-east\\-conflict\\-intensification",
+      "min_events": 36,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 72 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Africa, Ali Khamenei — Ice\\-director\\-appointment\\-2026",
+      "min_events": 60,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 121 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Amman, Asia — Africa\\-security\\-coordination",
+      "min_events": 43,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 87 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Fire in SOUTH\\-AMERICA",
+      "min_events": 100,
+      "min_sources": null,
+      "min_severity": "medium",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 200 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Air Force, Armenia — 2026\\-persian\\-gulf\\-crisis",
+      "min_events": 26,
+      "min_sources": null,
+      "min_severity": "high",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 52 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Ahmad Vahidi, Ali Al Sistani — Adult\\-industry\\-regulation\\-2026",
+      "min_events": 44,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 88 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Abdel Fattah El Sisi, Andrew Mountbatten Windsor — Asymmetric\\-countermeasures",
+      "min_events": 47,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 94 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Bahrain, Cumta \\(israeli Civil Defense\\) — Airstrike",
+      "min_events": 26,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 53 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Bundeswehr, China — Diplomatic\\-crisis\\-response",
+      "min_events": 25,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 50 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Fire in EAST\\-ASIA",
+      "min_events": 100,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 200 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Acre, Akko — Galilee\\-frontier\\-confrontations",
+      "min_events": 30,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 60 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Fire in SUB_SAHARAN_AFRICA",
+      "min_events": 100,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 200 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Adolf Hitler, Bundeswehr — European\\-population\\-decline",
+      "min_events": 25,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 50 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "London Fir \\(uk\\), Scottish Fir \\(uk\\) — Aerodrome\\-closed",
+      "min_events": 25,
+      "min_sources": null,
+      "min_severity": "medium",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 50 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Fire in NORTH\\-AFRICA",
+      "min_events": 84,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 3.0,
+      "notes": "Auto-generated: 168 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Bulgaria, Iran — Bulgaria\\-un\\-security\\-council\\-tenure",
+      "min_events": 13,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 26 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Ukraine — EASTERN\\-EUROPE",
+      "min_events": 12,
+      "min_sources": null,
+      "min_severity": "medium",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 25 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Airspace in MIDDLE\\-EAST",
+      "min_events": 10,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 21 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Abba Kyari, Adeboye Adoke — Abba\\-kyari\\-asset\\-declaration\\-case",
+      "min_events": 14,
+      "min_sources": null,
+      "min_severity": "high",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 29 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Chatgpt, China — Anti\\-semitic\\-surveillance\\-plot",
+      "min_events": 21,
+      "min_sources": null,
+      "min_severity": "high",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 43 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Accelerator Driven Nuclear Reactor, Beijing — Asia\\-growth\\-target\\-revision",
+      "min_events": 11,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 23 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Donald Trump, Germany — Americas\\-regional\\-security\\-coalition",
+      "min_events": 13,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 26 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "15th Five Year Plan, Amina Bokhary — Asia\\-economic\\-policy\\-shift",
+      "min_events": 16,
+      "min_sources": null,
+      "min_severity": "high",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 33 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "European Union, Iceland — Atlantic\\-alliance\\-tensions",
+      "min_events": 11,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 22 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Achziv Coast, Ali Al Salem Air Base — Anglo\\-american\\-diplomatic\\-tensions",
+      "min_events": 21,
+      "min_sources": null,
+      "min_severity": "high",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 43 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Axios, China — Civilian\\-infrastructure\\-targeting",
+      "min_events": 19,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 38 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Adjumani, Afghan Refugees — Arua\\-displacement\\-management",
+      "min_events": 13,
+      "min_sources": null,
+      "min_severity": "high",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 26 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Buk, Fp 2 — Attack",
+      "min_events": 12,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 24 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Algeria, Bank Of Korea — East\\-asia\\-diplomatic\\-relations",
+      "min_events": 18,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 37 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Cdu/csu, Chancellor's Office — Europe\\-domestic\\-violence\\-prevention\\-tech",
+      "min_events": 23,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 47 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Bundeswehr, Cdu/csu — European\\-population\\-decline",
+      "min_events": 15,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 31 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Activision Blizzard, Dindoor — Activision\\-blizzard\\-content\\-policy",
+      "min_events": 18,
+      "min_sources": null,
+      "min_severity": "high",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 36 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Berlin, Fcas — Berlin\\-defense\\-industry\\-focus",
+      "min_events": 22,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 45 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Airspace in EASTERN\\-EUROPE",
+      "min_events": 17,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 34 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Amazon, Brazil — Amazon\\-deforestation\\-expansion",
+      "min_events": 10,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 20 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Atacms, Bahrain — Bahrain\\-critical\\-infrastructure\\-targeting",
+      "min_events": 14,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 28 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "98l6 Yenisei, Crimea — Airstrike",
+      "min_events": 16,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 33 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Shallow in NORTH\\-AMERICA",
+      "min_events": 14,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 2.0,
+      "notes": "Auto-generated: 28 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "China, Iran — China\\-iran\\-energy\\-trade",
+      "min_events": 2,
+      "min_sources": null,
+      "min_severity": "medium",
+      "min_certainty": null,
+      "weight": 1.5,
+      "notes": "Auto-generated: 4 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Bellingcat, Gush Dan — Israel\\-gaza\\-weapon\\-evolution",
+      "min_events": 1,
+      "min_sources": null,
+      "min_severity": "medium",
+      "min_certainty": null,
+      "weight": 1.5,
+      "notes": "Auto-generated: 2 events, 2 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Bayern Munich, Manchester City — Bayern\\-munich\\-management\\-appointment",
+      "min_events": 6,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 13 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Inter American Court Of Human Rights, Peru — Inter\\-american\\-court\\-human\\-rights\\-rulings",
+      "min_events": 2,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 5 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Court Of Appeal, Cybercrimes Act — Africa\\-cyber\\-harassment\\-activism",
+      "min_events": 7,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 15 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Bab El Mandeb, Gulf Of Aden — Bab\\-el\\-mandeb\\-shipping\\-lane",
+      "min_events": 5,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 11 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Eu\\-green\\-deal\\-implementation in WESTERN\\-EUROPE",
+      "min_events": 6,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 13 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Fifa World Cup, Mexico City — Fifa\\-tournament\\-disruption",
+      "min_events": 5,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 10 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "European\\-democracy\\-trust in WESTERN\\-EUROPE",
+      "min_events": 2,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 5 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "German Catholic Church, New Head Of German Catholics — European\\-religious\\-modernization",
+      "min_events": 6,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 13 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "China, Uk Member Of Parliament — China\\-espionage\\-operations",
+      "min_events": 8,
+      "min_sources": null,
+      "min_severity": "high",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 17 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Ice Train — Germany\\-railway\\-security\\-incident",
+      "min_events": 6,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 13 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Bank Of Korea, China — Asia\\-pacific\\-investment\\-outlook",
+      "min_events": 7,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 14 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Airstrike in MIDDLE\\-EAST",
+      "min_events": 3,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 7 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Netflix, Paramount Global — Media\\-consolidation\\-attempts",
+      "min_events": 6,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 13 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Cholera, Famod — Africa\\-disability\\-rights\\-legislation",
+      "min_events": 2,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 5 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Adinet, Bmkg — Asean\\-cyber\\-policy",
+      "min_events": 5,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 11 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "European\\-urban\\-overtourism\\-crisis in WESTERN\\-EUROPE",
+      "min_events": 5,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 10 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Germany\\-inflation\\-2026 in WESTERN\\-EUROPE",
+      "min_events": 5,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 10 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Berlinale — Berlinale\\-political\\-neutrity\\-debate",
+      "min_events": 4,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 9 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Acled, Bangladesh — Bangladesh\\-cold\\-wave\\-response",
+      "min_events": 9,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 19 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Addis Ababa, African Peer Review Mechanism — Addis\\-ababa\\-summit\\-2026",
+      "min_events": 3,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 7 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Balen Shah, Balendra Shah — Balendra\\-shah\\-political\\-rise",
+      "min_events": 6,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 13 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Climate\\-change\\-impact\\-analysis in Unknown Region",
+      "min_events": 3,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 7 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "African Digital Transformation Centre, Allafrica — Africa\\-poverty\\-alleviation\\-debate",
+      "min_events": 8,
+      "min_sources": null,
+      "min_severity": "medium",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 17 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Alexei Navalny, Novichok — Germany\\-prosecutor\\-investigation",
+      "min_events": 5,
+      "min_sources": null,
+      "min_severity": "medium",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 10 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "German National Ice Hockey Team — Germany\\-ice\\-hockey\\-development",
+      "min_events": 4,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 9 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "German Customs, Ketamine — Europe\\-synthetic\\-drugs\\-interdiction",
+      "min_events": 8,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 16 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Cuba, Daniel Noboa — Andean\\-narcotics\\-interdiction",
+      "min_events": 7,
+      "min_sources": null,
+      "min_severity": "medium",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 14 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Italy, Rai — European\\-civil\\-society\\-hacking",
+      "min_events": 3,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 6 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Berlin Holocaust Memorial — Berlin\\-antisemitic\\-violence",
+      "min_events": 8,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 17 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Deutsche Bank, Jeffrey Epstein — Epstein\\-files\\-financial\\-investigation",
+      "min_events": 8,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 17 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Epstein Barr Virus, Multiple Sclerosis — Ebv\\-ms\\-pathogenesis",
+      "min_events": 3,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 7 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Democratic People's Republic Of Korea, Destroyer — Ai\\-deepfake\\-infiltration",
+      "min_events": 6,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 12 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Attack in MIDDLE\\-EAST",
+      "min_events": 6,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 12 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Alternative For Germany, Dortmund — Germany\\-afd\\-protests",
+      "min_events": 3,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 6 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Attack in EASTERN\\-EUROPE",
+      "min_events": 6,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 12 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Greenland, Olympic Athletes — Arctic\\-autonomy\\-defense",
+      "min_events": 3,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 7 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Greek Court, Neo Nazi Party Leaders — Greece\\-far\\-right\\-judicial\\-action",
+      "min_events": 8,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 17 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Associated Newspapers, Axel Springer — Axel\\-springer\\-uk\\-expansion",
+      "min_events": 4,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 9 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Confederation Of African Football, Women's Africa Cup Of Nations — Africa\\-sports\\-disruption",
+      "min_events": 9,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 19 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Fighter Jets, Gcc States — Gulf\\-cooperation\\-council\\-economic\\-security",
+      "min_events": 2,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 5 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Net\\-metering\\-regulatory\\-challenges in NORTH\\-AMERICA",
+      "min_events": 6,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 13 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Colombo, European States — Gulf\\-of\\-aden\\-shipping",
+      "min_events": 3,
+      "min_sources": null,
+      "min_severity": "high",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 7 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "International Olympic Committee, Vladislav Heraskevych — Russian\\-sports\\-sanctions",
+      "min_events": 4,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 9 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Serbia — Balkans\\-state\\-corporate\\-overlap",
+      "min_events": 6,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 12 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Gisele Pelicot, Lyon — France\\-serial\\-rape\\-case",
+      "min_events": 5,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 10 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Ai\\-hardware\\-demand\\-surge in Unknown Region",
+      "min_events": 3,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 7 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Idf in MIDDLE\\-EAST",
+      "min_events": 3,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 6 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Iran, Persian Gulf — Gulf\\-cooperation\\-council\\-security\\-threats",
+      "min_events": 9,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 18 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Earthquake In Indonesia — Earthquake",
+      "min_events": 2,
+      "min_sources": null,
+      "min_severity": "medium",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 5 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Afghanistan Women's National Football Team, Taliban — Afghanistan\\-womens\\-sports\\-resumption",
+      "min_events": 5,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 11 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Armenia, Burkina Faso — Armenia\\-food\\-security\\-monitoring",
+      "min_events": 6,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 12 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Bundestag, Frank Walter Steinmeier — Germany\\-parliamentary\\-tribute",
+      "min_events": 4,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 8 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Christine Lagarde, European Central Bank — Ecb\\-leadership\\-crisis",
+      "min_events": 5,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 10 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Climate\\-security\\-risk\\-assessment in Unknown Region",
+      "min_events": 4,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 9 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Belgium, Eu Sanctions — Belgium\\-sanctions\\-enforcement",
+      "min_events": 6,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 13 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Breaking in Unknown Region",
+      "min_events": 2,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 5 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Albania — Albania\\-gender\\-based\\-violence",
+      "min_events": 6,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 13 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Airstrike in EASTERN\\-EUROPE",
+      "min_events": 5,
+      "min_sources": null,
+      "min_severity": "critical",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 10 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Climate\\-intervention\\-private\\-sector in Unknown Region",
+      "min_events": 3,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 6 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Australian Parliament, Brisbane City Council — Australia\\-sa\\-election\\-preference\\-debates",
+      "min_events": 2,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 5 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Artemis Ii, Nasa — Artemis\\-program\\-ground\\-testing",
+      "min_events": 5,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 10 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Aleppo, As Sweida Governorate — Aleppo\\-security\\-situation",
+      "min_events": 3,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 7 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "2026 Winter Paralympics, Belarusian Paralympic Committee — Belarus\\-international\\-sports\\-reintegration",
+      "min_events": 5,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 10 events, 1 sources, Emerging phase"
+    },
+    {
+      "title_pattern": "Biodiversity\\-conservation\\-funding in Unknown Region",
+      "min_events": 4,
+      "min_sources": null,
+      "min_severity": "low",
+      "min_certainty": null,
+      "weight": 1.0,
+      "notes": "Auto-generated: 8 events, 1 sources, Emerging phase"
+    }
+  ],
+  "anti_expectations": [
+    {
+      "title_pattern": " — .+ — ",
+      "reason": "Double em-dash titles are garbage",
+      "weight": 2.0
+    }
+  ],
+  "thresholds": {
+    "max_top_level": 977,
+    "min_avg_certainty": null,
+    "min_multi_source_ratio": 0.016953316953316953,
+    "max_info_ratio": null
+  }
+}
