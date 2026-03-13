@@ -1872,6 +1872,24 @@ impl SituationGraph {
             info!(titles_fixed, "Post-restore empty title fix complete");
         }
 
+        // Seed percentile tracker with restored cluster event counts so adaptive
+        // thresholds activate immediately instead of waiting for cold_start ticks.
+        if self.config.severity.adaptive_enabled && !self.clusters.is_empty() {
+            let event_counts: Vec<usize> = self.clusters.values()
+                .map(|c| c.event_count)
+                .collect();
+            let cold_start = self.config.severity.percentile_cold_start;
+            // Record the current snapshot enough times to pass cold start threshold.
+            for _ in 0..cold_start {
+                self.percentile_tracker.record(event_counts.clone());
+            }
+            info!(
+                snapshots = cold_start,
+                clusters = event_counts.len(),
+                "Seeded percentile tracker from restored clusters"
+            );
+        }
+
         info!(count = self.clusters.len(), "Restored clusters from DB");
     }
 
