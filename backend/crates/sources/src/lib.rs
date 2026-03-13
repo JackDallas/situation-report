@@ -29,6 +29,7 @@ pub mod gpsjam;
 pub mod telegram;
 pub mod rss_news;
 pub mod ukmto;
+pub mod ukmto_warnings;
 pub mod copernicus;
 pub mod bluesky;
 

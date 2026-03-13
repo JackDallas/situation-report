@@ -37,6 +37,8 @@ export const typeColorMap: Record<EventType, TypeColor> = {
 	source_health: { border: 'border-l-text-muted', bg: 'bg-text-muted/10', text: 'text-text-muted', label: 'Health' },
 	geo_news: { border: 'border-l-emerald-400', bg: 'bg-emerald-400/10', text: 'text-emerald-300', label: 'Geo News' },
 	shodan_count: { border: 'border-l-accent', bg: 'bg-accent/10', text: 'text-accent', label: 'Shodan' },
+	bluesky_post: { border: 'border-l-blue-400', bg: 'bg-blue-400/10', text: 'text-blue-300', label: 'Bluesky' },
+	maritime_security: { border: 'border-l-teal-500', bg: 'bg-teal-500/10', text: 'text-teal-400', label: 'Maritime' },
 };
 
 export const severityColors: Record<Severity, SeverityColor> = {
@@ -107,6 +109,10 @@ export function getEventSummary(event: SituationEvent): string {
 		}
 		case 'shodan_count':
 			return `Shodan: ${d.query ?? 'scan'}${d.count ? ` (${d.count} results)` : ''}`;
+		case 'bluesky_post':
+			return `${d.author_handle ?? 'Bluesky'}: ${((d.text as string) ?? '').slice(0, 80) || 'post'}`;
+		case 'maritime_security':
+			return event.title ?? `${d.warning_type ?? 'Maritime warning'}${d.area ? ` — ${d.area}` : ''}`;
 		default:
 			return `${event.source_type}: ${event.event_type} event`;
 	}

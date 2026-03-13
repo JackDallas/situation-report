@@ -57,6 +57,8 @@ pub enum SourceType {
     Telegram,
     #[serde(rename = "ukmto")]
     Ukmto,
+    #[serde(rename = "ukmto-warnings")]
+    UkmtoWarnings,
     #[serde(rename = "usgs")]
     Usgs,
     #[serde(rename = "copernicus")]
@@ -99,6 +101,7 @@ impl SourceType {
             Self::Shodan => "shodan",
             Self::Telegram => "telegram",
             Self::Ukmto => "ukmto",
+            Self::UkmtoWarnings => "ukmto-warnings",
             Self::Usgs => "usgs",
             Self::Copernicus => "copernicus",
             Self::Bluesky => "bluesky",
@@ -113,7 +116,7 @@ impl std::fmt::Display for SourceType {
 }
 
 /// All variants of [`SourceType`] for exhaustive testing.
-pub const ALL_SOURCE_TYPES: [SourceType; 29] = [
+pub const ALL_SOURCE_TYPES: [SourceType; 30] = [
     SourceType::Acled,
     SourceType::AdsbFi,
     SourceType::AdsbLol,
@@ -140,6 +143,7 @@ pub const ALL_SOURCE_TYPES: [SourceType; 29] = [
     SourceType::Shodan,
     SourceType::Telegram,
     SourceType::Ukmto,
+    SourceType::UkmtoWarnings,
     SourceType::Usgs,
     SourceType::Copernicus,
     SourceType::Bluesky,
@@ -193,6 +197,6 @@ mod tests {
 
     #[test]
     fn variant_count() {
-        assert_eq!(ALL_SOURCE_TYPES.len(), 29, "Expected 29 source type variants");
+        assert_eq!(ALL_SOURCE_TYPES.len(), 30, "Expected 30 source type variants");
     }
 }
