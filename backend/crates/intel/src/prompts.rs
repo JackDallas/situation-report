@@ -173,42 +173,45 @@ Respond with ONLY valid JSON matching this schema:
 
 /// System prompt for situation title generation (CACHED across calls).
 /// Cheap Haiku call to produce a short descriptive title for a cluster of events.
-pub const TITLE_SYSTEM: &str = r#"You generate concise, specific situation titles (4-8 words) for an intelligence dashboard.
+pub const TITLE_SYSTEM: &str = r#"You generate concise, specific situation titles for an intelligence dashboard.
 
-Your title must describe what is ACTUALLY HAPPENING — the core event or conflict that the cluster represents. Think like a wire service editor writing a breaking news slug.
+Your title MUST describe WHAT IS HAPPENING — the core event, conflict, or crisis. Think like a wire service editor writing a breaking news slug. The title needs a VERB or ACTION NOUN (war, strikes, fighting, crisis, surge, ban, protests, drought, etc.).
 
-GOOD titles (specific, concrete):
-- "Iran Regional Conflict"
+GOOD titles (location + action):
 - "Horn of Africa Piracy Surge"
 - "Gulf of Aden Shipping Attacks"
 - "Sahel Counterinsurgency Sweeps"
-- "Kashmir Line-of-Control Shelling"
+- "Kashmir Border Shelling"
 - "Central Africa Wildfires"
-- "South Korea Winter Olympics"
+- "Iran Nuclear Talks"
+- "Yemen Houthi Strikes"
+- "Sudan Civil War"
 
-BAD titles (vague, compound, or listing peripheral actors):
-- "US Spain Rift Over Iran Conflict" (lists reacting countries — just say "Iran Conflict")
-- "Ukraine Olympic Ban Sparks Diplomatic Row" (too narrative — just say "Ukraine Olympic Ban")
-- "Country-A Country-B Trade Shifts and Economic Security Concerns" (too compound, too vague)
-- "Region-X Humanitarian Crisis and Security Tensions" (kitchen-sink title)
-- "Country-A Country-B Regional Economic Security Concerns" (merges unrelated topics)
-- "Region-Y Military Activity and Asset Movements" (uses banned word "activity")
-- "Country-C Military Conflict and Weapon Deployments" (too wordy)
+BAD titles — NEVER produce these patterns:
+- "UN South Asia Middle East East Asia" (just region names concatenated — NO ACTION)
+- "Iran Israel Syria Lebanon" (just country names listed — NO ACTION)
+- "South Asia Middle East Conflict" (multiple regions jammed together — pick ONE)
+- "US Spain Rift Over Iran Conflict" (lists reacting countries)
+- "Country-A Country-B Trade Shifts and Economic Security Concerns" (compound, vague)
+- "Region-X Humanitarian Crisis and Security Tensions" (kitchen-sink)
+- "Region-Y Military Activity and Asset Movements" (banned filler words)
 
 Rules:
-- 3-6 words maximum. Shorter is better. 3-4 words is ideal.
-- Name the CORE LOCATION where events are happening + what is HAPPENING
-- Focus on the PRIMARY location, not countries reacting from afar. If fighting is in Syria, title it "Syria Civil War" not "US Russia Syria Conflict"
-- Drop peripheral actors: if multiple countries are listed but only one is where events occur, name only that one
+- 3-6 words. Shorter is better. 3-4 words is ideal.
+- Structure: [ONE location] + [what is happening]. Example: "Yemen Houthi Strikes"
+- Pick the SINGLE most specific location — one country or one sub-region, never two or more regions
+- The title MUST contain an action/event word — never just list place names or entity names
+- Focus on the PRIMARY location where events occur, not countries reacting from afar
 - NEVER join unrelated topics with "and" — pick the single dominant theme
-- NEVER start with "Global" — if events span multiple regions, pick the DOMINANT region or most significant location
+- NEVER start with "Global"
+- NEVER just echo back the region or entity names from the input — synthesize what is happening
 - NEVER use these vague filler words: tensions, escalation, escalate, escalates, developments, situation, multiple, various, activity, operations, concerns, shifts, movements, dynamics, implications, sparks, rift, row
-- If events show active combat/strikes/casualties, call it a war, conflict, fighting, or strikes — never soften with "escalation" or "activity"
+- If events show active combat/strikes/casualties, call it war, conflict, fighting, or strikes
 - NO technical acronyms: FIR, NOTAM, BGP, ASN, ICAO, ADS-B, SIGINT — use plain English
-- For flight tracking: "[Region] Military Flights" or "[Country] Air Force Patrols"
+- For flight tracking: "[Country] Military Flights" or "[Country] Air Patrols"
 - For fire/thermal: "[Location] Wildfires" or "[Location] Fire Clusters"
-- For news clusters about a specific country: "[Country] [What's happening]"
-- If entities list is empty or irrelevant, focus on the topics and event headlines for the core theme
+- For news about a specific country: "[Country] [What's happening]"
+- If entities list is empty or irrelevant, focus on topics and event headlines
 - NEVER respond with "No relevant information" or any refusal
 - Respond with ONLY the title text, no quotes, no explanation"#;
 
@@ -228,6 +231,27 @@ pub fn title_user(
 ) -> String {
     let mut prompt = format!("Generate a concise situation title for this cluster of {event_count} events from {source_count} sources.\n\n");
 
+    // Event headlines FIRST — these describe what's actually happening and are the
+    // strongest signal for title generation. Placed before metadata to prime the model.
+    if !event_titles.is_empty() {
+        prompt.push_str("Event headlines (use these to determine WHAT is happening):\n");
+        // Take the LAST 5 titles (most recent) rather than the first 5
+        let start = event_titles.len().saturating_sub(5);
+        for t in event_titles[start..].iter().rev() {
+            prompt.push_str(&format!("- {t}\n"));
+        }
+        prompt.push('\n');
+    }
+    if !enrichment_summaries.is_empty() {
+        prompt.push_str("Enrichment summaries:\n");
+        for s in enrichment_summaries.iter().take(3) {
+            prompt.push_str(&format!("- {s}\n"));
+        }
+        prompt.push('\n');
+    }
+    if !topics.is_empty() {
+        prompt.push_str(&format!("Topics: {}\n", topics.join(", ")));
+    }
     if let Some(dist) = severity_dist {
         prompt.push_str(&format!("Severity: {dist}\n"));
     }
@@ -240,28 +264,15 @@ pub fn title_user(
         }
     }
     if !entities.is_empty() {
-        prompt.push_str(&format!("Key entities (pre-filtered for relevance): {}\n", entities.join(", ")));
+        prompt.push_str(&format!("Key entities: {}\n", entities.join(", ")));
     }
-    if !topics.is_empty() {
-        prompt.push_str(&format!("Topics: {}\n", topics.join(", ")));
-    }
+    // Regions listed last and labeled as reference-only to prevent the model
+    // from just concatenating region names as the title.
     if !regions.is_empty() {
-        prompt.push_str(&format!("Regions: {}\n", regions.join(", ")));
+        prompt.push_str(&format!("Regions (for geographic reference only — do NOT list these as the title): {}\n", regions.join(", ")));
     }
-    if !enrichment_summaries.is_empty() {
-        prompt.push_str("\nEnrichment summaries:\n");
-        for s in enrichment_summaries.iter().take(3) {
-            prompt.push_str(&format!("- {s}\n"));
-        }
-    }
-    if !event_titles.is_empty() {
-        prompt.push_str("\nSample event headlines (for context — your title should describe the OVERALL situation, not just these specific events):\n");
-        // Take the LAST 5 titles (most recent) rather than the first 5
-        let start = event_titles.len().saturating_sub(5);
-        for t in event_titles[start..].iter().rev() {
-            prompt.push_str(&format!("- {t}\n"));
-        }
-    }
+
+    prompt.push_str("\nRemember: the title must describe WHAT is happening, not just WHERE. Include an action word.\n");
 
     prompt
 }

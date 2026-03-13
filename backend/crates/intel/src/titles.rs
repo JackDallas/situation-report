@@ -8,6 +8,20 @@ use crate::gemini::GeminiClient;
 use crate::ollama::OllamaClient;
 use crate::prompts;
 
+/// Multi-word geographic phrases to strip first (longest first to avoid partial matches).
+const GEO_PHRASES: &[&str] = &[
+    "southeast asia", "southern africa", "central africa", "central asia",
+    "latin america", "middle east", "south asia", "east asia", "west africa",
+    "east africa", "north africa",
+];
+
+/// Single-word geographic/org terms for region-concatenation detection.
+const GEO_WORDS: &[&str] = &[
+    "africa", "asia", "europe", "americas", "oceania", "pacific", "arctic",
+    "antarctic", "mediterranean", "balkans", "caucasus", "sahel", "caribbean",
+    "un", "eu", "nato", "usa", "uk",
+];
+
 /// Detect garbage titles produced by LLM refusals or vague generation.
 fn is_garbage_title(title: &str) -> bool {
     // Empty or excessively long titles are garbage (LLM ran on too long)
@@ -50,6 +64,11 @@ fn is_garbage_title(title: &str) -> bool {
     if lower.contains(" and ") && title.split_whitespace().count() >= 6 {
         return true;
     }
+    // Region-concatenation garbage: titles that are just geographic/org names strung together
+    // with no action word. E.g. "UN South Asia Middle East East Asia"
+    if is_region_concatenation(&lower) {
+        return true;
+    }
     // Titles with banned vague words that sneak through
     let vague_patterns = [
         "economic security concerns",
@@ -63,6 +82,56 @@ fn is_garbage_title(title: &str) -> bool {
         "no logical connection",
     ];
     vague_patterns.iter().any(|p| lower.contains(p))
+}
+
+/// Detect titles that are just geographic names / org acronyms concatenated with no action.
+/// E.g. "UN South Asia Middle East East Asia" or "Iran Israel Syria"
+fn is_region_concatenation(lower: &str) -> bool {
+    // First, check if the title contains any action/event words that make it meaningful.
+    // If it has an action word, it's not just a concatenation.
+    let action_words = [
+        "war", "conflict", "fighting", "strikes", "attack", "attacks", "strike",
+        "bombing", "shelling", "siege", "invasion", "offensive", "battle",
+        "crisis", "disaster", "earthquake", "flood", "floods", "wildfire", "wildfires",
+        "fire", "fires", "drought", "famine", "hurricane", "typhoon", "cyclone",
+        "tsunami", "eruption", "collapse",
+        "surge", "spike", "outbreak", "pandemic", "epidemic",
+        "protests", "protest", "uprising", "revolution", "coup", "riots", "unrest",
+        "election", "elections", "vote", "referendum", "summit", "talks", "negotiations",
+        "ban", "sanctions", "embargo", "blockade", "ceasefire", "truce",
+        "piracy", "hijacking", "kidnapping", "assassination",
+        "flights", "patrols", "deployment", "buildup", "exercises",
+        "hack", "breach", "outage", "disruption", "cyberattack",
+        "migration", "refugees", "displacement", "evacuation",
+        "shooting", "massacre", "genocide", "atrocity",
+        "nuclear", "chemical", "biological",
+        "sweeps", "raids", "crackdown", "arrests",
+        "aid", "relief", "rescue", "humanitarian",
+    ];
+    for action in &action_words {
+        if lower.contains(action) {
+            return false;
+        }
+    }
+
+    // No action word found — check if the title is mostly geographic/org names.
+    // Strip out known multi-word geographic phrases first (longest first), then
+    // check remaining individual words against single-word geo terms.
+    let mut remaining = lower.to_string();
+    for phrase in GEO_PHRASES {
+        remaining = remaining.replace(phrase, " ");
+    }
+
+    // Check remaining words: filter out single-word geo terms and short artifacts
+    let remaining_words: Vec<&str> = remaining.split_whitespace()
+        .filter(|w| w.len() >= 2)
+        .filter(|w| !GEO_WORDS.contains(w))
+        .collect();
+
+    // If after removing all geographic terms there's 0-1 words left, it's concatenation garbage.
+    // E.g. "UN South Asia Middle East East Asia" → "" after removal
+    // But "Horn of Africa Piracy Surge" → ["horn", "of", "piracy", "surge"] → has content
+    remaining_words.len() <= 1
 }
 
 /// Filter entities to only those relevant to the cluster's core situation.
@@ -275,6 +344,32 @@ mod tests {
     #[test]
     fn test_garbage_unspecified() {
         assert!(is_garbage_title("Doctors in Asia Face Unspecified Challenges"));
+    }
+
+    // Region-concatenation garbage tests
+    #[test]
+    fn test_garbage_region_concatenation() {
+        assert!(is_garbage_title("UN South Asia Middle East East Asia"));
+        assert!(is_garbage_title("South Asia Middle East"));
+        assert!(is_garbage_title("Africa Asia Europe"));
+        assert!(is_garbage_title("EU NATO Pacific"));
+    }
+    #[test]
+    fn test_good_title_with_action_not_region_garbage() {
+        // These have action words so should NOT be flagged as region concatenation
+        assert!(!is_garbage_title("South Asia Flooding Crisis"));
+        assert!(!is_garbage_title("Middle East Ceasefire Talks"));
+        assert!(!is_garbage_title("Africa Drought Emergency"));
+        assert!(!is_garbage_title("EU Sanctions Vote"));
+        assert!(!is_garbage_title("Pacific Typhoon Surge"));
+    }
+    #[test]
+    fn test_good_title_country_with_action() {
+        // Country names + action = good title
+        assert!(!is_garbage_title("Sudan Civil War"));
+        assert!(!is_garbage_title("Yemen Houthi Strikes"));
+        assert!(!is_garbage_title("Iran Nuclear Talks"));
+        assert!(!is_garbage_title("Syria Refugee Crisis"));
     }
 
     // filter_relevant_entities tests
