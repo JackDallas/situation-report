@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use crate::budget::BudgetManager;
 use crate::client::ClaudeClient;
+use crate::gemini::{GeminiClient, GeminiModel};
 use crate::ollama::OllamaClient;
 use crate::prompts;
 use crate::types::{
@@ -103,30 +104,34 @@ pub async fn analyze_current_state(
     Ok(report)
 }
 
-/// Tiered analysis: Qwen for NORMAL/ELEVATED, Sonnet for HIGH tempo.
+/// Tiered analysis: deliberate model selection, not automatic fallback.
 ///
-/// If Qwen sets `escalate: true`, returns `Ok((report, true))` to signal
-/// the caller should re-run with Sonnet.
+/// - HIGH tempo → Gemini Flash directly (not as fallback)
+/// - NORMAL/ELEVATED → Ollama. If Ollama fails → return Err
+/// - Claude removed from the chain entirely.
+/// If Qwen sets `escalate: true`, returns `Ok((report, true))`
+/// to signal the caller should re-run with a more capable model.
 pub async fn analyze_tiered(
-    claude: Option<&ClaudeClient>,
+    _claude: Option<&ClaudeClient>,
+    gemini: Option<&GeminiClient>,
     ollama: Option<&OllamaClient>,
     budget: &Arc<BudgetManager>,
     input: &AnalysisInput,
 ) -> Result<(AnalysisReport, bool)> {
-    let use_sonnet = input.tempo == "HIGH";
-
-    // HIGH tempo → Sonnet directly
-    if use_sonnet {
-        if let Some(client) = claude {
-            if budget.can_afford_sonnet().await {
-                info!(tempo = %input.tempo, "HIGH tempo — running Sonnet analysis");
-                let report = analyze_current_state(client, budget, input).await?;
+    // HIGH tempo → Gemini Flash directly (deliberate, not fallback)
+    if input.tempo == "HIGH" {
+        if let Some(gc) = gemini {
+            if budget.can_afford_gemini().await {
+                info!(tempo = %input.tempo, "HIGH tempo — running Gemini Flash analysis");
+                let report = analyze_gemini(gc, budget, input).await?;
                 return Ok((report, false));
             }
+            warn!("Gemini budget exhausted for HIGH tempo analysis");
         }
+        // If Gemini unavailable for HIGH tempo, fall through to Ollama
     }
 
-    // NORMAL/ELEVATED → Qwen
+    // NORMAL/ELEVATED (or HIGH when Gemini unavailable) → Ollama
     if let Some(oc) = ollama {
         let user_msg = prompts::analysis_user(&input.situations, &input.recent_events, &input.tempo);
 
@@ -180,19 +185,80 @@ pub async fn analyze_tiered(
         );
 
         if escalate {
-            warn!("Qwen flagged escalation — Sonnet re-analysis recommended");
+            warn!("Qwen flagged escalation — Gemini/Sonnet re-analysis recommended");
         }
 
         return Ok((report, escalate));
     }
 
-    // Fallback: Sonnet
-    if let Some(client) = claude {
-        let report = analyze_current_state(client, budget, input).await?;
-        return Ok((report, false));
-    }
+    bail!("No LLM backend available for analysis (Ollama required for NORMAL/ELEVATED tempo)");
+}
 
-    bail!("No LLM backend available for analysis");
+/// Run analysis via Gemini Flash with structured JSON output.
+async fn analyze_gemini(
+    gemini: &GeminiClient,
+    budget: &Arc<BudgetManager>,
+    input: &AnalysisInput,
+) -> Result<AnalysisReport> {
+    let user_msg = prompts::analysis_user(&input.situations, &input.recent_events, &input.tempo);
+    let model = GeminiModel::Flash;
+
+    info!(
+        situations = input.situations.len(),
+        events = input.recent_events.len(),
+        tempo = %input.tempo,
+        "Running periodic analysis via Gemini Flash"
+    );
+
+    // Use text output (not JSON schema) — the analysis prompt already asks for JSON,
+    // and the response may include narrative text that doesn't fit a strict schema.
+    let response = gemini
+        .generate_text(model, prompts::ANALYSIS_SYSTEM, &user_msg, 8192)
+        .await
+        .context("Gemini Flash analysis call failed")?;
+
+    budget.record_gemini(model, &response);
+
+    // Strip markdown code fences if present
+    let json_str = response.text.trim();
+    let json_str = json_str
+        .strip_prefix("```json")
+        .or_else(|| json_str.strip_prefix("```"))
+        .unwrap_or(json_str);
+    let json_str = json_str.strip_suffix("```").unwrap_or(json_str).trim();
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(json_str).context("Failed to parse Gemini analysis JSON")?;
+
+    let tokens = response.usage.prompt_token_count + response.usage.candidates_token_count;
+
+    let report = AnalysisReport {
+        id: Uuid::new_v4(),
+        timestamp: chrono::Utc::now(),
+        narrative: parsed["narrative"]
+            .as_str()
+            .unwrap_or("Analysis unavailable.")
+            .to_string(),
+        suggested_merges: parse_merges(&parsed["suggested_merges"]),
+        topic_clusters: parse_clusters(&parsed["topic_clusters"]),
+        escalation_assessment: parsed["escalation_assessment"]
+            .as_str()
+            .unwrap_or("STABLE")
+            .to_string(),
+        key_entities: parse_entity_connections(&parsed["key_entities"]),
+        model: model.display_name().to_string(),
+        tokens_used: tokens,
+        tempo: input.tempo.clone(),
+    };
+
+    debug!(
+        merges = report.suggested_merges.len(),
+        clusters = report.topic_clusters.len(),
+        tokens,
+        "Gemini Flash analysis complete"
+    );
+
+    Ok(report)
 }
 
 fn parse_merges(value: &serde_json::Value) -> Vec<SuggestedMerge> {

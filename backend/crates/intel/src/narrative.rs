@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::budget::BudgetManager;
 use crate::client::ClaudeClient;
+use crate::gemini::{GeminiClient, GeminiModel};
 use crate::ollama::OllamaClient;
 
 /// Generated narrative for a situation.
@@ -151,70 +152,77 @@ fn needs_sonnet(ctx: &NarrativeContext) -> bool {
     false
 }
 
-/// Tiered narrative generation: Qwen (local) for routine, Sonnet for escalation.
+/// Tiered narrative generation: deliberate model selection, not automatic fallback.
 ///
-/// Tries Ollama first for routine situations. Falls back to Sonnet for
-/// high-severity multi-source situations or entity state changes.
+/// - High-severity (needs_advanced) → Gemini Flash directly (not as fallback)
+/// - All other situations → Ollama. If Ollama fails → skip (return Ok(None))
+/// - Claude removed from the chain entirely.
 pub async fn generate_narrative_tiered(
-    claude: Option<&ClaudeClient>,
+    _claude: Option<&ClaudeClient>,
+    gemini: Option<&GeminiClient>,
     ollama: Option<&OllamaClient>,
     budget: &Arc<BudgetManager>,
     ctx: &NarrativeContext,
 ) -> Result<Option<SituationNarrative>> {
     let user_prompt = build_narrative_prompt(ctx);
-    let use_sonnet = needs_sonnet(ctx);
+    let needs_advanced = needs_sonnet(ctx);
 
-    // Try Sonnet path for high-priority situations
-    if use_sonnet {
-        if let Some(client) = claude {
-            if budget.can_afford_sonnet().await {
+    // High-priority situations: use Gemini Flash directly (deliberate, not fallback)
+    if needs_advanced {
+        if let Some(gc) = gemini {
+            if budget.can_afford_gemini().await {
                 tracing::info!(
                     situation = %ctx.situation_title,
                     severity = %ctx.severity,
                     sources = ctx.source_types.len(),
-                    "Escalating narrative to Sonnet"
+                    "High-severity narrative → Gemini Flash"
                 );
-                let model = std::env::var("INTEL_ANALYSIS_MODEL")
-                    .unwrap_or_else(|_| "claude-sonnet-4-6".to_string());
-                let response = client.complete(&model, NARRATIVE_SYSTEM, &user_prompt, 1500).await?;
-                let text = ClaudeClient::extract_text(&response).unwrap_or_default();
-                let tokens = response.usage.input_tokens + response.usage.output_tokens;
-                let cache_read = response.usage.cache_read_input_tokens;
-                budget.record_sonnet(response.usage.input_tokens, response.usage.output_tokens, cache_read);
-
-                return Ok(Some(SituationNarrative {
-                    situation_id: ctx.situation_id,
-                    version: ctx.current_version + 1,
-                    narrative_text: text.to_string(),
-                    model,
-                    tokens_used: tokens,
-                    generated_at: Utc::now(),
-                }));
+                match gc.generate_text(GeminiModel::Flash, NARRATIVE_SYSTEM, &user_prompt, 1500).await {
+                    Ok(response) => {
+                        budget.record_gemini(GeminiModel::Flash, &response);
+                        let tokens = response.usage.prompt_token_count + response.usage.candidates_token_count;
+                        return Ok(Some(SituationNarrative {
+                            situation_id: ctx.situation_id,
+                            version: ctx.current_version + 1,
+                            narrative_text: response.text,
+                            model: GeminiModel::Flash.display_name().to_string(),
+                            tokens_used: tokens,
+                            generated_at: Utc::now(),
+                        }));
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Gemini Flash narrative failed for high-severity situation, skipping");
+                        return Ok(None);
+                    }
+                }
             }
+            tracing::debug!("Gemini budget exhausted for high-severity narrative, falling through to Ollama");
         }
+        // If Gemini not available, fall through to Ollama below
     }
 
-    // Qwen path (routine, or Sonnet unavailable/budget exhausted)
+    // Routine situations (or high-severity when Gemini unavailable): Ollama
     if let Some(oc) = ollama {
         tracing::debug!(
             situation = %ctx.situation_title,
             "Generating narrative via Qwen (routine)"
         );
-        let (text, tokens) = oc.generate_narrative(NARRATIVE_SYSTEM, &user_prompt).await?;
-
-        return Ok(Some(SituationNarrative {
-            situation_id: ctx.situation_id,
-            version: ctx.current_version + 1,
-            narrative_text: text,
-            model: oc.model().to_string(),
-            tokens_used: tokens,
-            generated_at: Utc::now(),
-        }));
-    }
-
-    // Fallback: Sonnet for anything if Ollama not available
-    if let Some(client) = claude {
-        return generate_narrative(client, budget, ctx).await;
+        match oc.generate_narrative(NARRATIVE_SYSTEM, &user_prompt).await {
+            Ok((text, tokens)) => {
+                return Ok(Some(SituationNarrative {
+                    situation_id: ctx.situation_id,
+                    version: ctx.current_version + 1,
+                    narrative_text: text,
+                    model: oc.model().to_string(),
+                    tokens_used: tokens,
+                    generated_at: Utc::now(),
+                }));
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Ollama narrative failed, skipping");
+                return Ok(None);
+            }
+        }
     }
 
     Ok(None)

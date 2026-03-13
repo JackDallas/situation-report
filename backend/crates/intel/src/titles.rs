@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::budget::BudgetManager;
 use crate::client::ClaudeClient;
+use crate::gemini::GeminiClient;
 use crate::ollama::OllamaClient;
 use crate::prompts;
 
@@ -15,6 +16,10 @@ fn is_garbage_title(title: &str) -> bool {
     }
 
     let lower = title.to_lowercase();
+    // "Global" prefix produces vague mega-cluster titles
+    if lower.starts_with("global ") {
+        return true;
+    }
     // LLM refusal patterns
     if lower.contains("no relevant")
         || lower.contains("no location")
@@ -162,14 +167,15 @@ fn filter_relevant_entities(
     }
 }
 
-/// Generate a situation title. Tries Ollama (local GPU) first, falls back to Claude API.
-/// Returns None if all backends fail or budget exhausted.
-/// Cost: ~$0 with Ollama, ~$0.0001 per title with Claude.
+// Title generation is Ollama-only. Heuristic fallback in caller.
+// If Ollama fails or produces garbage, returns None so the caller
+// falls back to generate_title() in scoring.rs.
 #[allow(clippy::too_many_arguments)]
 pub async fn generate_situation_title(
-    claude_client: Option<&ClaudeClient>,
+    _claude_client: Option<&ClaudeClient>,
+    _gemini_client: Option<&GeminiClient>,
     ollama_client: Option<&OllamaClient>,
-    budget: &Arc<BudgetManager>,
+    _budget: &Arc<BudgetManager>,
     entities: &[String],
     topics: &[String],
     regions: &[String],
@@ -191,57 +197,19 @@ pub async fn generate_situation_title(
         severity_dist, event_type_breakdown, fatality_count, enrichment_summaries,
     );
 
-    // Try Ollama first (free, local GPU)
     if let Some(ollama) = ollama_client {
         match ollama.complete_text(prompts::TITLE_SYSTEM, &user_prompt, 2048).await {
             Ok(text) => {
                 let title = text.trim().trim_matches('"').to_string();
-                // Reject garbage titles (LLM refusals) and fall through to Claude
                 if is_garbage_title(&title) {
-                    info!(title = %title, backend = "ollama", "Rejected garbage title from Ollama, trying Claude");
-                } else {
-                    info!(title = %title, backend = "ollama", "Generated situation title");
-                    return Some(title);
+                    info!(title = %title, backend = "ollama", "Rejected garbage title from Ollama, using heuristic");
+                    return None;
                 }
+                info!(title = %title, backend = "ollama", "Generated situation title");
+                return Some(title);
             }
             Err(e) => {
-                debug!(error = %e, "Ollama title generation failed, trying Claude");
-            }
-        }
-    }
-
-    // Fall back to Claude API
-    if let Some(client) = claude_client {
-        if !budget.can_afford_haiku().await {
-            return None;
-        }
-
-        let model = std::env::var("INTEL_ENRICHMENT_MODEL")
-            .unwrap_or_else(|_| "claude-haiku-4-5-20251001".to_string());
-
-        match client
-            .complete(&model, prompts::TITLE_SYSTEM, &user_prompt, 40)
-            .await
-        {
-            Ok(response) => {
-                budget.record_haiku(
-                    response.usage.input_tokens + response.usage.cache_creation_input_tokens,
-                    response.usage.output_tokens,
-                    response.usage.cache_read_input_tokens,
-                );
-
-                if let Some(text) = ClaudeClient::extract_text(&response) {
-                    let title = text.trim().trim_matches('"').to_string();
-                    if is_garbage_title(&title) {
-                        warn!(title = %title, backend = "claude", "Rejected garbage title from Claude");
-                        return None;
-                    }
-                    info!(title = %title, backend = "claude", tokens = response.usage.total_tokens(), "Generated situation title");
-                    return Some(title);
-                }
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to generate situation title via Claude");
+                debug!(error = %e, "Ollama title generation failed, using heuristic");
             }
         }
     }
@@ -285,6 +253,12 @@ mod tests {
     #[test]
     fn test_garbage_no_context() {
         assert!(is_garbage_title("No context provided for analysis"));
+    }
+    #[test]
+    fn test_garbage_global_prefix() {
+        assert!(is_garbage_title("Global Wildfire Activity Spreads"));
+        assert!(is_garbage_title("Global EU Policy Shifts"));
+        assert!(is_garbage_title("Global Central Bank Policy Shifts"));
     }
     #[test]
     fn test_garbage_compound_and_title() {

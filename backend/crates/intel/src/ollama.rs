@@ -170,28 +170,21 @@ impl OllamaClient {
         }
     }
 
-    /// Lightweight health check: sends a minimal generate request with a short timeout.
-    /// Returns true if the model responds within 5 seconds (i.e., it's loaded in GPU memory).
-    /// Returns false on timeout, error, or if the model has been unloaded.
+    /// Lightweight health check: queries /api/tags to verify Ollama is responsive
+    /// without triggering GPU work (no model inference, no contention with BGE-M3).
+    /// Returns true if Ollama responds within 15 seconds.
     pub async fn health_check(&self) -> bool {
-        let body = serde_json::json!({
-            "model": self.model,
-            "prompt": "hi",
-            "stream": false,
-            "options": { "num_predict": 1 }
-        });
-
-        let url = format!("{}/api/generate", self.base_url);
+        let url = format!("{}/api/tags", self.base_url);
         let result = tokio::time::timeout(
-            Duration::from_secs(5),
-            self.http.post(&url).json(&body).send(),
+            Duration::from_secs(15),
+            self.http.get(&url).send(),
         )
         .await;
 
         match result {
             Ok(Ok(resp)) => resp.status().is_success(),
             Ok(Err(_)) => false, // request error
-            Err(_) => false,     // timeout — model likely unloaded
+            Err(_) => false,     // timeout
         }
     }
 
@@ -294,6 +287,9 @@ impl OllamaClient {
     }
 
     /// Simple text completion (no structured output). Used for title generation, etc.
+    /// Thinking disabled — titles are short and simple, and `num_predict` limits
+    /// total output tokens (thinking + content). With `think: true`, Qwen 3.5
+    /// spends all tokens on `<think>` reasoning and returns empty content.
     pub async fn complete_text(&self, system: &str, user: &str, max_tokens: u32) -> Result<String> {
         let _permit = self.gpu_semaphore.acquire().await
             .map_err(|_| anyhow::anyhow!("GPU semaphore closed"))?;
@@ -337,10 +333,11 @@ impl OllamaClient {
         let chat_resp: ChatResponse = resp.json().await
             .context("Failed to parse Ollama response")?;
 
-        Ok(chat_resp.message.content)
+        Ok(strip_think_tags(&chat_resp.message.content))
     }
 
     /// Generate a situation narrative using local LLM.
+    /// Thinking mode enabled — produces more analytical, coherent narratives.
     pub async fn generate_narrative(&self, system: &str, user: &str) -> Result<(String, u32)> {
         let _permit = self.gpu_semaphore.acquire().await
             .map_err(|_| anyhow::anyhow!("GPU semaphore closed"))?;
@@ -364,7 +361,7 @@ impl OllamaClient {
                 num_ctx: 8192,
                 num_predict: None,
             },
-            think: Some(false),
+            think: Some(true),
         };
 
         let url = format!("{}/api/chat", self.base_url);
@@ -386,7 +383,7 @@ impl OllamaClient {
 
         let tokens = chat_resp.prompt_eval_count + chat_resp.eval_count;
         debug!(model = %self.model, tokens, "Ollama narrative complete");
-        Ok((chat_resp.message.content, tokens))
+        Ok((strip_think_tags(&chat_resp.message.content), tokens))
     }
 
     /// Run periodic analysis using local LLM with structured JSON output.
@@ -458,7 +455,9 @@ impl OllamaClient {
             "Are these two situations about the same underlying event or conflict?\n\n\
              Situation A: {}\nTopics: {}\n\n\
              Situation B: {}\nTopics: {}\n\n\
-             Answer ONLY 'yes' or 'no'.",
+             Think carefully about whether these are truly the same situation or just \
+             superficially similar (e.g. same region but different events). \
+             After reasoning, answer ONLY 'yes' or 'no'.",
             parent_title,
             parent_topics.join(", "),
             child_title,
@@ -470,7 +469,7 @@ impl OllamaClient {
             messages: vec![
                 ChatMessage {
                     role: "system".to_string(),
-                    content: "You evaluate whether two intelligence situations describe the same underlying event. Answer only 'yes' or 'no'.".to_string(),
+                    content: "You evaluate whether two intelligence situations describe the same underlying event. Think step by step, then answer only 'yes' or 'no'.".to_string(),
                 },
                 ChatMessage {
                     role: "user".to_string(),
@@ -484,7 +483,7 @@ impl OllamaClient {
                 num_ctx: 2048,
                 num_predict: None,
             },
-            think: Some(false),
+            think: Some(true),
         };
 
         let url = format!("{}/api/chat", self.base_url);
@@ -503,13 +502,28 @@ impl OllamaClient {
         let chat_resp: ChatResponse = resp.json().await
             .context("Failed to parse Ollama merge audit response")?;
 
-        let answer = chat_resp.message.content.trim().to_lowercase();
+        let answer = strip_think_tags(&chat_resp.message.content).trim().to_lowercase();
         Ok(answer.starts_with("yes"))
     }
 
     pub fn model(&self) -> &str {
         &self.model
     }
+}
+
+/// Strip any leaked `<think>...</think>` tags from model output.
+/// Ollama normally puts thinking in a separate `thinking` field, but as a safety
+/// net we also strip it from content in case of model/version differences.
+fn strip_think_tags(content: &str) -> String {
+    let s = content.trim();
+    if let Some(start) = s.find("<think>") {
+        if let Some(end) = s.find("</think>") {
+            let before = &s[..start];
+            let after = &s[end + 8..];
+            return format!("{}{}", before, after).trim().to_string();
+        }
+    }
+    s.to_string()
 }
 
 /// JSON Schema for structured analysis output.

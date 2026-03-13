@@ -2,6 +2,7 @@ pub mod analyze;
 pub mod budget;
 pub mod client;
 pub mod enrich;
+pub mod gemini;
 pub mod narrative;
 pub mod ollama;
 pub mod prompts;
@@ -15,7 +16,8 @@ pub use sr_types;
 pub use analyze::{AnalysisInput, analyze_current_state, analyze_tiered, analysis_interval_secs, tempo_label};
 pub use budget::BudgetManager;
 pub use client::ClaudeClient;
-pub use enrich::{article_from_event, enrich_article};
+pub use enrich::{article_from_event, enrich_article, enrich_article_gemini, enrich_article_tiered};
+pub use gemini::{GeminiClient, GeminiModel};
 pub use ollama::OllamaClient;
 pub use search::{
     GapAnalysisInput, GapType, InformationGap, SearchHistory, SearchRateLimiter,

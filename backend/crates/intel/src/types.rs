@@ -124,6 +124,12 @@ pub struct BudgetStatus {
     pub sonnet_tokens_today: u64,
     pub budget_exhausted: bool,
     pub degraded: bool,
+    /// Gemini spend this calendar month (invoice billing).
+    #[serde(default)]
+    pub gemini_spent_month_usd: f64,
+    /// Hard monthly cap for Gemini ($30 default).
+    #[serde(default)]
+    pub gemini_month_limit_usd: f64,
 }
 
 // ---------------------------------------------------------------------------

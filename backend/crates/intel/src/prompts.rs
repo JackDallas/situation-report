@@ -201,6 +201,7 @@ Rules:
 - Focus on the PRIMARY location, not countries reacting from afar. If fighting is in Syria, title it "Syria Civil War" not "US Russia Syria Conflict"
 - Drop peripheral actors: if multiple countries are listed but only one is where events occur, name only that one
 - NEVER join unrelated topics with "and" — pick the single dominant theme
+- NEVER start with "Global" — if events span multiple regions, pick the DOMINANT region or most significant location
 - NEVER use these vague filler words: tensions, escalation, escalate, escalates, developments, situation, multiple, various, activity, operations, concerns, shifts, movements, dynamics, implications, sparks, rift, row
 - If events show active combat/strikes/casualties, call it a war, conflict, fighting, or strikes — never soften with "escalation" or "activity"
 - NO technical acronyms: FIR, NOTAM, BGP, ASN, ICAO, ADS-B, SIGINT — use plain English

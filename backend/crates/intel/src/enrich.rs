@@ -5,6 +5,7 @@ use tracing::debug;
 
 use crate::budget::BudgetManager;
 use crate::client::ClaudeClient;
+use crate::gemini::{GeminiClient, GeminiModel};
 use crate::prompts;
 use crate::types::{ArticleInput, EnrichedArticleV2, Entity, ExtractedRelationship, ExtractedStateChange, InferredLocation};
 
@@ -112,6 +113,172 @@ pub async fn enrich_article(
     );
 
     Ok(enriched)
+}
+
+/// JSON Schema for Gemini responseSchema enforcement — matches EnrichedArticleV2.
+fn gemini_enrichment_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "OBJECT",
+        "properties": {
+            "translated_title": {"type": "STRING"},
+            "summary": {"type": "STRING"},
+            "original_language": {"type": "STRING"},
+            "entities": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "name": {"type": "STRING"},
+                        "entity_type": {"type": "STRING"},
+                        "role": {"type": "STRING"},
+                        "wikidata_qid": {"type": "STRING"}
+                    },
+                    "required": ["name", "entity_type"]
+                }
+            },
+            "relationships": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "source": {"type": "STRING"},
+                        "target": {"type": "STRING"},
+                        "type": {"type": "STRING"},
+                        "confidence": {"type": "NUMBER"}
+                    },
+                    "required": ["source", "target", "type"]
+                }
+            },
+            "state_changes": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "entity": {"type": "STRING"},
+                        "attribute": {"type": "STRING"},
+                        "from": {"type": "STRING"},
+                        "to": {"type": "STRING"},
+                        "certainty": {"type": "STRING"}
+                    },
+                    "required": ["entity", "attribute", "to"]
+                }
+            },
+            "topics": {
+                "type": "ARRAY",
+                "items": {"type": "STRING"}
+            },
+            "relevance_score": {"type": "NUMBER"},
+            "sentiment": {"type": "NUMBER"},
+            "inferred_location": {
+                "type": "OBJECT",
+                "properties": {
+                    "name": {"type": "STRING"},
+                    "lat": {"type": "NUMBER"},
+                    "lon": {"type": "NUMBER"}
+                },
+                "required": ["name", "lat", "lon"]
+            }
+        },
+        "required": ["translated_title", "summary", "original_language", "entities", "topics", "relevance_score", "sentiment"]
+    })
+}
+
+/// Enrich a news article via Gemini (Flash-Lite) with responseSchema enforcement.
+///
+/// Returns None if budget is exhausted.
+pub async fn enrich_article_gemini(
+    gemini: &GeminiClient,
+    budget: &Arc<BudgetManager>,
+    article: &ArticleInput,
+) -> Result<EnrichedArticleV2> {
+    if !budget.can_afford_gemini().await {
+        bail!("Gemini monthly budget exhausted — skipping enrichment");
+    }
+
+    let model = GeminiModel::FlashLite;
+    let user_msg = prompts::enrichment_user(
+        &article.title,
+        &article.description,
+        article.source_country.as_deref(),
+        article.language_hint.as_deref(),
+        article.source_type.as_deref(),
+    );
+
+    let response = gemini
+        .generate_json(model, prompts::ENRICHMENT_SYSTEM, &user_msg, 1024, gemini_enrichment_schema())
+        .await
+        .context("Gemini enrichment call failed")?;
+
+    budget.record_gemini(model, &response);
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&response.text).context("Failed to parse Gemini enrichment JSON")?;
+
+    let inferred_location = parse_inferred_location(&parsed["inferred_location"]);
+
+    let tokens_used = response.usage.prompt_token_count + response.usage.candidates_token_count;
+
+    let enriched = EnrichedArticleV2 {
+        translated_title: parsed["translated_title"]
+            .as_str()
+            .unwrap_or(&article.title)
+            .to_string(),
+        summary: parsed["summary"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        entities: parse_entities(&parsed["entities"]),
+        topics: parsed["topics"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        relationships: parse_relationships(&parsed["relationships"]),
+        state_changes: parse_state_changes(&parsed["state_changes"]),
+        inferred_location,
+        relevance_score: parsed["relevance_score"]
+            .as_f64()
+            .unwrap_or(0.5) as f32,
+        sentiment: parsed["sentiment"]
+            .as_f64()
+            .unwrap_or(0.0) as f32,
+        original_language: parsed["original_language"]
+            .as_str()
+            .unwrap_or("en")
+            .to_string(),
+        model: model.display_name().to_string(),
+        tokens_used,
+    };
+
+    debug!(
+        title = enriched.translated_title,
+        lang = enriched.original_language,
+        relevance = enriched.relevance_score,
+        entities = enriched.entities.len(),
+        tokens = enriched.tokens_used,
+        "Article enriched via Gemini Flash-Lite"
+    );
+
+    Ok(enriched)
+}
+
+// Enrichment is Ollama-only. Cloud fallback removed to prevent budget blowout.
+// If Ollama fails, the event goes unenriched — the caller handles this gracefully.
+pub async fn enrich_article_tiered(
+    _claude_client: Option<&ClaudeClient>,
+    _gemini_client: Option<&GeminiClient>,
+    ollama_client: Option<&crate::ollama::OllamaClient>,
+    _budget: &Arc<BudgetManager>,
+    article: &ArticleInput,
+) -> Result<EnrichedArticleV2> {
+    if let Some(oc) = ollama_client {
+        return oc.enrich_article(article).await;
+    }
+
+    bail!("Ollama not available for enrichment");
 }
 
 fn parse_entities(value: &serde_json::Value) -> Vec<Entity> {
