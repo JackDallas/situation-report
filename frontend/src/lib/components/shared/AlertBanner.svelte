@@ -87,7 +87,7 @@
 				</span>
 
 				<button
-					class="shrink-0 rounded bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-text-primary hover:bg-white/20"
+					class="shrink-0 rounded bg-bg-surface px-2 py-0.5 text-[10px] font-semibold text-text-primary hover:bg-bg-card-hover"
 					onclick={() => viewIncident(incident)}
 					title="View incident details and fly to location"
 				>

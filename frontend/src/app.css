@@ -1,12 +1,12 @@
 @import 'tailwindcss';
 
 @theme {
-	--color-bg-primary: hsl(222 47% 6%);
-	--color-bg-card: hsl(222 30% 10%);
-	--color-bg-card-hover: hsl(222 30% 13%);
-	--color-bg-surface: hsl(222 30% 14%);
-	--color-border-default: hsl(222 20% 18%);
-	--color-border-hover: hsl(222 20% 25%);
+	--color-bg-primary: var(--sr-bg-primary);
+	--color-bg-card: var(--sr-bg-card);
+	--color-bg-card-hover: var(--sr-bg-card-hover);
+	--color-bg-surface: var(--sr-bg-surface);
+	--color-border-default: var(--sr-border-default);
+	--color-border-hover: var(--sr-border-hover);
 
 	--color-accent: hsl(210 100% 50%);
 	--color-accent-muted: hsl(210 100% 30%);
@@ -17,9 +17,36 @@
 	--color-warning: hsl(38 92% 50%);
 	--color-warning-muted: hsl(38 92% 30%);
 
-	--color-text-primary: hsl(210 40% 96%);
-	--color-text-secondary: hsl(215 20% 65%);
-	--color-text-muted: hsl(215 15% 45%);
+	--color-text-primary: var(--sr-text-primary);
+	--color-text-secondary: var(--sr-text-secondary);
+	--color-text-muted: var(--sr-text-muted);
+}
+
+/* Dark theme (default) */
+:root,
+[data-theme='dark'] {
+	--sr-bg-primary: hsl(222 47% 6%);
+	--sr-bg-card: hsl(222 30% 10%);
+	--sr-bg-card-hover: hsl(222 30% 13%);
+	--sr-bg-surface: hsl(222 30% 14%);
+	--sr-border-default: hsl(222 20% 18%);
+	--sr-border-hover: hsl(222 20% 25%);
+	--sr-text-primary: hsl(210 40% 96%);
+	--sr-text-secondary: hsl(215 20% 65%);
+	--sr-text-muted: hsl(215 15% 45%);
+}
+
+/* Light theme */
+[data-theme='light'] {
+	--sr-bg-primary: hsl(220 20% 97%);
+	--sr-bg-card: hsl(220 16% 93%);
+	--sr-bg-card-hover: hsl(220 16% 89%);
+	--sr-bg-surface: hsl(220 14% 86%);
+	--sr-border-default: hsl(220 13% 82%);
+	--sr-border-hover: hsl(220 13% 72%);
+	--sr-text-primary: hsl(222 47% 11%);
+	--sr-text-secondary: hsl(215 16% 40%);
+	--sr-text-muted: hsl(215 10% 55%);
 }
 
 body {

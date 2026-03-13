@@ -133,7 +133,7 @@
 			<div class="mb-1.5 text-[9px] font-semibold uppercase tracking-wider text-text-muted">
 				Event Flow Ratio
 			</div>
-			<div class="flex h-3 overflow-hidden rounded-full bg-white/5">
+			<div class="flex h-3 overflow-hidden rounded-full bg-bg-surface">
 				<div
 					class="bg-emerald-500/60"
 					style="width: {publishedPct}%;"
@@ -145,7 +145,7 @@
 					title="Filtered: {filteredPct}%"
 				></div>
 				<div
-					class="flex-1 bg-white/10"
+					class="flex-1 bg-border-default"
 					title="Other: {100 - publishedPct - filteredPct}%"
 				></div>
 			</div>
