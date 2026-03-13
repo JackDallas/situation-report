@@ -6,13 +6,9 @@ import {
 	type SituationCategory,
 } from '$lib/types/situations';
 import type { SituationCluster, SituationEvent } from '$lib/types/events';
+import { SEVERITY_RANK, severityRank } from '$lib/config/colors';
 
-const SEVERITY_RANK: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
-
-function severityRank(s: string): number {
-	return SEVERITY_RANK[s] ?? 0;
-}
 
 const PHASE_BONUS: Record<string, number> = {
 	active: 500,
@@ -47,6 +43,11 @@ function situationScore(s: Situation, now: number): number {
 
 	// Parent situations aggregating sub-situations are more significant
 	score += Math.min(s.childIds.length * 50, 500);
+
+	// Certainty: high-confidence situations rank higher
+	if (s.certainty != null) {
+		score += Math.round(s.certainty * 500);
+	}
 
 	return score;
 }
@@ -91,6 +92,46 @@ function centroid(events: SituationEvent[]): { lat: number | null; lng: number |
 }
 
 
+/** Title-to-region keyword hints for smarter region selection. */
+const TITLE_REGION_HINTS: [RegExp, string][] = [
+	[/\b(southeast\s*asia|vietnam|thailand|myanmar|philippines|indonesia|laos|cambodia|malaysia)\b/i, 'southeast-asia'],
+	[/\b(middle\s*east|iran|israel|iraq|syria|lebanon|yemen|gaza|saudi|jordan|kuwait)\b/i, 'middle-east'],
+	[/\b(ukraine|russia|eastern\s*europe|belarus|moldova|georgia)\b/i, 'eastern-europe'],
+	[/\b(sahel|niger|mali|burkina|chad|nigeria|congo|african|africa|sudan|somalia|eritrea|ethiopia)\b/i, 'sub-saharan-africa'],
+	[/\b(china|japan|korea|taiwan|east\s*asia)\b/i, 'east-asia'],
+	[/\b(india|pakistan|afghanistan|south\s*asia|bangladesh|nepal|sri\s*lanka)\b/i, 'south-asia'],
+	[/\b(germany|france|uk\b|britain|europe|nato|eu\b|western\s*europe)\b/i, 'western-europe'],
+	[/\b(north\s*america|united\s*states|canada|mexico)\b/i, 'north-america'],
+	[/\b(south\s*america|brazil|argentina|chile|colombia|venezuela)\b/i, 'south-america'],
+	[/\b(oceania|australia|new\s*zealand|pacific)\b/i, 'oceania'],
+	[/\b(central\s*asia|kazakhstan|uzbek|tajik|kyrgyz|turkmen)\b/i, 'central-asia'],
+];
+
+/** Pick the best primary region from a list of region codes and the cluster title.
+ *  Extracts geographic hints from the title, then falls back to region_codes. */
+function pickPrimaryRegion(codes: string[], title?: string): string {
+	if (!codes.length) return 'global';
+	// If only one region, use it
+	const descriptive = codes.filter((c) => c.length > 2);
+	if (descriptive.length === 1) return descriptive[0];
+	// Try to match region from title
+	if (title) {
+		for (const [re, region] of TITLE_REGION_HINTS) {
+			if (re.test(title) && codes.includes(region)) return region;
+		}
+		// Even if not in codes, title hint is strong signal
+		for (const [re, region] of TITLE_REGION_HINTS) {
+			if (re.test(title)) return region;
+		}
+	}
+	// 4+ diverse regions with no title match = global
+	if (codes.length >= 4) return 'global';
+	// Return first descriptive region
+	if (descriptive.length) return descriptive[0];
+	if (codes.length) return codes[0];
+	return 'global';
+}
+
 class SituationsStore {
 	selectedSituation = $state<Situation | null>(null);
 	backendClusters = $state<SituationCluster[]>([]);
@@ -118,7 +159,7 @@ class SituationsStore {
 
 		// 1. Backend entity-graph clusters → situations
 		for (const cluster of this.backendClusters) {
-			const region = cluster.region_codes[0] ?? 'global';
+			const region = pickPrimaryRegion(cluster.region_codes, cluster.title);
 			// Determine category from source types
 			const hasConflict = cluster.source_types.some((s) =>
 				['acled', 'geoconfirmed'].includes(s)
@@ -126,11 +167,16 @@ class SituationsStore {
 			const hasCyber = cluster.source_types.some((s) =>
 				['cloudflare', 'ioda', 'bgp', 'otx', 'certstream', 'ooni', 'shodan'].includes(s)
 			);
+			const hasEnvironmental = cluster.source_types.some((s) =>
+				['gdacs', 'usgs', 'firms', 'reliefweb', 'copernicus'].includes(s)
+			);
 			const category: SituationCategory = hasConflict
 				? 'conflict'
 				: hasCyber
 					? 'cyber'
-					: 'intelligence';
+					: hasEnvironmental
+						? 'environmental'
+						: 'intelligence';
 
 			result.push({
 				id: `cluster:${cluster.id}`,
@@ -158,6 +204,8 @@ class SituationsStore {
 				phaseChangedAt: cluster.phase_changed_at ?? null,
 				peakEventRate: cluster.peak_event_rate ?? null,
 				certainty: cluster.certainty ?? undefined,
+				narrativeText: cluster.narrative_text ?? null,
+				eventTitles: cluster.event_titles ?? [],
 			});
 		}
 

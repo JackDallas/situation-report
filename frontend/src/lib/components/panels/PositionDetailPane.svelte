@@ -43,7 +43,6 @@
 	const speed = $derived(position?.speed);
 	const altitude = $derived(position?.altitude);
 
-	let trailLoading = $state(false);
 	let showPayload = $state(false);
 
 	function close() {
@@ -55,16 +54,6 @@
 	function flyTo() {
 		if (position) {
 			mapStore.flyTo(position.longitude, position.latitude);
-		}
-	}
-
-	async function loadTrail() {
-		if (!position) return;
-		trailLoading = true;
-		try {
-			await mapStore.loadEntityTrail(position.entity_id, 2);
-		} finally {
-			trailLoading = false;
 		}
 	}
 
@@ -462,21 +451,6 @@
 						</a>
 					{/if}
 				{/if}
-			</div>
-
-			<!-- Trail section -->
-			<div class="mt-4 border-t border-border-default pt-3">
-				<button
-					onclick={loadTrail}
-					disabled={trailLoading}
-					class="rounded bg-bg-surface px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-bg-card-hover hover:text-text-primary disabled:opacity-50" title="Fetch and display position history trail for the last 2 hours"
-				>
-					{#if trailLoading}
-						Loading trail...
-					{:else}
-						Load 2h trail
-					{/if}
-				</button>
 			</div>
 
 			<!-- Raw payload toggle -->

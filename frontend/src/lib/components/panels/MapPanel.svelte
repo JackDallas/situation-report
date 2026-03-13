@@ -10,35 +10,15 @@
 	import { setMapInstance } from '$lib/services/position-interpolator';
 	import { refetchGeoForViewport } from '$lib/services/sse';
 	import type { SituationEvent } from '$lib/types/events';
-
-	const AFFILIATION_COLORS: Record<string, string> = {
-		'US': '#3b82f6',    // blue
-		'RU': '#ef4444',    // red
-		'CN': '#f97316',    // orange
-		'IL': '#22d3ee',    // cyan
-		'IR': '#10b981',    // green
-		'UA': '#eab308',    // yellow
-		'GB': '#6366f1',    // indigo
-		'FR': '#8b5cf6',    // violet
-		'DE': '#ec4899',    // pink
-		'NATO': '#818cf8',  // light indigo
-	};
-	const DEFAULT_MIL_COLOR = '#f472b6';   // pink (unknown military)
-	const CIVILIAN_COLOR = '#64748b';       // slate
-	const VESSEL_COLOR = '#06b6d4';         // cyan
+	import { AFFILIATION_COLORS, DEFAULT_MIL_COLOR, CIVILIAN_COLOR, VESSEL_COLOR } from '$lib/config/colors';
+	import { satelliteStore } from '$lib/services/satellites.svelte';
 
 	let container: HTMLDivElement;
 	let map: any;
 	let mapLoaded = $state(false);
-	let pulseInterval: ReturnType<typeof setInterval> | null = null;
 
 	/**
 	 * Generate a GeoJSON Polygon approximating a circle on the Earth's surface.
-	 * Uses the Haversine formula to compute points along the circumference.
-	 * @param centerLng  Center longitude in degrees
-	 * @param centerLat  Center latitude in degrees
-	 * @param radiusNm   Radius in nautical miles
-	 * @param numPoints  Number of polygon vertices (default 64)
 	 */
 	function circlePolygon(
 		centerLng: number,
@@ -46,18 +26,15 @@
 		radiusNm: number,
 		numPoints = 64
 	): [number, number][] {
-		const radiusKm = radiusNm * 1.852; // NM to km
-		const R = 6371; // Earth radius in km
+		const R = 6371;
+		const d = (radiusNm * 1.852) / R;
 		const lat = (centerLat * Math.PI) / 180;
 		const lng = (centerLng * Math.PI) / 180;
-		const d = radiusKm / R; // angular distance in radians
-
 		const coords: [number, number][] = [];
 		for (let i = 0; i <= numPoints; i++) {
 			const bearing = (2 * Math.PI * i) / numPoints;
 			const pLat = Math.asin(
-				Math.sin(lat) * Math.cos(d) +
-				Math.cos(lat) * Math.sin(d) * Math.cos(bearing)
+				Math.sin(lat) * Math.cos(d) + Math.cos(lat) * Math.sin(d) * Math.cos(bearing)
 			);
 			const pLng = lng + Math.atan2(
 				Math.sin(bearing) * Math.sin(d) * Math.cos(lat),
@@ -74,8 +51,6 @@
 	 *  Also bumped by clock ticks for age_minutes refresh. */
 	let lastRenderedGeoVersion = 0;
 	let lastRenderedClockTick = 0;
-	const CLUSTER_MAX_ZOOM = 7;
-
 	/**
 	 * Batched event source updater — runs on a 2s interval.
 	 * Avoids the deep-clone JSON.parse(JSON.stringify()) by creating lightweight
@@ -91,13 +66,10 @@
 		lastRenderedGeoVersion = storeVersion;
 		lastRenderedClockTick = clockTick;
 
-		const now = Date.now();
 		const raw = mapStore.geoData;
 		const cursorMs = mapStore.timeCursor.getTime();
-		const recentlyUpdated = mapStore.recentlyUpdated;
 
 		const features: any[] = [];
-		const pulseFeatures: any[] = [];
 		const notamAreaFeatures: any[] = [];
 
 		for (const f of raw.features) {
@@ -128,23 +100,21 @@
 			if (f.properties?.event_type === 'thermal_anomaly' && ageMinutes >= 360) continue;
 
 			const sid = f.properties?.source_id;
-			const pulseTs = sid ? recentlyUpdated.get(sid) : undefined;
-			const isRecent = pulseTs != null && (now - pulseTs <= 5000);
 
 			// Create a lightweight wrapper sharing the original geometry reference
 			const enrichedProps = {
 				...f.properties,
-				age_minutes: ageMinutes,
-				recently_updated: isRecent
+				age_minutes: ageMinutes
 			};
 
-			features.push({
+			const enrichedFeature = {
 				type: 'Feature',
 				geometry: f.geometry,
 				properties: enrichedProps
-			});
+			};
+			features.push(enrichedFeature);
 
-			// Build NOTAM area polygons for events with radius data
+			// Build NOTAM area polygons from radius data
 			const notamRadius = f.properties?.notam_radius_nm;
 			if (f.properties?.event_type === 'notam_event'
 				&& typeof notamRadius === 'number' && notamRadius > 0
@@ -152,13 +122,9 @@
 				&& f.geometry.coordinates
 			) {
 				const [lng, lat] = f.geometry.coordinates;
-				const ring = circlePolygon(lng, lat, notamRadius);
 				notamAreaFeatures.push({
 					type: 'Feature',
-					geometry: {
-						type: 'Polygon',
-						coordinates: [ring]
-					},
+					geometry: { type: 'Polygon', coordinates: [circlePolygon(lng, lat, notamRadius)] },
 					properties: {
 						source_id: sid,
 						event_type: 'notam_event',
@@ -170,7 +136,6 @@
 						entity_name: f.properties.entity_name,
 						source_type: f.properties.source_type,
 						region_code: f.properties.region_code,
-						// Store center for popup positioning
 						center_lng: lng,
 						center_lat: lat,
 						radius_nm: notamRadius
@@ -178,43 +143,18 @@
 				});
 			}
 
-			// Build pulse ring features for recently-updated markers
-			if (isRecent && f.geometry?.coordinates) {
-				const elapsed = now - pulseTs;
-				const progress = Math.min(elapsed / 5000, 1);
-				pulseFeatures.push({
-					type: 'Feature',
-					geometry: f.geometry,
-					properties: {
-						pulse_radius: 8 + progress * 20,
-						pulse_opacity: Math.max(0, 1 - progress)
-					}
-				});
-			}
 		}
 
-		const featureCollection = { type: 'FeatureCollection', features };
+		const allFeatures = { type: 'FeatureCollection', features };
 
-		// Update the clustered events source (used by cluster layers + circle layers)
-		const eventsSource = map.getSource('events') as any;
-		eventsSource.setData(featureCollection);
+		// Update both sources with all features (no clustering)
+		(map.getSource('events') as any).setData(allFeatures);
+		(map.getSource('events-unclustered') as any).setData(allFeatures);
 
-		// Update the unclustered source (used by heatmap which needs raw points)
-		(map.getSource('events-unclustered') as any).setData(featureCollection);
-
-		// Update pulse ring source
-		if (map.getSource('pulse')) {
-			(map.getSource('pulse') as any).setData({
-				type: 'FeatureCollection',
-				features: pulseFeatures
-			});
-		}
-
-		// Update NOTAM area polygons source
+		// Update NOTAM area polygons
 		if (map.getSource('notam-areas')) {
 			(map.getSource('notam-areas') as any).setData({
-				type: 'FeatureCollection',
-				features: notamAreaFeatures
+				type: 'FeatureCollection', features: notamAreaFeatures
 			});
 		}
 	}
@@ -440,23 +380,9 @@
 			createArrowImage(map, 'arrow-vessel', VESSEL_COLOR, 20);
 
 			// --- Event layers ---
-			// Optimization #3: Clustered events source for circle/symbol layers
 			map.addSource('events', {
 				type: 'geojson',
-				data: { type: 'FeatureCollection', features: [] },
-				cluster: true,
-				clusterMaxZoom: 7,
-				clusterRadius: 40,
-				clusterProperties: {
-					// Aggregate max severity rank for cluster styling
-					maxSeverityRank: ['max', [
-						'match', ['get', 'severity'],
-						'critical', 4,
-						'high', 3,
-						'medium', 2,
-						1
-					]]
-				}
+				data: { type: 'FeatureCollection', features: [] }
 			});
 
 			// Unclustered events source — used by heatmap (needs raw points, not cluster centroids)
@@ -465,32 +391,12 @@
 				data: { type: 'FeatureCollection', features: [] }
 			});
 
-			// --- Pulse layer: expanding/fading rings on recently-updated markers ---
-			map.addSource('pulse', {
-				type: 'geojson',
-				data: { type: 'FeatureCollection', features: [] }
-			});
-
-			map.addLayer({
-				id: 'pulse-ring',
-				type: 'circle',
-				source: 'pulse',
-				paint: {
-					'circle-radius': ['get', 'pulse_radius'],
-					'circle-color': 'transparent',
-					'circle-stroke-width': 2,
-					'circle-stroke-color': '#ffaa00',
-					'circle-stroke-opacity': ['get', 'pulse_opacity']
-				}
-			});
-
-			// --- NOTAM area polygons source — geographic circles for airspace restrictions ---
+			// --- NOTAM area polygons — geographic circles styled like restricted airspace ---
 			map.addSource('notam-areas', {
 				type: 'geojson',
 				data: { type: 'FeatureCollection', features: [] }
 			});
 
-			// NOTAM area fill — styled like restricted airspace zones
 			map.addLayer({
 				id: 'notam-area-fill',
 				type: 'fill',
@@ -498,31 +404,30 @@
 				paint: {
 					'fill-color': [
 						'match', ['get', 'severity'],
-						'critical', 'rgba(239, 68, 68, 0.10)',
-						'high', 'rgba(249, 115, 22, 0.08)',
-						'medium', 'rgba(251, 146, 60, 0.06)',
-						'rgba(251, 146, 60, 0.04)'
+						'critical', 'rgba(217, 70, 239, 0.12)',
+						'high', 'rgba(168, 85, 247, 0.08)',
+						'medium', 'rgba(168, 85, 247, 0.06)',
+						'rgba(139, 92, 246, 0.04)'
 					],
 					'fill-opacity': [
 						'interpolate', ['linear'], ['zoom'],
-						3, 0.4,
+						3, 0.3,
 						6, 0.6,
 						10, 0.8
 					]
 				}
 			});
 
-			// NOTAM area outline — dashed border like FIR boundaries
 			map.addLayer({
-				id: 'notam-area-outline',
+				id: 'notam-area-line',
 				type: 'line',
 				source: 'notam-areas',
 				paint: {
 					'line-color': [
 						'match', ['get', 'severity'],
-						'critical', '#ef4444',
-						'high', '#f97316',
-						'#fb923c'
+						'critical', '#d946ef',
+						'high', '#a855f7',
+						'#8b5cf6'
 					],
 					'line-width': [
 						'interpolate', ['linear'], ['zoom'],
@@ -530,63 +435,17 @@
 						8, 1,
 						12, 1.5
 					],
-					'line-opacity': 0.5,
-					'line-dasharray': [4, 3]
+					'line-opacity': 0.5
 				}
 			});
 
-			// --- Cluster circle layer (Optimization #3) ---
-			map.addLayer({
-				id: 'event-clusters',
-				type: 'circle',
-				source: 'events',
-				filter: ['has', 'point_count'],
-				paint: {
-					'circle-radius': [
-						'step', ['get', 'point_count'],
-						12,      // default radius for count < 10
-						10, 16,  // radius for count 10-50
-						50, 20,  // radius for count 50-100
-						100, 24  // radius for count 100+
-					],
-					'circle-color': [
-						'step', ['get', 'maxSeverityRank'],
-						'#3b82f6',     // low (default blue)
-						2, '#eab308',  // medium (yellow)
-						3, '#f97316',  // high (orange)
-						4, '#ef4444'   // critical (red)
-					],
-					'circle-opacity': 0.7,
-					'circle-stroke-width': 2,
-					'circle-stroke-color': 'rgba(255,255,255,0.3)'
-				}
-			});
-
-			// Cluster count label
-			map.addLayer({
-				id: 'event-cluster-count',
-				type: 'symbol',
-				source: 'events',
-				filter: ['has', 'point_count'],
-				layout: {
-					'text-field': ['concat', ['get', 'point_count_abbreviated'], '+'],
-					'text-size': 11,
-					'text-font': ['Open Sans Bold']
-				},
-				paint: {
-					'text-color': '#ffffff'
-				}
-			});
-
-			// Incident glow layer — only unclustered points
+			// Incident glow layer
 			map.addLayer({
 				id: 'incidents-glow',
 				type: 'circle',
-				minzoom: CLUSTER_MAX_ZOOM,
 				source: 'events',
-				filter: ['all',
-					['!', ['has', 'point_count']],
-					['==', ['slice', ['coalesce', ['get', 'event_type'], ''], 0, 9], 'incident:']
+				filter: [
+					'==', ['slice', ['coalesce', ['get', 'event_type'], ''], 0, 9], 'incident:'
 				],
 				paint: {
 					'circle-radius': 14,
@@ -596,18 +455,12 @@
 				}
 			});
 
-			// Main event circles — only unclustered points (Optimization #3: filter out clusters)
-			// Excludes thermal_anomaly (handled by dedicated thermal-dots layer)
-			// minzoom matches clusterMaxZoom so dots only appear once clustering stops
+			// Main event circles — all events rendered individually
 			map.addLayer({
 				id: 'events-circle',
 				type: 'circle',
 				source: 'events',
-				minzoom: CLUSTER_MAX_ZOOM,
-				filter: ['all',
-					['!', ['has', 'point_count']],
-					['!=', ['get', 'event_type'], 'thermal_anomaly']
-				],
+				filter: ['!=', ['get', 'event_type'], 'thermal_anomaly'],
 				paint: {
 					'circle-radius': [
 						'case',
@@ -659,32 +512,23 @@
 						'case',
 						['==', ['slice', ['coalesce', ['get', 'event_type'], ''], 0, 9], 'incident:'],
 						2,
-						['==', ['get', 'recently_updated'], true],
-						3,
 						1
 					],
 					'circle-stroke-color': [
 						'case',
 						['==', ['slice', ['coalesce', ['get', 'event_type'], ''], 0, 9], 'incident:'],
 						'#ffffff',
-						['==', ['get', 'recently_updated'], true],
-						'#ffaa00',
 						'rgba(255, 255, 255, 0.3)'
 					]
 				}
 			});
 
 			// --- Impact sites layer — GeoConfirmed confirmed events (subtle markers) ---
-			// Only unclustered points; minzoom matches clusterMaxZoom
 			map.addLayer({
 				id: 'impact-sites',
 				type: 'circle',
-				source: 'events',
-				minzoom: CLUSTER_MAX_ZOOM,
-				filter: ['all',
-					['!', ['has', 'point_count']],
-					['==', ['get', 'event_type'], 'geo_event']
-				],
+				source: 'events-unclustered',
+				filter: ['==', ['get', 'event_type'], 'geo_event'],
 				paint: {
 					'circle-radius': [
 						'match', ['get', 'severity'],
@@ -706,91 +550,62 @@
 				}
 			});
 
-			// --- NOTAM center dot markers — fixed-size orange dot for each NOTAM location ---
-			// Rendered as a fixed 6px circle; minzoom matches clusterMaxZoom.
-			// NOTAMs with radius_nm also get area polygons from the 'notam-areas' source.
-			map.addLayer({
-				id: 'notam-zones',
-				type: 'circle',
-				source: 'events',
-				minzoom: CLUSTER_MAX_ZOOM,
-				filter: ['all',
-					['!', ['has', 'point_count']],
-					['==', ['get', 'event_type'], 'notam_event']
-				],
-				paint: {
-					'circle-radius': 6,
-					'circle-color': 'rgba(251, 146, 60, 0.25)',
-					'circle-stroke-width': 1.5,
-					'circle-stroke-color': '#fb923c',
-					'circle-stroke-opacity': [
-						'interpolate', ['linear'],
-						['coalesce', ['get', 'age_minutes'], 0],
-						0, 0.8,
-						360, 0.5,
-						1440, 0.3
-					],
-					'circle-opacity': [
-						'interpolate', ['linear'],
-						['coalesce', ['get', 'age_minutes'], 0],
-						0, 0.8,
-						360, 0.5,
-						1440, 0.3
-					]
-				}
-			});
 
-			// NOTAM airport code labels — only unclustered points
-			map.addLayer({
-				id: 'notam-labels',
-				type: 'symbol',
-				source: 'events',
-				minzoom: CLUSTER_MAX_ZOOM,
-				filter: ['all',
-					['!', ['has', 'point_count']],
-					['==', ['get', 'event_type'], 'notam_event']
-				],
-				layout: {
-					'text-field': ['coalesce', ['get', 'notam_location'], ''],
-					'text-size': 9,
-					'text-offset': [0, -1.8],
-					'text-anchor': 'bottom',
-					'text-allow-overlap': false
-				},
-				paint: {
-					'text-color': '#fb923c',
-					'text-halo-color': '#1a1a2e',
-					'text-halo-width': 1
-				}
-			});
-
-			// --- Thermal anomaly layer — tiny orange dots for FIRMS fire detections ---
-			// Only unclustered points; minzoom matches clusterMaxZoom
+			// --- Thermal anomaly layer — FRP-scaled dots for FIRMS fire detections ---
+			// FRP (Fire Radiative Power, MW): median ~5, P95 ~26, max ~581. Log-scale normalization.
+			// normalized = log10(frp + 1) / log10(600) ≈ 0..1
 			map.addLayer({
 				id: 'thermal-dots',
 				type: 'circle',
-				minzoom: CLUSTER_MAX_ZOOM,
-				source: 'events',
-				filter: ['all',
-					['!', ['has', 'point_count']],
-					['==', ['get', 'event_type'], 'thermal_anomaly']
-				],
+				source: 'events-unclustered',
+				filter: ['==', ['get', 'event_type'], 'thermal_anomaly'],
 				paint: {
 					'circle-radius': [
 						'interpolate', ['linear'], ['zoom'],
-						3, 2,
-						6, 3,
-						10, 4,
-						14, 6
+						3, ['*', ['interpolate', ['linear'],
+							['coalesce', ['get', 'frp'], 5],
+							0, 1.0,  5, 1.0,  25, 1.3,  100, 1.8,  500, 3.5
+						], 2],
+						6, ['*', ['interpolate', ['linear'],
+							['coalesce', ['get', 'frp'], 5],
+							0, 1.0,  5, 1.0,  25, 1.3,  100, 1.8,  500, 3.5
+						], 3],
+						10, ['*', ['interpolate', ['linear'],
+							['coalesce', ['get', 'frp'], 5],
+							0, 1.0,  5, 1.0,  25, 1.3,  100, 1.8,  500, 3.5
+						], 4],
+						14, ['*', ['interpolate', ['linear'],
+							['coalesce', ['get', 'frp'], 5],
+							0, 1.0,  5, 1.0,  25, 1.3,  100, 1.8,  500, 3.5
+						], 6]
 					],
-					'circle-color': '#f97316',
-					'circle-opacity': [
+					'circle-color': [
 						'interpolate', ['linear'],
-						['coalesce', ['get', 'age_minutes'], 0],
-						0, 0.7,
-						120, 0.4,
-						240, 0.15,
-						360, 0
+						['coalesce', ['get', 'frp'], 5],
+						0, '#fbbf24',    // yellow — low FRP
+						5, '#fbbf24',
+						25, '#f97316',   // orange — moderate
+						100, '#ef4444',  // red — high
+						500, '#dc2626'   // bright red — extreme
+					],
+					'circle-opacity': [
+						'*',
+						// Age decay
+						['interpolate', ['linear'],
+							['coalesce', ['get', 'age_minutes'], 0],
+							0, 1.0,
+							120, 0.6,
+							240, 0.25,
+							360, 0
+						],
+						// FRP intensity modulation
+						['interpolate', ['linear'],
+							['coalesce', ['get', 'frp'], 5],
+							0, 0.5,
+							25, 0.7,
+							100, 0.85,
+							500, 0.95
+						]
 					],
 					'circle-stroke-width': 0
 				}
@@ -843,7 +658,7 @@
 						7, 0
 					]
 				}
-			}, 'event-clusters'); // Insert below cluster layer
+			}, 'events-circle'); // Insert below event dots
 
 			// --- Position layers ---
 			map.addSource('positions', {
@@ -897,9 +712,9 @@
 				paint: {
 					'icon-opacity': [
 						'interpolate', ['linear'], ['zoom'],
-						3, ['case', ['get', 'on_ground'], 0.15, ['get', 'is_military'], 1.0, 0.3],
-						5, ['case', ['get', 'on_ground'], 0.15, ['get', 'is_military'], 1.0, 0.5],
-						7, ['case', ['get', 'on_ground'], 0.15, ['get', 'is_military'], 1.0, 0.8]
+						3, ['case', ['get', 'is_stale'], 0.1, ['get', 'on_ground'], 0.15, ['get', 'is_military'], 1.0, 0.3],
+						5, ['case', ['get', 'is_stale'], 0.1, ['get', 'on_ground'], 0.15, ['get', 'is_military'], 1.0, 0.5],
+						7, ['case', ['get', 'is_stale'], 0.15, ['get', 'on_ground'], 0.15, ['get', 'is_military'], 1.0, 0.8]
 					]
 				}
 			});
@@ -921,6 +736,80 @@
 					'text-color': '#d1d5db',
 					'text-halo-color': '#1a1a2e',
 					'text-halo-width': 1
+				}
+			});
+
+			// --- FIRMS satellite position layer ---
+			map.addSource('satellite-positions', {
+				type: 'geojson',
+				data: { type: 'FeatureCollection', features: [] }
+			});
+
+			// Satellite dot — white circle with cyan glow
+			map.addLayer({
+				id: 'satellite-dots',
+				type: 'circle',
+				source: 'satellite-positions',
+				paint: {
+					'circle-radius': 5,
+					'circle-color': '#ffffff',
+					'circle-opacity': 0.95,
+					'circle-stroke-width': 2,
+					'circle-stroke-color': '#22d3ee',
+					'circle-stroke-opacity': 0.7
+				}
+			});
+
+			// Satellite labels
+			map.addLayer({
+				id: 'satellite-labels',
+				type: 'symbol',
+				source: 'satellite-positions',
+				layout: {
+					'text-field': ['get', 'name'],
+					'text-size': 9,
+					'text-offset': [0, 1.4],
+					'text-anchor': 'top',
+					'text-allow-overlap': true
+				},
+				paint: {
+					'text-color': '#22d3ee',
+					'text-halo-color': '#1a1a2e',
+					'text-halo-width': 1,
+					'text-opacity': 0.85
+				}
+			});
+
+			// Satellite orbit trail (past path — solid cyan line)
+			map.addSource('satellite-trail', {
+				type: 'geojson',
+				data: { type: 'FeatureCollection', features: [] }
+			});
+			map.addLayer({
+				id: 'satellite-trail-line',
+				type: 'line',
+				source: 'satellite-trail',
+				paint: {
+					'line-color': '#22d3ee',
+					'line-width': 1.5,
+					'line-opacity': 0.6
+				}
+			});
+
+			// Satellite orbit future (predicted path — dashed cyan line)
+			map.addSource('satellite-future', {
+				type: 'geojson',
+				data: { type: 'FeatureCollection', features: [] }
+			});
+			map.addLayer({
+				id: 'satellite-future-line',
+				type: 'line',
+				source: 'satellite-future',
+				paint: {
+					'line-color': '#22d3ee',
+					'line-width': 1.5,
+					'line-opacity': 0.4,
+					'line-dasharray': [4, 4]
 				}
 			});
 
@@ -1092,23 +981,6 @@
 
 			// --- Click handlers ---
 
-			// Click-to-zoom on cluster circles (Optimization #3)
-			map.on('click', 'event-clusters', (e: any) => {
-				const features = map.queryRenderedFeatures(e.point, { layers: ['event-clusters'] });
-				if (!features.length) return;
-				const clusterId = features[0].properties.cluster_id;
-				(map.getSource('events') as any).getClusterExpansionZoom(clusterId, (err: any, zoom: number) => {
-					if (err) return;
-					map.easeTo({
-						center: features[0].geometry.coordinates,
-						zoom: zoom
-					});
-				});
-			});
-
-			map.on('mouseenter', 'event-clusters', () => { map.getCanvas().style.cursor = 'pointer'; });
-			map.on('mouseleave', 'event-clusters', () => { map.getCanvas().style.cursor = ''; });
-
 			// Click handler for event popups
 			map.on('click', 'events-circle', (e: any) => {
 				if (!e.features?.length) return;
@@ -1142,31 +1014,12 @@
 			map.on('mouseenter', 'impact-sites', () => { map.getCanvas().style.cursor = 'pointer'; });
 			map.on('mouseleave', 'impact-sites', () => { map.getCanvas().style.cursor = ''; });
 
-			// Click handler for NOTAM zone markers
-			map.on('click', 'notam-zones', (e: any) => {
-				if (!e.features?.length) return;
-				const coords = e.features[0].geometry.coordinates.slice();
-				const props = {
-					...e.features[0].properties,
-					longitude: coords[0],
-					latitude: coords[1]
-				};
-				new maplibre.Popup({ className: 'sr-popup', maxWidth: '320px' })
-					.setLngLat(coords)
-					.setHTML(buildPopupHtml(props))
-					.addTo(map);
-			});
-			map.on('mouseenter', 'notam-zones', () => { map.getCanvas().style.cursor = 'pointer'; });
-			map.on('mouseleave', 'notam-zones', () => { map.getCanvas().style.cursor = ''; });
-
-			// Click handler for NOTAM area polygons — use stored center for popup position
+			// Click handler for NOTAM area polygons — use stored center for popup
 			map.on('click', 'notam-area-fill', (e: any) => {
 				if (!e.features?.length) return;
 				const f = e.features[0];
-				const centerLng = f.properties.center_lng;
-				const centerLat = f.properties.center_lat;
-				const popupCoords: [number, number] = (centerLng != null && centerLat != null)
-					? [centerLng, centerLat]
+				const popupCoords: [number, number] = (f.properties.center_lng != null && f.properties.center_lat != null)
+					? [f.properties.center_lng, f.properties.center_lat]
 					: [e.lngLat.lng, e.lngLat.lat];
 				const props = {
 					...f.properties,
@@ -1181,7 +1034,7 @@
 			map.on('mouseenter', 'notam-area-fill', () => { map.getCanvas().style.cursor = 'pointer'; });
 			map.on('mouseleave', 'notam-area-fill', () => { map.getCanvas().style.cursor = ''; });
 
-			// Click handler for position arrows — opens detail pane in right sidebar
+			// Click handler for position arrows — opens detail pane + loads trail
 			map.on('click', 'position-arrows', (e: any) => {
 				if (!e.features?.length) return;
 				const f = e.features[0];
@@ -1192,6 +1045,8 @@
 					const posEntry = mapStore.positions.get(entityId);
 					if (posEntry) {
 						uiStore.openPositionDetail(posEntry);
+						// Auto-load 2h trail on click
+						mapStore.loadEntityTrail(entityId, 2);
 						return;
 					}
 				}
@@ -1253,13 +1108,48 @@
 			map.on('mouseenter', 'thermal-dots', () => { map.getCanvas().style.cursor = 'pointer'; });
 			map.on('mouseleave', 'thermal-dots', () => { map.getCanvas().style.cursor = ''; });
 
+			// Satellite dot clicks — show details popup + orbit trail
+			map.on('click', 'satellite-dots', (e: any) => {
+				if (!e.features?.length) return;
+				const p = e.features[0].properties;
+				const noradId = p.norad_id;
+				const name = p.name ?? 'Unknown';
+				const alt = p.altitude_km ?? 0;
+
+				// Toggle orbit path
+				satelliteStore.selectSatellite(noradId);
+
+				// Compute speed from current position data
+				const sat = satelliteStore.positions.find((s) => s.norad_id === noradId);
+				const latStr = sat ? sat.lat.toFixed(2) + '°' : 'N/A';
+				const lonStr = sat ? sat.lon.toFixed(2) + '°' : 'N/A';
+
+				const html = `<div style="font-family:monospace;font-size:12px;color:#e5e7eb;max-width:240px;">
+					<div style="font-weight:bold;color:#22d3ee;margin-bottom:4px;">${escapeHtml(name)}</div>
+					<div style="display:flex;flex-direction:column;gap:2px;">
+						<div style="display:flex;gap:8px;font-size:11px;"><span style="color:#6b7280;min-width:70px;">NORAD ID</span><span style="color:#d1d5db;">${noradId}</span></div>
+						<div style="display:flex;gap:8px;font-size:11px;"><span style="color:#6b7280;min-width:70px;">Altitude</span><span style="color:#d1d5db;">${Math.round(alt).toLocaleString()} km</span></div>
+						<div style="display:flex;gap:8px;font-size:11px;"><span style="color:#6b7280;min-width:70px;">Position</span><span style="color:#d1d5db;">${latStr}, ${lonStr}</span></div>
+					</div>
+					<div style="margin-top:6px;color:#6b7280;font-size:10px;">FIRMS thermal imaging satellite</div>
+					<div style="margin-top:2px;color:#22d3ee;font-size:10px;">Showing ±45 min orbit path</div>
+				</div>`;
+
+				new maplibre.Popup({ className: 'sr-popup', maxWidth: '260px' })
+					.setLngLat(e.lngLat)
+					.setHTML(html)
+					.addTo(map);
+			});
+			map.on('mouseenter', 'satellite-dots', () => { map.getCanvas().style.cursor = 'pointer'; });
+			map.on('mouseleave', 'satellite-dots', () => { map.getCanvas().style.cursor = ''; });
+
 			// Fallback click handler — heatmap layers are non-interactive in MapLibre,
 			// so find the closest event from the unclustered source when no interactive
 			// layer handles the click.
 			const interactiveLayers = [
-				'event-clusters', 'events-circle', 'impact-sites', 'notam-zones',
+				'events-circle', 'impact-sites',
 				'notam-area-fill', 'thermal-dots', 'position-arrows', 'bases-symbols',
-				'restricted-airspace-fill'
+				'restricted-airspace-fill', 'satellite-dots'
 			];
 			map.on('click', (e: any) => {
 				// Skip if a specific layer already handled this click
@@ -1298,15 +1188,12 @@
 					.addTo(map);
 			});
 
-			// Reorder layers: NOTAM areas below clusters (like restricted airspace), events on top
-			map.moveLayer('notam-area-fill', 'event-clusters');
-			map.moveLayer('notam-area-outline', 'event-clusters');
+			// Reorder layers: NOTAM areas below events, events on top
+			map.moveLayer('notam-area-fill', 'events-circle');
 			map.moveLayer('thermal-dots');
 			map.moveLayer('incidents-glow');
-			map.moveLayer('notam-zones');
-			map.moveLayer('notam-labels');
+			map.moveLayer('notam-area-line', 'events-circle');
 			map.moveLayer('events-circle');
-			map.moveLayer('pulse-ring');
 			map.moveLayer('impact-sites');
 
 			// Track viewport bounds for position filtering
@@ -1319,6 +1206,9 @@
 
 			mapLoaded = true;
 
+			// Start satellite position tracking (fetches TLEs, propagates every 3s)
+			satelliteStore.start();
+
 			// Optimization #2: Pass map instance to the position interpolator for direct updates
 			setMapInstance(map);
 
@@ -1327,10 +1217,6 @@
 			// Run once immediately so initial data appears without waiting
 			updateEventSource();
 
-			// Start periodic pulse cleanup — prunes expired entries and triggers re-render
-			pulseInterval = setInterval(() => {
-				mapStore.pruneRecentlyUpdated();
-			}, 2000);
 		});
 	});
 
@@ -1338,35 +1224,30 @@
 	// This eliminates the JSON.parse(JSON.stringify()) deep clone and clock-tick-driven churn.
 
 	// Apply legend filter to event layers
-	// geo_event and notam_event are excluded from events-circle — they have dedicated layers
 	$effect(() => {
 		if (!mapLoaded || !map) return;
 		const hidden = mapStore.hiddenEventTypes;
 
-		// Base filter: exclude special types from events-circle (they have dedicated layers)
+		// Exclude types handled by dedicated layers
 		const excludeSpecial: any[] = ['!', ['in', ['get', 'event_type'], ['literal', ['geo_event', 'notam_event', 'thermal_anomaly']]]];
-		// Cluster filter: only unclustered points
-		const unclusteredFilter: any[] = ['!', ['has', 'point_count']];
 
-		// Toggle NOTAM dot/label visibility based on event type legend
+		// Toggle NOTAM area visibility based on event type legend
 		const notamHidden = hidden.has('notam_event');
-		const notamDotVis = notamHidden ? 'none' : 'visible';
-		if (map.getLayer('notam-zones')) map.setLayoutProperty('notam-zones', 'visibility', notamDotVis);
-		if (map.getLayer('notam-labels')) map.setLayoutProperty('notam-labels', 'visibility', notamDotVis);
+		const notamVis = notamHidden ? 'none' : 'visible';
+		if (map.getLayer('notam-area-fill')) map.setLayoutProperty('notam-area-fill', 'visibility', notamVis);
+		if (map.getLayer('notam-area-line')) map.setLayoutProperty('notam-area-line', 'visibility', notamVis);
 
 		if (hidden.size === 0) {
-			// No filter — show all except geo_event/notam_event (handled by dedicated layers)
-			map.setFilter('events-circle', ['all', unclusteredFilter, excludeSpecial]);
-			map.setFilter('incidents-glow', ['all', unclusteredFilter,
-				['==', ['slice', ['coalesce', ['get', 'event_type'], ''], 0, 9], 'incident:']
+			map.setFilter('events-circle', excludeSpecial);
+			map.setFilter('incidents-glow', [
+				'==', ['slice', ['coalesce', ['get', 'event_type'], ''], 0, 9], 'incident:'
 			]);
 		} else {
 			const hiddenArr = [...hidden];
 			const baseFilter: any[] = ['!', ['in', ['get', 'event_type'], ['literal', hiddenArr]]];
-			map.setFilter('events-circle', ['all', unclusteredFilter, baseFilter, excludeSpecial]);
+			map.setFilter('events-circle', ['all', baseFilter, excludeSpecial]);
 			map.setFilter('incidents-glow', [
 				'all',
-				unclusteredFilter,
 				['==', ['slice', ['coalesce', ['get', 'event_type'], ''], 0, 9], 'incident:'],
 				baseFilter
 			]);
@@ -1432,7 +1313,7 @@
 					'line-dasharray': [4, 3]
 				},
 				layout: { 'visibility': 'visible' }
-			}, 'event-clusters'); // Insert below event layers
+			}, 'events-circle'); // Insert below event layers
 
 			// Compute centroids for label placement
 			const labelFeatures: any[] = [];
@@ -1526,7 +1407,7 @@
 					]
 				},
 				layout: { 'visibility': 'visible' }
-			}, 'event-clusters');
+			}, 'events-circle');
 
 			// Border lines
 			map.addLayer({
@@ -1551,7 +1432,7 @@
 					'line-opacity': 0.5
 				},
 				layout: { 'visibility': 'visible' }
-			}, 'event-clusters');
+			}, 'events-circle');
 
 			// Click handler for restricted zones
 			const maplibre = await import('maplibre-gl');
@@ -1602,8 +1483,90 @@
 	$effect(() => {
 		if (!mapLoaded) return;
 		const vis = mapStore.notamAreasVisible ? 'visible' : 'none';
-		for (const id of ['notam-area-fill', 'notam-area-outline']) {
-			if (map?.getLayer(id)) map.setLayoutProperty(id, 'visibility', vis);
+		if (map?.getLayer('notam-area-fill')) map.setLayoutProperty('notam-area-fill', 'visibility', vis);
+		if (map?.getLayer('notam-area-line')) map.setLayoutProperty('notam-area-line', 'visibility', vis);
+	});
+
+	// Update satellite positions on the map from the satellite store
+	$effect(() => {
+		if (!mapLoaded || !map?.getSource('satellite-positions')) return;
+		const positions = satelliteStore.positions;
+		const visible = satelliteStore.visible;
+		const vis = visible ? 'visible' : 'none';
+		if (map.getLayer('satellite-dots')) map.setLayoutProperty('satellite-dots', 'visibility', vis);
+		if (map.getLayer('satellite-labels')) map.setLayoutProperty('satellite-labels', 'visibility', vis);
+		if (!visible || positions.length === 0) return;
+		const features = positions.map((sat) => ({
+			type: 'Feature' as const,
+			geometry: {
+				type: 'Point' as const,
+				coordinates: [sat.lon, sat.lat]
+			},
+			properties: {
+				name: sat.name,
+				norad_id: sat.norad_id,
+				altitude_km: Math.round(sat.altitude_km)
+			}
+		}));
+		(map.getSource('satellite-positions') as any).setData({
+			type: 'FeatureCollection',
+			features
+		});
+	});
+
+	// Update satellite orbit trail and future path lines
+	$effect(() => {
+		if (!mapLoaded) return;
+		const trail = satelliteStore.orbitTrail;
+		const future = satelliteStore.orbitFuture;
+		const visible = satelliteStore.visible;
+		const vis = visible ? 'visible' : 'none';
+
+		for (const layerId of ['satellite-trail-line', 'satellite-future-line']) {
+			if (map?.getLayer(layerId)) map.setLayoutProperty(layerId, 'visibility', vis);
+		}
+
+		// Build line segments, splitting at the antimeridian to avoid wrap-around artifacts
+		const toSegments = (points: typeof trail) => {
+			if (points.length < 2) return [];
+			const segments: [number, number][][] = [];
+			let current: [number, number][] = [[points[0].lon, points[0].lat]];
+			for (let i = 1; i < points.length; i++) {
+				const prev = points[i - 1];
+				const cur = points[i];
+				// If longitude jumps > 180°, start a new segment (antimeridian crossing)
+				if (Math.abs(cur.lon - prev.lon) > 180) {
+					if (current.length >= 2) segments.push(current);
+					current = [];
+				}
+				current.push([cur.lon, cur.lat]);
+			}
+			if (current.length >= 2) segments.push(current);
+			return segments;
+		};
+
+		if (map?.getSource('satellite-trail')) {
+			const segments = toSegments(trail);
+			(map.getSource('satellite-trail') as any).setData({
+				type: 'FeatureCollection',
+				features: segments.map((coords) => ({
+					type: 'Feature' as const,
+					geometry: { type: 'LineString' as const, coordinates: coords },
+					properties: {}
+				}))
+			});
+		}
+
+		if (map?.getSource('satellite-future')) {
+			const segments = toSegments(future);
+			(map.getSource('satellite-future') as any).setData({
+				type: 'FeatureCollection',
+				features: segments.map((coords) => ({
+					type: 'Feature' as const,
+					geometry: { type: 'LineString' as const, coordinates: coords },
+					properties: {}
+				}))
+			});
 		}
 	});
 
@@ -1659,8 +1622,8 @@
 	});
 
 	onDestroy(() => {
-		if (pulseInterval) clearInterval(pulseInterval);
 		if (eventUpdateTimer) clearInterval(eventUpdateTimer);
+		satelliteStore.stop();
 		delete (window as any).__srOpenDetail;
 		delete (window as any).__srDetailProps;
 		map?.remove();

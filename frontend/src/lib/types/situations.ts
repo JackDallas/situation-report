@@ -39,6 +39,9 @@ export const REGION_LABELS: Record<string, string> = {
 	'oceania': 'Oceania',
 	'arctic': 'Arctic',
 	'global': 'Global',
+	'africa': 'Africa',
+	'RU': 'Russia',
+	'AS': 'East Asia',
 };
 
 export const CATEGORY_COLORS: Record<SituationCategory, { bg: string; text: string; badge: string }> = {
@@ -86,4 +89,8 @@ export interface Situation {
 	peakEventRate?: number | null;
 	/** Certainty score (0.0–1.0) based on source diversity, event count, entities, enrichment */
 	certainty?: number;
+	/** Narrative text from AI analysis (backend clusters only) */
+	narrativeText?: string | null;
+	/** Recent event titles for context */
+	eventTitles?: string[];
 }

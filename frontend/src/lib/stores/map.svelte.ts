@@ -261,7 +261,6 @@ class MapStore {
 
 		for (const entry of entries) {
 			nextPositions.set(entry.entity_id, entry);
-			this.appendTrail(nextHistory, entry);
 			nextMeta.set(entry.entity_id, {
 				source_type: entry.source_type,
 				military: (entry.payload as any)?.military === true
@@ -281,7 +280,6 @@ class MapStore {
 
 		for (const entry of entries) {
 			nextPositions.set(entry.entity_id, entry);
-			this.appendTrail(nextHistory, entry);
 			nextMeta.set(entry.entity_id, {
 				source_type: entry.source_type,
 				military: (entry.payload as any)?.military === true
@@ -316,17 +314,37 @@ class MapStore {
 		}
 	}
 
-	/** Load full trail history for an entity from the backend API. */
+	/** Load full trail history for an entity from the backend API.
+	 *  Simplifies points by skipping those too close together (< ~100m). */
 	async loadEntityTrail(entityId: string, hours = 2): Promise<void> {
 		try {
 			const trail = await api.getPositionTrail(entityId, hours);
-			const trailPoints: TrailPoint[] = trail.map((p) => ({
+			const raw: TrailPoint[] = trail.map((p) => ({
 				lng: p.longitude,
 				lat: p.latitude,
 				time: new Date(p.recorded_at).getTime()
 			}));
+			// Simplify: skip points closer than ~0.001° (~111m) to the previous kept point
+			const minDistSq = 0.001 * 0.001;
+			const simplified: TrailPoint[] = [];
+			for (const pt of raw) {
+				if (simplified.length === 0) {
+					simplified.push(pt);
+					continue;
+				}
+				const last = simplified[simplified.length - 1];
+				const dLng = pt.lng - last.lng;
+				const dLat = pt.lat - last.lat;
+				if (dLng * dLng + dLat * dLat >= minDistSq) {
+					simplified.push(pt);
+				}
+			}
+			// Always keep the last point for accurate endpoint
+			if (raw.length > 1 && simplified[simplified.length - 1] !== raw[raw.length - 1]) {
+				simplified.push(raw[raw.length - 1]);
+			}
 			const nextHistory = new Map(this.positionHistory);
-			nextHistory.set(entityId, trailPoints.slice(0, this.maxTrailPoints));
+			nextHistory.set(entityId, simplified.slice(0, this.maxTrailPoints));
 			this.positionHistory = nextHistory;
 		} catch (e) {
 			console.warn(`Failed to load trail for ${entityId}:`, e);

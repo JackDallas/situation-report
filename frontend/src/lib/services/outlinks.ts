@@ -115,11 +115,12 @@ export function getEventDetails(event: SituationEvent): DetailField[] {
 			add('Source', p.source);
 			break;
 		case 'thermal_anomaly':
-			add('Confidence', p.confidence as string | undefined);
-			add('Brightness', p.brightness);
-			add('FRP', p.frp ? `${p.frp} MW` : undefined);
 			add('Satellite', p.satellite);
-			add('Country', p.country);
+			add('Confidence', p.confidence);
+			add('FRP', p.frp ? `${Number(p.frp).toFixed(1)} MW` : undefined);
+			add('Brightness', p.bright_ti4 ? `${Number(p.bright_ti4).toFixed(1)} K` : undefined);
+			add('Day/Night', p.daynight);
+			add('Acq Time', p.acq_date && p.acq_time ? `${p.acq_date} ${p.acq_time} UTC` : undefined);
 			break;
 		case 'seismic_event':
 			add('Magnitude', p.magnitude);

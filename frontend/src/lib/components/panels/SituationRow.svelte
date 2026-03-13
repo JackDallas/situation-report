@@ -31,6 +31,29 @@
 
 	const sev = $derived(getSeverityColor(situation.severity));
 	const catColor = $derived(CATEGORY_COLORS[situation.category]);
+
+	const PHASE_DISPLAY: Record<string, { label: string; class: string }> = {
+		active: { label: 'ACTIVE', class: 'bg-red-500/20 text-red-400' },
+		developing: { label: 'DEVELOPING', class: 'bg-amber-500/20 text-amber-400' },
+		emerging: { label: 'EMERGING', class: 'bg-blue-500/20 text-blue-400' },
+		declining: { label: 'DECLINING', class: 'bg-zinc-500/20 text-zinc-400' },
+		historical: { label: 'HISTORICAL', class: 'bg-zinc-600/20 text-zinc-500' },
+	};
+
+	const phaseInfo = $derived(situation.phase ? PHASE_DISPLAY[situation.phase] : null);
+
+	/** First sentence of narrative as a preview (strips markdown headings) */
+	const narrativePreview = $derived.by(() => {
+		let text = situation.narrativeText;
+		if (!text) return null;
+		// Strip markdown headings (# Title, ## Title, etc.)
+		text = text.replace(/^#{1,3}\s+[^\n]*\n+/g, '').trim();
+		if (!text) return null;
+		// Take first sentence or first 120 chars
+		const firstSentence = text.match(/^[^.!?]+[.!?]/)?.[0];
+		if (firstSentence && firstSentence.length <= 140) return firstSentence;
+		return text.slice(0, 120).trim() + '...';
+	});
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -95,6 +118,11 @@
 				{situation.childIds.length} sub
 			</span>
 		{/if}
+		{#if phaseInfo && !isChild}
+			<span class="rounded px-1 py-0.5 text-[9px] font-medium {phaseInfo.class}">
+				{phaseInfo.label}
+			</span>
+		{/if}
 		{#if situation.sources.length > 1}
 			<span
 				class="rounded bg-blue-500/10 px-1 py-0.5 text-[9px] text-blue-400"
@@ -114,6 +142,11 @@
 	<p class="mt-1 text-[11px] font-medium leading-relaxed text-text-primary">
 		{situation.displayTitle ?? situation.title}
 	</p>
+	{#if narrativePreview}
+		<p class="mt-0.5 text-[10px] leading-snug text-text-secondary line-clamp-2">
+			{narrativePreview}
+		</p>
+	{/if}
 	{#if situation.entities?.length}
 		<div class="mt-1 flex flex-wrap gap-1">
 			{#each situation.entities.slice(0, 3) as entity (entity)}

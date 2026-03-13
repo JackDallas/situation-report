@@ -1,22 +1,9 @@
 import { mapStore, type PositionEntry } from '$lib/stores/map.svelte';
+import { AFFILIATION_COLORS } from '$lib/config/colors';
 
 const EARTH_RADIUS_KM = 6371;
 const KTS_TO_KPH = 1.852;
 const UPDATE_INTERVAL_MS = 100;
-
-/** Affiliation color map — must match MapPanel.svelte for icon images */
-const AFFILIATION_COLORS: Record<string, string> = {
-	'US': '#3b82f6',
-	'RU': '#ef4444',
-	'CN': '#f97316',
-	'IL': '#22d3ee',
-	'IR': '#10b981',
-	'UA': '#eab308',
-	'GB': '#6366f1',
-	'FR': '#8b5cf6',
-	'DE': '#ec4899',
-	'NATO': '#818cf8',
-};
 const FLIGHT_SOURCES = ['airplaneslive', 'adsb-lol', 'adsb-fi', 'opensky'];
 
 let rafId: number | null = null;
@@ -67,6 +54,7 @@ function buildPositionFeature(pos: PositionEntry, lat: number, lng: number): any
 		pos.source_type.includes('flight');
 	const isVessel = !isFlight;
 	const onGround = pos.altitude != null && pos.altitude <= 0;
+	const isStale = isFlight && pos.heading == null && pos.speed == null;
 
 	let posType: string;
 	let iconImage: string;
@@ -103,7 +91,8 @@ function buildPositionFeature(pos: PositionEntry, lat: number, lng: number): any
 			is_military: isMil,
 			is_high_value: isHighValue,
 			is_vessel: isVessel,
-			on_ground: onGround
+			on_ground: onGround,
+			is_stale: isStale
 		}
 	};
 }

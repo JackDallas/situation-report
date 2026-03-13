@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { mapStore } from '$lib/stores/map.svelte';
+	import { satelliteStore } from '$lib/services/satellites.svelte';
 
 	let expanded = $state(false);
 
@@ -190,6 +191,17 @@
 						style="border-color: #fbbf24; background: {mapStore.basesVisible ? '#fbbf24' : 'transparent'}; opacity: 0.6;"></span>
 					<span class="text-text-secondary"
 						style={mapStore.basesVisible ? '' : 'text-decoration: line-through;'}>Military Bases</span>
+				</button>
+				<button
+					class="flex w-full items-center gap-1.5 rounded px-0.5 py-0.5 text-left hover:bg-white/5"
+					style="opacity: {satelliteStore.visible ? 1 : 0.3};"
+					onclick={() => satelliteStore.toggle()}
+					title={satelliteStore.visible ? 'Hide FIRMS Satellites' : 'Show FIRMS Satellites'}
+				>
+					<span class="inline-block h-2.5 w-2.5 flex-shrink-0 rounded-full border"
+						style="border-color: #22d3ee; background: {satelliteStore.visible ? '#ffffff' : 'transparent'}; opacity: 0.6;"></span>
+					<span class="text-text-secondary"
+						style={satelliteStore.visible ? '' : 'text-decoration: line-through;'}>FIRMS Satellites</span>
 				</button>
 			</div>
 

@@ -49,6 +49,11 @@ const INCIDENT_RULES = [
 	'osint_strike'
 ] as const;
 
+const FEED_EXCLUDE =
+	'bgp_anomaly,flight_position,vessel_position,cert_issued,shodan_banner,geo_news,shodan_count';
+const INTEL_GEO_TYPES =
+	'conflict_event,seismic_event,geo_event,nuclear_event,notam_event,internet_outage,gps_interference,censorship_event,threat_intel,fishing_event,geo_news,thermal_anomaly';
+
 let source: EventSource | null = null;
 let summaryPollInterval: ReturnType<typeof setInterval> | null = null;
 let positionPollInterval: ReturnType<typeof setInterval> | null = null;
@@ -86,10 +91,6 @@ let lastViewportFetchTime = 0;
 let viewportFetchTimer: ReturnType<typeof setTimeout> | null = null;
 
 async function loadInitialData() {
-	const FEED_EXCLUDE =
-		'bgp_anomaly,flight_position,vessel_position,cert_issued,shodan_banner,geo_news,shodan_count';
-	const INTEL_GEO_TYPES =
-		'conflict_event,seismic_event,geo_event,nuclear_event,notam_event,internet_outage,gps_interference,censorship_event,threat_intel,fishing_event,geo_news,thermal_anomaly';
 	try {
 		// Only load events from last 12 hours to avoid stale map markers
 		const geoSince = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
@@ -155,8 +156,6 @@ export async function refetchGeoForViewport() {
 		return;
 	}
 	lastViewportFetchTime = now;
-	const INTEL_GEO_TYPES =
-		'conflict_event,seismic_event,geo_event,nuclear_event,notam_event,internet_outage,gps_interference,censorship_event,threat_intel,fishing_event,geo_news,thermal_anomaly';
 	try {
 		const geoSince = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
 		const bounds = mapStore.viewportBounds;
@@ -214,6 +213,9 @@ export async function connectSSE() {
 	// Poll backend situation clusters
 	loadSituations();
 	situationPollInterval = setInterval(loadSituations, 30_000);
+
+	// Load persisted incidents (fires before SSE events arrive)
+	loadIncidents();
 
 	// Start dead reckoning interpolation for smooth position movement
 	startInterpolation();
@@ -326,11 +328,25 @@ async function loadSituations() {
 	}
 }
 
+async function loadIncidents() {
+	try {
+		const incidents = await api.getIncidents({ limit: 50 });
+		if (Array.isArray(incidents)) {
+			for (const inc of incidents) {
+				eventStore.addIncident(inc);
+				mapStore.addIncidentFeature(inc);
+			}
+		}
+	} catch {
+		// Silent — incidents loaded via SSE as they arrive
+	}
+}
+
 async function pollPositions() {
 	try {
 		const positions = await api.getPositions({
 			bbox: mapStore.viewportBounds,
-			since: new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+			since: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
 		});
 		// Replace positions entirely so stale entries disappear
 		mapStore.replacePositions(positions ?? []);

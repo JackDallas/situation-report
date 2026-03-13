@@ -197,6 +197,18 @@ export const api = {
 		return fetchJson('/api/situations');
 	},
 
+	async getIncidents(params?: { limit?: number; since?: string }): Promise<any[]> {
+		const searchParams = new URLSearchParams();
+		if (params?.limit) searchParams.set('limit', String(params.limit));
+		if (params?.since) searchParams.set('since', params.since);
+		const qs = searchParams.toString();
+		return fetchJson(`/api/incidents${qs ? `?${qs}` : ''}`);
+	},
+
+	async getSatelliteTles(): Promise<{ name: string; norad_id: number; tle_line1: string; tle_line2: string }[]> {
+		return fetchJson('/api/satellite-tles');
+	},
+
 	async getPositions(params?: {
 		bbox?: [number, number, number, number] | null;
 		since?: string;

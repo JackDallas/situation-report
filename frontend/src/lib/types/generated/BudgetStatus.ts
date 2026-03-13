@@ -3,4 +3,12 @@
 /**
  * Budget status for the /api/intel/budget endpoint.
  */
-export type BudgetStatus = { daily_budget_usd: number, spent_today_usd: number, remaining_usd: number, haiku_tokens_today: bigint, sonnet_tokens_today: bigint, budget_exhausted: boolean, degraded: boolean, };
+export type BudgetStatus = { daily_budget_usd: number, spent_today_usd: number, remaining_usd: number, haiku_tokens_today: bigint, sonnet_tokens_today: bigint, budget_exhausted: boolean, degraded: boolean, 
+/**
+ * Gemini spend this calendar month (invoice billing).
+ */
+gemini_spent_month_usd: number, 
+/**
+ * Hard monthly cap for Gemini ($30 default).
+ */
+gemini_month_limit_usd: number, };

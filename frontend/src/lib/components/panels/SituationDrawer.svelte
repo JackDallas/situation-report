@@ -456,6 +456,26 @@
 				</div>
 			{/if}
 
+			<!-- Recent Activity (event titles from the situation) -->
+			{#if situation.eventTitles?.length}
+				<div class="mt-3">
+					<span class="text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+						Recent Activity
+					</span>
+					<div class="mt-1.5 space-y-1">
+						{#each situation.eventTitles.slice(0, 8) as title}
+							<p class="flex items-start gap-1.5 text-[10px] leading-snug text-text-secondary">
+								<span class="mt-0.5 inline-block h-1.5 w-1.5 flex-shrink-0 rounded-full bg-accent/40"></span>
+								{title}
+							</p>
+						{/each}
+						{#if situation.eventTitles.length > 8}
+							<p class="text-[9px] text-text-muted">+{situation.eventTitles.length - 8} more</p>
+						{/if}
+					</div>
+				</div>
+			{/if}
+
 			<!-- Impact Sites (backend clusters with geo_event type events and centroid) -->
 			{#if !situation.incident && situation.id.startsWith('cluster:') && situation.latitude != null && situation.longitude != null}
 				{@const geoEvents = situation.events.filter(e => e.event_type === 'geo_event')}

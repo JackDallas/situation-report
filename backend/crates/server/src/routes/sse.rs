@@ -63,6 +63,13 @@ pub async fn sse_handler(
                             Err(_) => return None,
                         }
                     }
+                    PublishEvent::SourceHealthChange { source_id, .. } => {
+                        let sse_type = format!("source_health:{}", source_id);
+                        match serde_json::to_string(&publish_event) {
+                            Ok(json) => (sse_type, json),
+                            Err(_) => return None,
+                        }
+                    }
                 };
 
                 Some(Ok(

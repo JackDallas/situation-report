@@ -19,7 +19,7 @@
 	import DomainTabs from './DomainTabs.svelte';
 	import SituationRow from './SituationRow.svelte';
 
-	let activeTab = $state<'situations' | 'feed' | 'domain'>('situations');
+	let activeTab = $state<'situations' | 'incidents' | 'feed' | 'domain'>('situations');
 
 	// Track situation updates for visual indicators
 	$effect(() => {
@@ -190,6 +190,19 @@
 		</button>
 		<button
 			class="flex-1 py-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors {activeTab ===
+			'incidents'
+				? 'border-b-2 border-red-400 text-red-400'
+				: 'text-text-muted hover:text-text-secondary'}"
+			onclick={() => (activeTab = 'incidents')}
+			title="Cross-source correlated incidents from pipeline rules"
+		>
+			Incidents{#if eventStore.incidentCount > 0}<span
+					class="ml-1 animate-pulse rounded-full bg-red-500/20 px-1.5 text-[9px] text-red-400"
+					>{eventStore.incidentCount}</span
+				>{/if}
+		</button>
+		<button
+			class="flex-1 py-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors {activeTab ===
 			'feed'
 				? 'border-b-2 border-accent text-accent'
 				: 'text-text-muted hover:text-text-secondary'}"
@@ -265,6 +278,73 @@
 								{/if}
 							{/each}
 						{/if}
+					{/each}
+				</div>
+			{/if}
+		{:else if activeTab === 'incidents'}
+			<!-- Incidents Tab — cross-source correlated detections -->
+			{#if recentIncidents.length === 0}
+				<div class="flex h-full items-center justify-center text-text-muted">
+					<div class="text-center">
+						<svg class="mx-auto mb-2 h-8 w-8 text-text-muted/50" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+							<path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M13 10V3L4 14h7v7l9-11h-7z" />
+						</svg>
+						<p class="text-xs">No correlated incidents</p>
+						<p class="mt-1 text-[10px]">Cross-source correlations (e.g. military strike + thermal + NOTAM) will appear here</p>
+					</div>
+				</div>
+			{:else}
+				<div class="divide-y divide-border-default">
+					{#each recentIncidents as incident (incident.id)}
+						{@const sev = getSeverityColor(incident.severity)}
+						<!-- svelte-ignore a11y_click_events_have_key_events -->
+						<!-- svelte-ignore a11y_no_static_element_interactions -->
+						<div
+							class="border-l-[3px] px-3 py-2.5 transition-colors hover:bg-bg-card-hover {sev.border} {sev.bg} {incident.latitude != null ? 'cursor-pointer' : ''}"
+							onclick={() => handleIncidentClick(incident)}
+						>
+							<div class="flex items-center gap-1.5">
+								<span class="rounded px-1.5 py-0.5 text-[10px] font-bold {sev.badge}">
+									{incident.severity.toUpperCase()}
+								</span>
+								<span class="rounded bg-bg-surface px-1.5 py-0.5 text-[10px] text-text-muted">
+									{incident.rule_id.replace(/_/g, ' ')}
+								</span>
+								{#if incident.confidence}
+									<span class="text-[9px] text-text-muted" title="Correlation confidence score">
+										{Math.round(incident.confidence * 100)}%
+									</span>
+								{/if}
+								<span class="ml-auto flex-shrink-0 text-[10px] text-text-muted" title={formatFullTimestamp(incident.first_seen)}>
+									{formatAbsoluteTime(incident.first_seen, clockStore.now)} <span class="opacity-60">{formatTimestamp(incident.first_seen, clockStore.now)}</span>
+								</span>
+							</div>
+							<p class="mt-1 text-[11px] font-medium leading-relaxed text-text-primary">
+								{incident.title}
+							</p>
+							<p class="mt-0.5 text-[11px] leading-relaxed text-text-secondary">
+								{incident.description}
+							</p>
+							{#if incident.region_code}
+								<span class="mt-1 inline-block rounded bg-bg-surface px-1.5 py-0.5 text-[9px] text-text-muted">
+									{incident.region_code}
+								</span>
+							{/if}
+							{#if incident.evidence && incident.evidence.length > 0}
+								<div class="mt-1.5 flex flex-wrap gap-1">
+									{#each incident.evidence as ev}
+										{@const evColors = getTypeColor(ev.event_type)}
+										<span
+											class="rounded px-1 py-0.5 text-[9px] {evColors.bg} {evColors.text}"
+											title="{ev.role}: {ev.source_type} — {ev.title || ev.event_type}"
+										>
+											{evColors.label}
+											{#if ev.role === 'trigger'}<span class="font-bold">*</span>{/if}
+										</span>
+									{/each}
+								</div>
+							{/if}
+						</div>
 					{/each}
 				</div>
 			{/if}

@@ -1,13 +1,12 @@
 <script lang="ts">
 	import { eventStore } from '$lib/stores/events.svelte';
+	import { SEVERITY_RANK } from '$lib/config/colors';
 
 	const WIDTH = 120;
 	const HEIGHT = 24;
 	const BUCKET_COUNT = 24; // 6h / 15min = 24 buckets
 	const BUCKET_MS = 15 * 60 * 1000; // 15 minutes
 	const WINDOW_MS = 6 * 60 * 60 * 1000; // 6 hours
-
-	const SEVERITY_RANK: Record<string, number> = { critical: 4, high: 3, medium: 2, low: 1 };
 
 	const buckets = $derived.by(() => {
 		const now = Date.now();

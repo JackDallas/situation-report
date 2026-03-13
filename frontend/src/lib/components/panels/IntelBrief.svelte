@@ -21,13 +21,7 @@
 		return 'text-success';
 	}
 
-	const ENTITY_TYPE_ICONS: Record<string, string> = {
-		person: 'bg-purple-500/20 text-purple-400',
-		organization: 'bg-blue-500/20 text-blue-400',
-		location: 'bg-emerald-500/20 text-emerald-400',
-		weapon_system: 'bg-red-500/20 text-red-400',
-		military_unit: 'bg-orange-500/20 text-orange-400'
-	};
+	import { ENTITY_TYPE_ICONS } from '$lib/config/colors';
 
 	let budgetData = $state<{
 		daily_budget_usd: number;
