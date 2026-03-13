@@ -774,8 +774,8 @@ pub struct SeverityConfig {
 impl Default for SeverityConfig {
     fn default() -> Self {
         Self {
-            critical_min_events: 20,
-            critical_min_sources: 3,
+            critical_min_events: 40,
+            critical_min_sources: 4,
             high_min_events: 10,
             medium_min_sources: 2,
             medium_min_events: 5,
