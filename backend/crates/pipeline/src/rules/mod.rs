@@ -7,6 +7,7 @@ pub mod apt_staging;
 pub mod conflict_thermal;
 pub mod gps_military;
 pub mod osint_strike;
+pub mod military_surge;
 
 use std::collections::HashMap;
 
@@ -110,5 +111,6 @@ pub fn default_rules() -> RuleRegistry {
     reg.register(Box::new(conflict_thermal::ConflictThermalClusterRule));
     reg.register(Box::new(gps_military::GpsMilitaryRule));
     reg.register(Box::new(osint_strike::OsintStrikeRule));
+    reg.register(Box::new(military_surge::MilitarySurgeRule::new()));
     reg
 }
