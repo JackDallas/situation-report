@@ -97,7 +97,8 @@ impl SourceRegistry {
         pool: PgPool,
         event_tx: broadcast::Sender<InsertableEvent>,
         health_tx: broadcast::Sender<SourceHealthEvent>,
-        ntfy_topic: String,
+        pushover_token: String,
+        pushover_user: String,
     ) {
         let http = reqwest::Client::builder()
             .user_agent("SituationReport/0.1")
@@ -112,7 +113,8 @@ impl SourceRegistry {
             let health_tx = health_tx.clone();
             let http = http.clone();
 
-            let ntfy_topic = ntfy_topic.clone();
+            let pushover_token = pushover_token.clone();
+            let pushover_user = pushover_user.clone();
 
             if source.is_streaming() {
                 // Task 1: run the streaming source, which emits events on event_tx
@@ -123,7 +125,8 @@ impl SourceRegistry {
                     let health_tx = health_tx.clone();
                     let http = http.clone();
                     let source = Arc::clone(&source);
-                    let ntfy_topic = ntfy_topic.clone();
+                    let pushover_token = pushover_token.clone();
+                    let pushover_user = pushover_user.clone();
                     tokio::spawn(async move {
                         let ctx = SourceContext {
                             pool: pool.clone(),
@@ -136,7 +139,7 @@ impl SourceRegistry {
 
                             // Mark as "connecting" — only promoted to "healthy" when data flows
                             update_and_emit_health(
-                                &pool, source.id(), "connecting", 0, None, &health_tx, &ntfy_topic,
+                                &pool, source.id(), "connecting", 0, None, &health_tx, &pushover_token, &pushover_user,
                             ).await;
 
                             match source.start_stream(&ctx, event_tx.clone()).await {
@@ -155,7 +158,7 @@ impl SourceRegistry {
                                         );
                                         let err_msg = format!("auth error (disabled): {}", e);
                                         update_and_emit_health(
-                                            &pool, source.id(), "error", 1, Some(&err_msg), &health_tx, &ntfy_topic,
+                                            &pool, source.id(), "error", 1, Some(&err_msg), &health_tx, &pushover_token, &pushover_user,
                                         ).await;
                                         // Park this task forever — don't spam the server
                                         return;
@@ -171,7 +174,7 @@ impl SourceRegistry {
                                         );
                                         let err_msg = format!("exceeded max failures ({}): {}", consecutive_failures, e);
                                         update_and_emit_health(
-                                            &pool, source.id(), "error", consecutive_failures, Some(&err_msg), &health_tx, &ntfy_topic,
+                                            &pool, source.id(), "error", consecutive_failures, Some(&err_msg), &health_tx, &pushover_token, &pushover_user,
                                         ).await;
                                         return;
                                     }
@@ -189,7 +192,7 @@ impl SourceRegistry {
 
                                     update_and_emit_health(
                                         &pool, source.id(), "error", consecutive_failures,
-                                        Some(&e.to_string()), &health_tx, &ntfy_topic,
+                                        Some(&e.to_string()), &health_tx, &pushover_token, &pushover_user,
                                     ).await;
 
                                     tokio::time::sleep(backoff).await;
@@ -203,7 +206,8 @@ impl SourceRegistry {
                 {
                     let pool = pool.clone();
                     let health_tx = health_tx.clone();
-                    let ntfy_topic = ntfy_topic.clone();
+                    let pushover_token = pushover_token.clone();
+                    let pushover_user = pushover_user.clone();
                     let mut event_rx = event_tx.subscribe();
                     tokio::spawn(async move {
                         let mut first_event_received = false;
@@ -219,7 +223,7 @@ impl SourceRegistry {
                                         first_event_received = true;
                                         info!(source_id = %source_id, "Stream data flowing — marking healthy");
                                         update_and_emit_health(
-                                            &pool, &source_id, "healthy", 0, None, &health_tx, &ntfy_topic,
+                                            &pool, &source_id, "healthy", 0, None, &health_tx, &pushover_token, &pushover_user,
                                         ).await;
                                     }
 
@@ -258,7 +262,8 @@ impl SourceRegistry {
                     });
                 }
             } else {
-                let ntfy_topic = ntfy_topic;
+                let pushover_token = pushover_token;
+                let pushover_user = pushover_user;
                 tokio::spawn(async move {
                     let ctx = SourceContext {
                         pool: pool.clone(),
@@ -296,7 +301,7 @@ impl SourceRegistry {
 
                                 // Update health to healthy
                                 update_and_emit_health(
-                                    &pool, source.id(), "healthy", 0, None, &health_tx, &ntfy_topic,
+                                    &pool, source.id(), "healthy", 0, None, &health_tx, &pushover_token, &pushover_user,
                                 ).await;
 
                                 let count = events.len();
@@ -327,7 +332,7 @@ impl SourceRegistry {
                                     );
                                     let err_msg = format!("auth error (disabled): {}", e);
                                     update_and_emit_health(
-                                        &pool, source.id(), "error", 1, Some(&err_msg), &health_tx, &ntfy_topic,
+                                        &pool, source.id(), "error", 1, Some(&err_msg), &health_tx, &pushover_token, &pushover_user,
                                     ).await;
                                     return;
                                 }
@@ -355,7 +360,7 @@ impl SourceRegistry {
                                     let err_msg = format!("429 x{} — backing off {}s", consecutive_failures, effective.as_secs());
                                     update_and_emit_health(
                                         &pool, source.id(), "rate_limited", consecutive_failures,
-                                        Some(&err_msg), &health_tx, &ntfy_topic,
+                                        Some(&err_msg), &health_tx, &pushover_token, &pushover_user,
                                     ).await;
 
                                     effective
@@ -368,7 +373,7 @@ impl SourceRegistry {
                                     // Update health to error
                                     update_and_emit_health(
                                         &pool, source.id(), "error", consecutive_failures,
-                                        Some(&e.to_string()), &health_tx, &ntfy_topic,
+                                        Some(&e.to_string()), &health_tx, &pushover_token, &pushover_user,
                                     ).await;
                                     let backoff_ms = ((30u64 * 2u64.pow(consecutive_failures.min(4))).min(300)) * 1000;
                                     let jitter = rand::thread_rng().gen_range(0..=backoff_ms / 4);
@@ -384,7 +389,7 @@ impl SourceRegistry {
                                     let err_msg = format!("exceeded max failures ({})", consecutive_failures);
                                     update_and_emit_health(
                                         &pool, source.id(), "error", consecutive_failures,
-                                        Some(&err_msg), &health_tx, &ntfy_topic,
+                                        Some(&err_msg), &health_tx, &pushover_token, &pushover_user,
                                     ).await;
                                     return;
                                 }
@@ -406,7 +411,7 @@ impl SourceRegistry {
 }
 
 /// Update source health in DB and emit a health event on the broadcast channel.
-/// Sends an ntfy alert on the first transition to error state.
+/// Sends a Pushover alert on the first transition to error state.
 async fn update_and_emit_health(
     pool: &PgPool,
     source_id: &str,
@@ -414,7 +419,8 @@ async fn update_and_emit_health(
     consecutive_failures: u32,
     last_error: Option<&str>,
     health_tx: &broadcast::Sender<SourceHealthEvent>,
-    ntfy_topic: &str,
+    pushover_token: &str,
+    pushover_user: &str,
 ) {
     if let Err(e) = sr_db::queries::update_source_health(pool, source_id, status, last_error).await {
         warn!(source_id, error = %e, "Failed to update source health");
@@ -428,23 +434,25 @@ async fn update_and_emit_health(
 
     // Alert on first transition to error (consecutive_failures == 1 means just transitioned)
     if status == "error" && consecutive_failures <= 1 {
-        send_ntfy_alert(ntfy_topic, source_id, last_error.unwrap_or("unknown error")).await;
+        send_pushover_alert(pushover_token, pushover_user, source_id, last_error.unwrap_or("unknown error")).await;
     }
 }
 
-/// Send a push notification via ntfy.sh when a source goes down.
-async fn send_ntfy_alert(topic: &str, source_id: &str, error_msg: &str) {
-    if topic.is_empty() {
+/// Send a push notification via Pushover when a source goes down.
+async fn send_pushover_alert(token: &str, user: &str, source_id: &str, error_msg: &str) {
+    if token.is_empty() || user.is_empty() {
         return;
     }
     let client = reqwest::Client::new();
-    let title = format!("Source Down: {}", source_id);
     let _ = client
-        .post(topic)
-        .header("Title", &title)
-        .header("Priority", "high")
-        .header("Tags", "warning")
-        .body(format!("{}: {}", source_id, error_msg))
+        .post("https://api.pushover.net/1/messages.json")
+        .form(&[
+            ("token", token),
+            ("user", user),
+            ("title", &format!("Source Down: {}", source_id)),
+            ("message", &format!("{}: {}", source_id, error_msg)),
+            ("priority", "1"),
+        ])
         .send()
         .await;
 }

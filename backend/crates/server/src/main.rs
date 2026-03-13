@@ -171,8 +171,9 @@ async fn main() -> anyhow::Result<()> {
     let registry = Arc::new(registry);
 
     // Start all registered sources
-    let ntfy_topic = std::env::var("NTFY_TOPIC").unwrap_or_default();
-    registry.start_all(pool.clone(), event_tx.clone(), health_tx, ntfy_topic);
+    let pushover_token = std::env::var("PUSHOVER_TOKEN").unwrap_or_default();
+    let pushover_user = std::env::var("PUSHOVER_USER").unwrap_or_default();
+    registry.start_all(pool.clone(), event_tx.clone(), health_tx, pushover_token, pushover_user);
 
     // Intelligence layer — Claude API client + budget manager
     let claude_client = match ClaudeClient::from_env() {

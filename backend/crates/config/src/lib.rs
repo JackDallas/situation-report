@@ -879,16 +879,19 @@ impl Default for CertaintyConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AlertConfig {
-    /// ntfy.sh topic URL (e.g. "https://ntfy.sh/my-situationroom-alerts").
-    /// If empty/unset, alerting is disabled.
+    /// Pushover application API token. If empty, alerting is disabled.
     #[serde(default)]
-    pub ntfy_topic: String,
+    pub pushover_token: String,
+    /// Pushover user/group key.
+    #[serde(default)]
+    pub pushover_user: String,
 }
 
 impl Default for AlertConfig {
     fn default() -> Self {
         Self {
-            ntfy_topic: String::new(),
+            pushover_token: String::new(),
+            pushover_user: String::new(),
         }
     }
 }
@@ -1022,9 +1025,12 @@ impl PipelineConfig {
         env_override!(config.severity.medium_min_sources, "PIPELINE_SEVERITY_MEDIUM_MIN_SOURCES", usize);
         env_override!(config.severity.medium_min_events, "PIPELINE_SEVERITY_MEDIUM_MIN_EVENTS", usize);
 
-        // Alerts
-        if let Ok(val) = std::env::var("NTFY_TOPIC") {
-            config.alerts.ntfy_topic = val;
+        // Alerts (Pushover)
+        if let Ok(val) = std::env::var("PUSHOVER_TOKEN") {
+            config.alerts.pushover_token = val;
+        }
+        if let Ok(val) = std::env::var("PUSHOVER_USER") {
+            config.alerts.pushover_user = val;
         }
 
         config
