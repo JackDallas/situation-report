@@ -124,7 +124,7 @@ services:
       --port 8000
       --parallel 1
       --ctx-size 8192
-      --flash-attn
+      --flash-attn on
     volumes:
       - llama-models:/models
     deploy:
