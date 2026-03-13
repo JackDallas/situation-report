@@ -388,6 +388,7 @@ pub(crate) fn is_high_signal_event(event_type: EventType) -> bool {
             | EventType::SeismicEvent
             | EventType::CensorshipEvent
             | EventType::TelegramMessage
+            | EventType::BlueskyPost
             | EventType::ThreatIntel
     )
 }
@@ -557,7 +558,7 @@ pub(crate) fn is_language_tag(tag: &str) -> bool {
 /// so they don't inflate diversity scores:
 ///   - Flight sources (airplaneslive, adsb-fi, adsb-lol, opensky) → 1 "flight"
 ///   - News sources (gdelt, gdelt-geo, rss-news) → 1 "news"
-///   - Disaster catalogs (gdacs, reliefweb, copernicus) → 1 "disaster"
+///   - Disaster catalogs (gdacs, copernicus) → 1 "disaster"
 pub(crate) fn effective_source_diversity(source_types: &HashSet<SourceType>) -> usize {
     let mut count = 0;
     let mut has_flight = false;
@@ -574,7 +575,7 @@ pub(crate) fn effective_source_diversity(source_types: &HashSet<SourceType>) -> 
                 has_news = true;
                 count += 1;
             }
-        } else if matches!(st, SourceType::Gdacs | SourceType::Reliefweb | SourceType::Copernicus) {
+        } else if matches!(st, SourceType::Gdacs | SourceType::Copernicus) {
             if !has_disaster_catalog {
                 has_disaster_catalog = true;
                 count += 1;

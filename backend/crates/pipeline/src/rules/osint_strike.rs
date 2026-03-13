@@ -88,7 +88,7 @@ impl CorrelationRule for OsintStrikeRule {
     }
 
     fn trigger_types(&self) -> &[EventType] {
-        &[EventType::TelegramMessage, EventType::NewsArticle]
+        &[EventType::TelegramMessage, EventType::NewsArticle, EventType::BlueskyPost]
     }
 
     fn evaluate(
@@ -103,7 +103,8 @@ impl CorrelationRule for OsintStrikeRule {
         // Only fire on Telegram triggers that have conflict indicators and
         // sufficient severity, or on NewsArticle triggers if a matching
         // Telegram message is already in the window.
-        let is_telegram_trigger = trigger.event_type == EventType::TelegramMessage;
+        let is_telegram_trigger = trigger.event_type == EventType::TelegramMessage
+            || trigger.event_type == EventType::BlueskyPost;
         let is_news_trigger = trigger.event_type == EventType::NewsArticle;
 
         if is_telegram_trigger {
@@ -148,13 +149,16 @@ impl CorrelationRule for OsintStrikeRule {
                 return None; // Need at least news corroboration
             }
         } else if is_news_trigger {
-            // News is the trigger — look for a qualifying Telegram message in the window
+            // News is the trigger — look for a qualifying Telegram/Bluesky message in the window
             let telegram_within = Duration::from_secs(6 * 3600);
-            let telegram_candidates =
+            let mut social_candidates =
                 window.near(EventType::TelegramMessage, lat, lon, news_radius, telegram_within);
+            social_candidates.extend(
+                window.near(EventType::BlueskyPost, lat, lon, news_radius, telegram_within),
+            );
 
-            // Filter to only Telegram messages with strike indicators and severity >= Medium
-            let qualifying: Vec<&InsertableEvent> = telegram_candidates
+            // Filter to only messages with strike indicators and severity >= Medium
+            let qualifying: Vec<&InsertableEvent> = social_candidates
                 .into_iter()
                 .filter(|t| {
                     t.severity.rank() >= Severity::Medium.rank()

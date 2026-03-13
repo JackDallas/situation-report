@@ -206,6 +206,7 @@ fn is_important(event: &InsertableEvent) -> bool {
         | EventType::CensorshipEvent
         | EventType::NotamEvent
         | EventType::TelegramMessage
+        | EventType::BlueskyPost
         | EventType::ThreatIntel
         | EventType::InternetOutage
         | EventType::FishingEvent
@@ -1016,7 +1017,7 @@ async fn run_pipeline(
 
             // Still backfill the correlation window so rules have context,
             // but skip re-ingesting into the situation graph.
-            match sr_sources::db::queries::query_backfill_events(&pool, 6, 5000).await {
+            match sr_sources::db::queries::query_backfill_events(&pool, 6, 10_000).await {
                 Ok(rows) => {
                     for row in &rows {
                         if let Some(event) = db_event_to_insertable(row) {
@@ -1055,7 +1056,7 @@ async fn run_pipeline(
             }
         } else {
             info!("No persisted clusters found — falling back to event backfill");
-            match sr_sources::db::queries::query_backfill_events(&pool, 6, 5000).await {
+            match sr_sources::db::queries::query_backfill_events(&pool, 6, 10_000).await {
                 Ok(rows) => {
                     let total = rows.len();
                     let mut fed = 0usize;
@@ -2021,7 +2022,7 @@ fn spawn_enrichment(
     let has_enrichment_backend = ollama_client.is_some() || gemini_client.is_some() || claude_client.is_some();
     let is_enrichable = matches!(
         event.event_type,
-        EventType::NewsArticle | EventType::TelegramMessage | EventType::GeoNews
+        EventType::NewsArticle | EventType::TelegramMessage | EventType::GeoNews | EventType::BlueskyPost
     );
     if !is_enrichable || !has_enrichment_backend {
         return false;

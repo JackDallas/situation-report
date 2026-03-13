@@ -291,7 +291,7 @@ impl SituationGraph {
                     && (shared_topics >= 1 || shared_entities >= 1)
                     && smaller_source_types.iter().all(|s| matches!(s,
                         SourceType::RssNews | SourceType::Gdelt | SourceType::GdeltGeo
-                        | SourceType::Geoconfirmed | SourceType::Telegram));
+                        | SourceType::Geoconfirmed | SourceType::Telegram | SourceType::Bluesky));
                 let should_merge = if title_identity_merge {
                     true
                 } else if regional_absorb {

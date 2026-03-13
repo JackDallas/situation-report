@@ -27,10 +27,10 @@ pub mod gdelt_geo;
 pub mod gfw;
 pub mod gpsjam;
 pub mod telegram;
-pub mod reliefweb;
 pub mod rss_news;
 pub mod ukmto;
 pub mod copernicus;
+pub mod bluesky;
 
 use std::time::Duration;
 

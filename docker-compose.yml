@@ -175,6 +175,7 @@ services:
       TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
       TELEGRAM_SESSION_PATH: /app/data/telegram.session
+      BLUESKY_LIST_URI: ${BLUESKY_LIST_URI:-at://did:plc:36rwne5ohbpfmtz2n2c255q2/app.bsky.graph.list/3mfx7qknu6c2b}
       # Vector embeddings (BGE-M3)
       AIRCRAFT_DB_PATH: ${AIRCRAFT_DB_PATH:-/app/modes-db/modes.csv}
       EMBEDDINGS_ENABLED: ${EMBEDDINGS_ENABLED:-true}

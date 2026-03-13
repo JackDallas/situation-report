@@ -3,4 +3,4 @@
 /**
  * All data source types in the system.
  */
-export type SourceType = "acled" | "adsb-fi" | "adsb-lol" | "ais" | "airplaneslive" | "bgp" | "certstream" | "cloudflare" | "cloudflare-bgp" | "firms" | "gdacs" | "gdelt" | "gdelt-geo" | "geoconfirmed" | "gpsjam" | "gfw" | "ioda" | "notam" | "nuclear" | "ooni" | "opensky" | "otx" | "reliefweb" | "rss-news" | "shodan" | "telegram" | "ukmto" | "usgs" | "copernicus";
+export type SourceType = "acled" | "adsb-fi" | "adsb-lol" | "ais" | "airplaneslive" | "bgp" | "certstream" | "cloudflare" | "cloudflare-bgp" | "firms" | "gdacs" | "gdelt" | "gdelt-geo" | "geoconfirmed" | "gpsjam" | "gfw" | "ioda" | "notam" | "nuclear" | "ooni" | "opensky" | "otx" | "rss-news" | "shodan" | "telegram" | "ukmto" | "usgs" | "copernicus" | "bluesky";

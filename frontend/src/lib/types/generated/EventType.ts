@@ -3,4 +3,4 @@
 /**
  * All event types emitted by data sources.
  */
-export type EventType = "conflict_event" | "thermal_anomaly" | "geo_event" | "gps_interference" | "internet_outage" | "censorship_event" | "bgp_leak" | "bgp_anomaly" | "threat_intel" | "seismic_event" | "nuclear_event" | "fishing_event" | "news_article" | "geo_news" | "telegram_message" | "notam_event" | "flight_position" | "vessel_position" | "cert_issued" | "shodan_banner" | "shodan_count" | "source_health";
+export type EventType = "conflict_event" | "thermal_anomaly" | "geo_event" | "gps_interference" | "internet_outage" | "censorship_event" | "bgp_leak" | "bgp_anomaly" | "threat_intel" | "seismic_event" | "nuclear_event" | "fishing_event" | "news_article" | "geo_news" | "telegram_message" | "notam_event" | "flight_position" | "vessel_position" | "cert_issued" | "shodan_banner" | "shodan_count" | "source_health" | "bluesky_post";

@@ -273,7 +273,7 @@ impl PipelineCore {
 
         let is_enrichable = matches!(
             event.event_type,
-            EventType::NewsArticle | EventType::TelegramMessage | EventType::GeoNews
+            EventType::NewsArticle | EventType::TelegramMessage | EventType::GeoNews | EventType::BlueskyPost
         );
         if !is_enrichable {
             return false;

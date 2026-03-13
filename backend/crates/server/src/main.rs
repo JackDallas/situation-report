@@ -155,11 +155,11 @@ async fn main() -> anyhow::Result<()> {
     // Maritime Security (NGA ASAM — piracy, missile attacks, hijackings)
     registry.register(Arc::new(sr_sources::ukmto::UkmtoSource::new()));
 
-    // ReliefWeb (UN OCHA — humanitarian reports, disaster declarations)
-    registry.register(Arc::new(sr_sources::reliefweb::ReliefwebSource::new()));
-
     // Copernicus Emergency Management Service (emergency mapping activations)
     registry.register(Arc::new(sr_sources::copernicus::CopernicusSource::new()));
+
+    // Bluesky OSINT (Jetstream WebSocket — curated account list)
+    registry.register(Arc::new(sr_sources::bluesky::BlueskySource::new()));
 
     let registry = Arc::new(registry);
 

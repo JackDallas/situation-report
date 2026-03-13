@@ -128,7 +128,7 @@ impl ReplayHarness {
             if ai_enabled {
                 let is_enrichable = matches!(
                     insertable.event_type,
-                    EventType::NewsArticle | EventType::TelegramMessage | EventType::GeoNews
+                    EventType::NewsArticle | EventType::TelegramMessage | EventType::GeoNews | EventType::BlueskyPost
                 ) && insertable.payload.get("enrichment").is_none();
 
                 if is_enrichable && self.core.enrich_event(&mut insertable).await {

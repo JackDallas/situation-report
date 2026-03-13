@@ -1920,6 +1920,7 @@ mod tests {
             Some("ais") => SourceType::Ais,
             Some("geoconfirmed") => SourceType::Geoconfirmed,
             Some("rss-news") => SourceType::RssNews,
+            Some("bluesky") => SourceType::Bluesky,
             _ => SourceType::Acled, // default for tests
         }
     }
@@ -1947,6 +1948,7 @@ mod tests {
             Some("notam_event") => EventType::NotamEvent,
             Some("geo_event") => EventType::GeoEvent,
             Some("source_health") => EventType::SourceHealth,
+            Some("bluesky_post") => EventType::BlueskyPost,
             _ => EventType::ConflictEvent, // default for tests
         }
     }
