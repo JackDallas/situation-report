@@ -721,10 +721,10 @@ pub async fn get_position_trail(
     Ok(points)
 }
 
-/// Load recent "important" events from the last N hours for pipeline backfill.
+/// Load ALL events from the last N hours for pipeline backfill.
 /// Returns events ordered by event_time ASC so they can be replayed in order.
-/// Only selects event types that pass the pipeline importance filter — skips
-/// high-volume position/banner/cert types that would just be noise.
+/// No event_type or severity filtering — the pipeline's own `ingest()` and
+/// `db_event_to_insertable()` handle relevance filtering downstream.
 pub async fn query_backfill_events(
     pool: &PgPool,
     hours: i32,
@@ -739,17 +739,6 @@ pub async fn query_backfill_events(
                severity, confidence, tags, title, description, payload
         FROM events
         WHERE event_time > NOW() - make_interval(hours => $1)
-          AND (
-              severity IN ('high', 'critical')
-              OR event_type IN (
-                  'conflict_event', 'news_article', 'geo_news',
-                  'geoconfirmed', 'nuclear_event',
-                  'gps_interference', 'seismic_event',
-                  'internet_outage', 'censorship_event', 'notam_event',
-                  'telegram_message', 'threat_intel', 'fishing_event',
-                  'bgp_leak', 'geo_event', 'thermal_anomaly'
-              )
-          )
         ORDER BY event_time ASC
         LIMIT $2
         "#,
