@@ -267,6 +267,14 @@ pub(crate) fn recompute_cluster_severity(cluster: &mut SituationCluster, severit
 
     cluster.severity = computed;
 
+    // Children should never be CRITICAL — only top-level situations warrant
+    // the highest severity. Clusters that were previously parents retain
+    // inflated event_count/source_types from absorbed children, which can
+    // cause false CRITICAL after reparenting.
+    if cluster.parent_id.is_some() && cluster.severity == Severity::Critical {
+        cluster.severity = Severity::High;
+    }
+
     // Cap severity for stale clusters
     if let Some((most_recent, _)) = cluster.event_ids.last() {
         if (now - *most_recent).num_hours() > 48 {
