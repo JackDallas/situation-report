@@ -11,6 +11,16 @@ use chrono::Utc;
 /// Interval between keepalive Ping frames sent to the server.
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(30);
 
+/// Browser-like User-Agent to avoid Cloudflare bot detection on WebSocket upgrade.
+const BROWSER_USER_AGENT: &str =
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
+
+/// Initial backoff delay after a connection failure.
+const INITIAL_BACKOFF: Duration = Duration::from_secs(5);
+
+/// Maximum backoff delay between reconnection attempts.
+const MAX_BACKOFF: Duration = Duration::from_secs(120);
+
 use sr_types::{EventType, Severity, SourceType};
 
 use crate::common::mmsi_country;
@@ -390,145 +400,231 @@ impl DataSource for AisSource {
             anyhow::anyhow!("AISSTREAM_API_KEY environment variable not set")
         })?;
 
-        info!("Connecting to aisstream.io WebSocket");
-
-        let (ws_stream, _response) = connect_async(AISSTREAM_URL)
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to connect to aisstream.io: {}", e))?;
-
-        let (mut write, mut read) = ws_stream.split();
-
-        // Send subscribe message with API key and bounding boxes.
         let subscribe_msg = Self::build_subscribe_message(&api_key);
-        write
-            .send(tokio_tungstenite::tungstenite::Message::Text(
-                subscribe_msg.into(),
-            ))
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to send AIS subscribe message: {}", e))?;
-
-        info!(
-            regions = BOUNDING_BOXES.len(),
-            "Subscribed to aisstream.io AIS stream"
-        );
 
         let mut message_count: u64 = 0;
         let mut raw_message_count: u64 = 0;
-        let mut keepalive = tokio::time::interval(KEEPALIVE_INTERVAL);
-        keepalive.tick().await; // consume the immediate first tick
-        let mut stats_timer = tokio::time::interval(Duration::from_secs(60));
-        stats_timer.tick().await; // consume first tick
+        let mut backoff = INITIAL_BACKOFF;
 
+        // Internal reconnection loop — keeps retrying with exponential backoff.
+        // Auth errors propagate immediately; transient failures trigger reconnect.
         loop {
-            tokio::select! {
-                _ = stats_timer.tick() => {
+            info!(
+                total_processed = message_count,
+                "Connecting to aisstream.io WebSocket"
+            );
+
+            // Build a custom HTTP request with browser-like headers to avoid
+            // Cloudflare bot detection on the WebSocket upgrade handshake.
+            let request = match http::Request::builder()
+                .uri(AISSTREAM_URL)
+                .header("User-Agent", BROWSER_USER_AGENT)
+                .header("Origin", "https://aisstream.io")
+                .header("Host", "stream.aisstream.io")
+                .header("Connection", "Upgrade")
+                .header("Upgrade", "websocket")
+                .header("Sec-WebSocket-Version", "13")
+                .header(
+                    "Sec-WebSocket-Key",
+                    tokio_tungstenite::tungstenite::handshake::client::generate_key(),
+                )
+                .body(())
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    return Err(anyhow::anyhow!(
+                        "Failed to build aisstream.io request: {}",
+                        e
+                    ));
+                }
+            };
+
+            let ws_stream = match connect_async(request).await {
+                Ok((stream, resp)) => {
                     info!(
-                        raw_messages = raw_message_count,
-                        processed_events = message_count,
-                        "AIS stream periodic stats"
+                        status = %resp.status(),
+                        "aisstream.io WebSocket connected"
                     );
+                    stream
                 }
-
-                msg_opt = read.next() => {
-                    let msg_result = match msg_opt {
-                        Some(r) => r,
-                        None => {
-                            return Err(anyhow::anyhow!("aisstream.io stream ended unexpectedly"));
-                        }
-                    };
-
-                    let msg = match msg_result {
-                        Ok(m) => m,
-                        Err(e) => {
-                            error!(error = %e, "WebSocket read error on aisstream.io");
-                            return Err(e.into());
-                        }
-                    };
-
-                    let text = match msg {
-                        tokio_tungstenite::tungstenite::Message::Text(t) => t,
-                        tokio_tungstenite::tungstenite::Message::Ping(data) => {
-                            debug!("AIS: received Ping from server, sending Pong");
-                            if let Err(e) = write.send(
-                                tokio_tungstenite::tungstenite::Message::Pong(data)
-                            ).await {
-                                error!(error = %e, "AIS: failed to send Pong");
-                                return Err(e.into());
-                            }
-                            continue;
-                        }
-                        tokio_tungstenite::tungstenite::Message::Pong(_) => {
-                            debug!("AIS: received Pong from server");
-                            continue;
-                        }
-                        tokio_tungstenite::tungstenite::Message::Close(_) => {
-                            warn!("aisstream.io WebSocket closed by server");
-                            return Err(anyhow::anyhow!("aisstream.io WebSocket closed by server"));
-                        }
-                        _ => continue,
-                    };
-
-                    let envelope: serde_json::Value = match serde_json::from_str(&text) {
-                        Ok(v) => v,
-                        Err(e) => {
-                            debug!(error = %e, "Failed to parse aisstream.io message");
-                            continue;
-                        }
-                    };
-
-                    // Check for error responses from the server (e.g. invalid API key).
-                    if let Some(err_msg) = envelope.get("error").and_then(|v| v.as_str()) {
-                        let lower = err_msg.to_lowercase();
-                        let is_auth = lower.contains("key") || lower.contains("invalid")
-                            || lower.contains("unauthorized") || lower.contains("authentication");
-                        if is_auth {
-                            return Err(AuthError {
-                                source: "aisstream.io".into(),
-                                message: err_msg.to_string(),
-                            }.into());
-                        }
-                        error!(error = err_msg, "aisstream.io returned error");
-                        return Err(anyhow::anyhow!("aisstream.io error: {}", err_msg));
-                    }
-
-                    raw_message_count += 1;
-
-                    let message_type = envelope
-                        .get("MessageType")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-
-                    let event = match message_type {
-                        "PositionReport" => Self::process_position_report(&envelope),
-                        "ShipStaticData" => Self::process_ship_static_data(&envelope),
-                        _ => {
-                            debug!(message_type, "Ignoring unhandled AIS message type");
-                            None
-                        }
-                    };
-
-                    if let Some(evt) = event {
-                        let _ = tx.send(evt);
-                        message_count += 1;
-                        if message_count == 1 {
-                            info!("AIS stream: first vessel message received and broadcast");
-                        }
-                        if message_count % 1000 == 0 {
-                            info!(total = message_count, "AIS stream: messages processed");
-                        }
-                    }
+                Err(e) => {
+                    error!(
+                        error = %e,
+                        backoff_secs = backoff.as_secs(),
+                        "Failed to connect to aisstream.io, retrying after backoff"
+                    );
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(MAX_BACKOFF);
+                    continue;
                 }
+            };
 
-                _ = keepalive.tick() => {
-                    debug!("AIS: sending keepalive Ping");
-                    if let Err(e) = write.send(
-                        tokio_tungstenite::tungstenite::Message::Ping(bytes::Bytes::from_static(b"keepalive"))
-                    ).await {
-                        error!(error = %e, "AIS: failed to send keepalive Ping");
-                        return Err(e.into());
-                    }
-                }
+            let (mut write, mut read) = ws_stream.split();
+
+            // Send subscribe message with API key and bounding boxes.
+            if let Err(e) = write
+                .send(tokio_tungstenite::tungstenite::Message::Text(
+                    subscribe_msg.clone().into(),
+                ))
+                .await
+            {
+                error!(
+                    error = %e,
+                    backoff_secs = backoff.as_secs(),
+                    "Failed to send AIS subscribe message, reconnecting"
+                );
+                tokio::time::sleep(backoff).await;
+                backoff = (backoff * 2).min(MAX_BACKOFF);
+                continue;
             }
+
+            info!(
+                regions = BOUNDING_BOXES.len(),
+                "Subscribed to aisstream.io AIS stream"
+            );
+
+            let mut keepalive = tokio::time::interval(KEEPALIVE_INTERVAL);
+            keepalive.tick().await; // consume the immediate first tick
+            let mut stats_timer = tokio::time::interval(Duration::from_secs(60));
+            stats_timer.tick().await; // consume first tick
+            let mut first_message_this_session = true;
+
+            // Inner read loop — runs until the connection drops.
+            let disconnect_reason: Option<anyhow::Error> = loop {
+                tokio::select! {
+                    _ = stats_timer.tick() => {
+                        info!(
+                            raw_messages = raw_message_count,
+                            processed_events = message_count,
+                            "AIS stream periodic stats"
+                        );
+                    }
+
+                    msg_opt = read.next() => {
+                        let msg_result = match msg_opt {
+                            Some(r) => r,
+                            None => {
+                                warn!("aisstream.io stream ended (None)");
+                                break None;
+                            }
+                        };
+
+                        let msg = match msg_result {
+                            Ok(m) => m,
+                            Err(e) => {
+                                error!(error = %e, "WebSocket read error on aisstream.io");
+                                break None;
+                            }
+                        };
+
+                        let text = match msg {
+                            tokio_tungstenite::tungstenite::Message::Text(t) => t,
+                            tokio_tungstenite::tungstenite::Message::Ping(data) => {
+                                debug!("AIS: received Ping from server, sending Pong");
+                                if let Err(e) = write.send(
+                                    tokio_tungstenite::tungstenite::Message::Pong(data)
+                                ).await {
+                                    error!(error = %e, "AIS: failed to send Pong");
+                                    break None;
+                                }
+                                continue;
+                            }
+                            tokio_tungstenite::tungstenite::Message::Pong(_) => {
+                                debug!("AIS: received Pong from server");
+                                continue;
+                            }
+                            tokio_tungstenite::tungstenite::Message::Close(frame) => {
+                                warn!(?frame, "aisstream.io WebSocket closed by server");
+                                break None;
+                            }
+                            _ => continue,
+                        };
+
+                        let envelope: serde_json::Value = match serde_json::from_str(&text) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                debug!(error = %e, "Failed to parse aisstream.io message");
+                                continue;
+                            }
+                        };
+
+                        // Check for error responses from the server (e.g. invalid API key).
+                        if let Some(err_msg) = envelope.get("error").and_then(|v| v.as_str()) {
+                            let lower = err_msg.to_lowercase();
+                            let is_auth = lower.contains("key") || lower.contains("invalid")
+                                || lower.contains("unauthorized") || lower.contains("authentication");
+                            if is_auth {
+                                // Auth errors are fatal — propagate immediately so the
+                                // registry disables this source instead of retrying.
+                                break Some(AuthError {
+                                    source: "aisstream.io".into(),
+                                    message: err_msg.to_string(),
+                                }.into());
+                            }
+                            error!(error = err_msg, "aisstream.io returned error");
+                            break None;
+                        }
+
+                        raw_message_count += 1;
+
+                        // Reset backoff on first successful data message — connection is healthy.
+                        if first_message_this_session {
+                            first_message_this_session = false;
+                            backoff = INITIAL_BACKOFF;
+                            info!("AIS stream: connection healthy, backoff reset");
+                        }
+
+                        let message_type = envelope
+                            .get("MessageType")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("");
+
+                        let event = match message_type {
+                            "PositionReport" => Self::process_position_report(&envelope),
+                            "ShipStaticData" => Self::process_ship_static_data(&envelope),
+                            _ => {
+                                debug!(message_type, "Ignoring unhandled AIS message type");
+                                None
+                            }
+                        };
+
+                        if let Some(evt) = event {
+                            let _ = tx.send(evt);
+                            message_count += 1;
+                            if message_count == 1 {
+                                info!("AIS stream: first vessel message received and broadcast");
+                            }
+                            if message_count % 1000 == 0 {
+                                info!(total = message_count, "AIS stream: messages processed");
+                            }
+                        }
+                    }
+
+                    _ = keepalive.tick() => {
+                        debug!("AIS: sending keepalive Ping");
+                        if let Err(e) = write.send(
+                            tokio_tungstenite::tungstenite::Message::Ping(bytes::Bytes::from_static(b"keepalive"))
+                        ).await {
+                            error!(error = %e, "AIS: failed to send keepalive Ping");
+                            break None;
+                        }
+                    }
+                }
+            };
+
+            // If the inner loop returned a fatal error (auth), propagate it.
+            if let Some(fatal) = disconnect_reason {
+                return Err(fatal);
+            }
+
+            // Transient disconnect — reconnect after backoff.
+            warn!(
+                backoff_secs = backoff.as_secs(),
+                total_processed = message_count,
+                "AIS stream disconnected, reconnecting after backoff"
+            );
+            tokio::time::sleep(backoff).await;
+            backoff = (backoff * 2).min(MAX_BACKOFF);
         }
     }
 }
