@@ -37,6 +37,10 @@ Thumbs.db
 *.png
 !frontend/static/**/*.png
 
+# Replay results (large JSON, not committed — golden files ARE tracked)
+backend/replay-data/*.json
+!backend/replay-data/golden.json
+
 # Logs
 monitor-log.txt
 *.log

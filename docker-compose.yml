@@ -2,15 +2,14 @@ services:
   postgres:
     image: timescale/timescaledb-ha:pg17
     environment:
-      POSTGRES_DB: situationreport
+      POSTGRES_DB: situationroom
       POSTGRES_USER: sitrep
       POSTGRES_PASSWORD: ${DB_PASSWORD}
     volumes:
       - ${PG_DATA_DIR:-pgdata}:/home/postgres/pgdata/data
-      # Optional: mount external storage for tiered data management
-      # - /path/to/cold-storage:/mnt/cold
-      # - /path/to/backups:/mnt/backups
-      # - /path/to/wal-archive:/mnt/wal
+      - /var/mnt/sitrep-cold/pg-cold:/mnt/cold
+      - /run/media/system/Storage/pg-backups:/mnt/backups
+      - /run/media/system/Storage/pg-wal-archive:/mnt/wal
     ports:
       - "5432:5432"
     shm_size: "18g"
@@ -98,6 +97,8 @@ services:
     container_name: ollama
     environment:
       OLLAMA_KEEP_ALIVE: "24h"
+      OLLAMA_FLASH_ATTENTION: "1"
+      OLLAMA_NUM_PARALLEL: "1"
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
     volumes:
@@ -146,13 +147,15 @@ services:
       ollama:
         condition: service_started
     environment:
-      DATABASE_URL: postgres://sitrep:${DB_PASSWORD}@postgres/situationreport
+      DATABASE_URL: postgres://sitrep:${DB_PASSWORD}@postgres/situationroom
       BIND_ADDR: 0.0.0.0:3000
       STATIC_DIR: /app/static
       RUST_LOG: ${RUST_LOG:-info}
-      # Intelligence layer (Claude API — used for analysis/narrative only)
+      # Intelligence layer
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       INTEL_DAILY_BUDGET_USD: ${INTEL_DAILY_BUDGET_USD:-10}
+      INTEL_MONTHLY_BUDGET_USD: ${INTEL_MONTHLY_BUDGET_USD:-30}
       INTEL_ANALYSIS_MODEL: ${INTEL_ANALYSIS_MODEL:-claude-sonnet-4-6}
       # Local LLM for enrichment (Ollama)
       OLLAMA_URL: http://ollama:11434
@@ -173,6 +176,7 @@ services:
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
       TELEGRAM_SESSION_PATH: /app/data/telegram.session
       # Vector embeddings (BGE-M3)
+      AIRCRAFT_DB_PATH: ${AIRCRAFT_DB_PATH:-/app/modes-db/modes.csv}
       EMBEDDINGS_ENABLED: ${EMBEDDINGS_ENABLED:-true}
       EMBEDDINGS_CACHE_DIR: /app/models
       # NVIDIA GPU (CUDA EP for ONNX Runtime)
@@ -181,6 +185,7 @@ services:
     volumes:
       - embeddings-cache:/app/models
       - ./data:/app/data
+      - ${AIRCRAFT_DB_DIR:-./modes-db}:/app/modes-db:ro
     ports:
       - "3001:3000"
     deploy:
@@ -199,5 +204,7 @@ services:
 
 volumes:
   pgdata:
+    external: true
+    name: situationreport_pgdata
   embeddings-cache:
   ollama-models:

@@ -25,6 +25,8 @@ pub struct PipelineConfig {
     pub sweep: SweepConfig,
     #[serde(default)]
     pub certainty: CertaintyConfig,
+    #[serde(default)]
+    pub severity: SeverityConfig,
 }
 
 // ---------------------------------------------------------------------------
@@ -139,6 +141,23 @@ pub struct MergeConfig {
     /// Min shared topics for cross-source regional merge.
     pub min_shared_topics_region: usize,
 
+    // -- Merge-overlapping fast-path thresholds --
+    /// Title Jaccard threshold for the title-identity merge fast path.
+    /// Pairs above this (with region overlap) merge without embedding check.
+    pub title_identity_threshold: f64,
+    /// Heuristic fallback: title Jaccard threshold when embeddings are unavailable.
+    pub heuristic_title_threshold: f64,
+    /// Semantic similarity threshold for the entity-empty guard.
+    /// Both clusters have zero entities: require at least this cosine similarity to proceed.
+    pub entity_empty_semantic_threshold: f64,
+    /// Semantic similarity threshold for the low-content guard.
+    /// Both clusters have <=2 signals: require at least this cosine similarity.
+    pub low_content_semantic_threshold: f64,
+    /// Regional absorb: max event count for the smaller cluster.
+    pub regional_absorb_max_smaller: usize,
+    /// Regional absorb: min event count for the larger cluster.
+    pub regional_absorb_min_larger: usize,
+
     // -- Vector-primary merge --
     /// Use vector (embedding) cosine similarity as the primary merge signal.
     /// When false, uses the legacy conditional matrix. Default: true.
@@ -191,6 +210,12 @@ impl Default for MergeConfig {
             title_jaccard_merge: 0.3,
             min_shared_topics_news: 2,
             min_shared_topics_region: 3,
+            title_identity_threshold: 0.60,
+            heuristic_title_threshold: 0.50,
+            entity_empty_semantic_threshold: 0.75,
+            low_content_semantic_threshold: 0.80,
+            regional_absorb_max_smaller: 20,
+            regional_absorb_min_larger: 50,
             use_vector_primary_merge: true,
             vector_threshold_cross_region: 0.80,
             vector_threshold_news_only: 0.70,
@@ -235,9 +260,9 @@ impl Default for ClusterCapsConfig {
             max_entities: 50,
             max_topics: 30,
             max_event_ids: 500,
-            max_event_titles: 10,
+            max_event_titles: 30,
             leaf_cluster_hard_cap: 500,
-            max_children_per_parent: 50,
+            max_children_per_parent: 15,
             max_events_per_parent: 1000,
             max_entities_per_event: 5,
             max_enrichment_topics: 3,
@@ -400,18 +425,33 @@ pub struct QualityConfig {
     pub min_events_for_search: usize,
     /// Seismic magnitude threshold for importance filter.
     pub seismic_importance_threshold: f64,
+    /// Medium standalone penalty (extra min_events required).
+    pub medium_standalone_penalty: u32,
+    /// Incoherent topic threshold (topic count that triggers severity cap + certainty penalty).
+    pub incoherent_topic_threshold: usize,
+    /// Incoherent topic certainty penalty multiplier.
+    pub incoherent_topic_penalty: f64,
+    /// Natural disaster standalone cap.
+    pub nd_standalone_cap: usize,
+    /// Natural disaster parent cap.
+    pub nd_parent_cap: usize,
 }
 
 impl Default for QualityConfig {
     fn default() -> Self {
         Self {
-            min_events_standalone: 8,
+            min_events_standalone: 15,
             min_events_child: 3,
             min_events_for_title: 3,
             min_events_child_title: 2,
             signal_events_for_retitle: 20,
             min_events_for_search: 3,
             seismic_importance_threshold: 4.0,
+            medium_standalone_penalty: 8,
+            incoherent_topic_threshold: 12,
+            incoherent_topic_penalty: 0.6,
+            nd_standalone_cap: 2,
+            nd_parent_cap: 3,
         }
     }
 }
@@ -661,6 +701,26 @@ pub struct SweepConfig {
     pub severity_propagation_allow_decrease: bool,
     /// Min distinct topic prefixes to trigger a topic-diversity split.
     pub topic_diversity_split_threshold: usize,
+
+    // --- Split-divergent thresholds ---
+
+    /// Min event count for a standalone cluster to be considered for split_divergent.
+    pub split_divergent_min_events: usize,
+    /// Min entity count for entity subgroup splitting in split_divergent.
+    pub split_divergent_min_entities: usize,
+    /// Max overlap ratio (largest_group / total_entities) for a split to be viable.
+    pub split_divergent_max_overlap: f64,
+
+    // --- Retroactive sweep: link old events to current situations ---
+
+    /// Interval (seconds) between retroactive sweep ticks.
+    pub retro_sweep_interval_secs: u64,
+    /// How far back (hours) before a cluster's first_seen to search for linkable events.
+    pub retro_sweep_lookback_hours: i32,
+    /// Max events to link per cluster per sweep tick.
+    pub retro_sweep_max_per_cluster: i64,
+    /// Max clusters to sweep per tick (prioritized by severity + staleness).
+    pub retro_sweep_max_clusters: usize,
 }
 
 impl Default for SweepConfig {
@@ -681,7 +741,44 @@ impl Default for SweepConfig {
             noise_buffer_max: 200,
             severity_propagation_threshold: 0.34,
             severity_propagation_allow_decrease: false,
-            topic_diversity_split_threshold: 8,
+            topic_diversity_split_threshold: 25,
+            split_divergent_min_events: 30,
+            split_divergent_min_entities: 4,
+            split_divergent_max_overlap: 0.7,
+            retro_sweep_interval_secs: 300,
+            retro_sweep_lookback_hours: 48,
+            retro_sweep_max_per_cluster: 30,
+            retro_sweep_max_clusters: 5,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Severity thresholds
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SeverityConfig {
+    /// Minimum events for CRITICAL severity (active conflict with multi-source corroboration).
+    pub critical_min_events: usize,
+    /// Minimum source diversity for CRITICAL severity.
+    pub critical_min_sources: usize,
+    /// Minimum events for HIGH severity (developing/active conflict or multi-source cyber/disaster).
+    pub high_min_events: usize,
+    /// Minimum source diversity for MEDIUM severity (corroborated situation).
+    pub medium_min_sources: usize,
+    /// Minimum events for MEDIUM severity (3+ independent sources).
+    pub medium_min_events: usize,
+}
+
+impl Default for SeverityConfig {
+    fn default() -> Self {
+        Self {
+            critical_min_events: 20,
+            critical_min_sources: 3,
+            high_min_events: 10,
+            medium_min_sources: 2,
+            medium_min_events: 5,
         }
     }
 }
@@ -752,6 +849,7 @@ impl Default for PipelineConfig {
             burst: BurstConfig::default(),
             sweep: SweepConfig::default(),
             certainty: CertaintyConfig::default(),
+            severity: SeverityConfig::default(),
         }
     }
 }
@@ -806,11 +904,22 @@ impl PipelineConfig {
         env_override!(config.quality.min_events_standalone, "PIPELINE_QUALITY_MIN_EVENTS_STANDALONE", usize);
         env_override!(config.quality.min_events_child, "PIPELINE_QUALITY_MIN_EVENTS_CHILD", usize);
         env_override!(config.quality.signal_events_for_retitle, "PIPELINE_QUALITY_SIGNAL_EVENTS_RETITLE", usize);
+        env_override!(config.quality.medium_standalone_penalty, "PIPELINE_QUALITY_MEDIUM_STANDALONE_PENALTY", u32);
+        env_override!(config.quality.incoherent_topic_threshold, "PIPELINE_QUALITY_INCOHERENT_TOPIC_THRESHOLD", usize);
+        env_override!(config.quality.incoherent_topic_penalty, "PIPELINE_QUALITY_INCOHERENT_TOPIC_PENALTY", f64);
+        env_override!(config.quality.nd_standalone_cap, "PIPELINE_QUALITY_ND_STANDALONE_CAP", usize);
+        env_override!(config.quality.nd_parent_cap, "PIPELINE_QUALITY_ND_PARENT_CAP", usize);
 
         // Merge
         env_override!(config.merge.semantic_threshold, "PIPELINE_MERGE_SEMANTIC_THRESHOLD", f64);
         env_override!(config.merge.semantic_region_threshold, "PIPELINE_MERGE_SEMANTIC_REGION_THRESHOLD", f64);
         env_override!(config.merge.entity_threshold, "PIPELINE_MERGE_ENTITY_THRESHOLD", usize);
+        env_override!(config.merge.title_identity_threshold, "PIPELINE_MERGE_TITLE_IDENTITY_THRESHOLD", f64);
+        env_override!(config.merge.heuristic_title_threshold, "PIPELINE_MERGE_HEURISTIC_TITLE_THRESHOLD", f64);
+        env_override!(config.merge.entity_empty_semantic_threshold, "PIPELINE_MERGE_ENTITY_EMPTY_SEMANTIC", f64);
+        env_override!(config.merge.low_content_semantic_threshold, "PIPELINE_MERGE_LOW_CONTENT_SEMANTIC", f64);
+        env_override!(config.merge.regional_absorb_max_smaller, "PIPELINE_MERGE_REGIONAL_ABSORB_MAX_SMALLER", usize);
+        env_override!(config.merge.regional_absorb_min_larger, "PIPELINE_MERGE_REGIONAL_ABSORB_MIN_LARGER", usize);
         env_override!(config.merge.use_vector_primary_merge, "PIPELINE_MERGE_USE_VECTOR_PRIMARY", bool);
         env_override!(config.merge.vector_threshold_cross_region, "PIPELINE_MERGE_VECTOR_CROSS_REGION", f64);
         env_override!(config.merge.vector_threshold_news_only, "PIPELINE_MERGE_VECTOR_NEWS_ONLY", f64);
@@ -833,6 +942,17 @@ impl PipelineConfig {
         // Sweep
         env_override!(config.sweep.coherence_min, "PIPELINE_SWEEP_COHERENCE_MIN", f64);
         env_override!(config.sweep.shed_above_events, "PIPELINE_SWEEP_SHED_ABOVE", usize);
+        env_override!(config.sweep.topic_diversity_split_threshold, "PIPELINE_SWEEP_TOPIC_DIVERSITY_THRESHOLD", usize);
+        env_override!(config.sweep.split_divergent_min_events, "PIPELINE_SWEEP_SPLIT_MIN_EVENTS", usize);
+        env_override!(config.sweep.split_divergent_min_entities, "PIPELINE_SWEEP_SPLIT_MIN_ENTITIES", usize);
+        env_override!(config.sweep.split_divergent_max_overlap, "PIPELINE_SWEEP_SPLIT_MAX_OVERLAP", f64);
+
+        // Severity
+        env_override!(config.severity.critical_min_events, "PIPELINE_SEVERITY_CRITICAL_MIN_EVENTS", usize);
+        env_override!(config.severity.critical_min_sources, "PIPELINE_SEVERITY_CRITICAL_MIN_SOURCES", usize);
+        env_override!(config.severity.high_min_events, "PIPELINE_SEVERITY_HIGH_MIN_EVENTS", usize);
+        env_override!(config.severity.medium_min_sources, "PIPELINE_SEVERITY_MEDIUM_MIN_SOURCES", usize);
+        env_override!(config.severity.medium_min_events, "PIPELINE_SEVERITY_MEDIUM_MIN_EVENTS", usize);
 
         config
     }
@@ -929,7 +1049,7 @@ mod tests {
         // Caps
         assert_eq!(config.cluster_caps.max_entities, 50);
         assert_eq!(config.cluster_caps.max_topics, 30);
-        assert_eq!(config.cluster_caps.max_children_per_parent, 50);
+        assert_eq!(config.cluster_caps.max_children_per_parent, 15);
 
         // Phases
         assert_eq!(config.phases.emerging_min_events, 3);

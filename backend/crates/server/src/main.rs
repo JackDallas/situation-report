@@ -5,21 +5,24 @@ use std::sync::atomic::AtomicU64;
 
 use axum::routing::{delete, get, post};
 use axum::Router;
-use sr_intel::{BudgetManager, ClaudeClient, OllamaClient};
+use sr_intel::{BudgetManager, ClaudeClient, GeminiClient, OllamaClient};
 use sr_sources::InsertableEvent;
 use sr_types::Severity;
 use sr_sources::registry::SourceRegistry;
 use tokio::sync::broadcast;
 use sr_pipeline::{spawn_pipeline, PipelineConfig, AirspaceIndex, SharedAirspaceIndex};
+use axum::http::{HeaderName, Method};
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
+mod auth;
 mod error;
 mod routes;
 mod state;
 mod static_files;
+mod validate;
 
 use state::AppState;
 
@@ -34,17 +37,44 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    // Database
-    let database_url =
-        std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-            "postgres://sitrep:password@localhost/situationreport".to_string()
-        });
+    // Database — DATABASE_URL is required (no hardcoded fallback)
+    let database_url = std::env::var("DATABASE_URL")
+        .expect("DATABASE_URL environment variable must be set");
     let pool = sr_sources::db::connect(&database_url).await?;
     sr_sources::db::run_migrations(&pool).await?;
     info!("Database connected and migrations applied");
 
     // SSE broadcast channel (4096 event buffer)
     let (event_tx, _) = broadcast::channel::<InsertableEvent>(4096);
+
+    // Pipeline publish channel — created here so source health events
+    // can be emitted before spawn_pipeline runs
+    let (publish_tx, _) = broadcast::channel::<sr_pipeline::PublishEvent>(1024);
+
+    // Source health broadcast channel — bridged to publish_tx for SSE
+    let (health_tx, _) = broadcast::channel::<sr_sources::registry::SourceHealthEvent>(256);
+    {
+        let mut health_rx = health_tx.subscribe();
+        let publish_tx = publish_tx.clone();
+        tokio::spawn(async move {
+            loop {
+                match health_rx.recv().await {
+                    Ok(ev) => {
+                        let _ = publish_tx.send(sr_pipeline::PublishEvent::SourceHealthChange {
+                            source_id: ev.source_id,
+                            status: ev.status,
+                            consecutive_failures: ev.consecutive_failures,
+                            last_error: ev.last_error,
+                        });
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!("Source health subscriber lagged {n}");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
+    }
 
     // Source registry — register all data sources
     let mut registry = SourceRegistry::new();
@@ -59,12 +89,28 @@ async fn main() -> anyhow::Result<()> {
     registry.register(Arc::new(sr_sources::gdelt::GdeltSource::new()));
     registry.register(Arc::new(sr_sources::geoconfirmed::GeoConfirmedSource::new()));
 
+    // Bellingcat aircraft database (modes.csv) for ICAO hex → registration/military/category lookups
+    let aircraft_db: Option<Arc<sr_sources::aircraft_db::AircraftDb>> = {
+        let path = std::env::var("AIRCRAFT_DB_PATH")
+            .unwrap_or_else(|_| "data/modes.csv".to_string());
+        match sr_sources::aircraft_db::AircraftDb::load(&path) {
+            Ok(db) => {
+                info!(entries = db.len(), path = %path, "Bellingcat aircraft database loaded");
+                Some(Arc::new(db))
+            }
+            Err(e) => {
+                warn!("Aircraft database not loaded ({e}) — ADS-B will use callsign heuristics only");
+                None
+            }
+        }
+    };
+
     // Aviation + Maritime
     registry.register(Arc::new(sr_sources::opensky::OpenSkySource::new()));
     // ADS-B flight tracking (readsb-compatible aggregators)
-    registry.register(Arc::new(sr_sources::adsb::airplaneslive()));
-    registry.register(Arc::new(sr_sources::adsb::adsb_lol()));
-    registry.register(Arc::new(sr_sources::adsb::adsb_fi()));
+    registry.register(Arc::new(sr_sources::adsb::airplaneslive(aircraft_db.clone())));
+    registry.register(Arc::new(sr_sources::adsb::adsb_lol(aircraft_db.clone())));
+    registry.register(Arc::new(sr_sources::adsb::adsb_fi(aircraft_db)));
     registry.register(Arc::new(sr_sources::ais::AisSource));
 
     // NOTAMs / Airspace
@@ -118,7 +164,7 @@ async fn main() -> anyhow::Result<()> {
     let registry = Arc::new(registry);
 
     // Start all registered sources
-    registry.start_all(pool.clone(), event_tx.clone());
+    registry.start_all(pool.clone(), event_tx.clone(), health_tx);
 
     // Intelligence layer — Claude API client + budget manager
     let claude_client = match ClaudeClient::from_env() {
@@ -132,6 +178,14 @@ async fn main() -> anyhow::Result<()> {
         }
     };
     let budget = BudgetManager::from_db(pool.clone()).await;
+
+    // Gemini API client (Ollama fallback for enrichment/titles, Flash for narratives)
+    let gemini_client = GeminiClient::from_env().map(Arc::new);
+    if gemini_client.is_some() {
+        info!("Gemini API client initialized — cloud AI fallback enabled");
+    } else {
+        info!("GEMINI_API_KEY not set — Gemini fallback disabled");
+    }
 
     // Local LLM for enrichment (Ollama + GPU)
     let ollama_client = OllamaClient::from_env();
@@ -210,11 +264,13 @@ async fn main() -> anyhow::Result<()> {
     };
 
     // Spawn the pipeline: ingest → correlate → enrich → publish
-    let (publish_tx, summaries, analysis, metrics) =
+    let (summaries, analysis, metrics) =
         spawn_pipeline(
             event_tx.clone(),
+            publish_tx.clone(),
             claude_client,
             ollama_client,
+            gemini_client,
             budget.clone(),
             pool.clone(),
             embedding_model,
@@ -231,6 +287,37 @@ async fn main() -> anyhow::Result<()> {
 
     let situations: state::SharedSituations = Arc::new(std::sync::RwLock::new(Vec::new()));
     let cameras: state::SharedCameras = Arc::new(std::sync::RwLock::new(std::collections::HashMap::new()));
+
+    // Satellite TLE cache — fetch from CelesTrak every 8 hours for FIRMS satellite tracking
+    let satellite_tles: state::SharedSatelliteTles = Arc::new(std::sync::RwLock::new(Vec::new()));
+    {
+        let http = reqwest::Client::new();
+        routes::satellites::spawn_tle_refresh(satellite_tles.clone(), http);
+    }
+
+    // Background task: clean up stale positions (older than 1 hour)
+    {
+        let pool = pool.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(300)); // 5 min
+            interval.tick().await; // consume first tick
+            loop {
+                interval.tick().await;
+                match sqlx::query("DELETE FROM latest_positions WHERE last_seen < NOW() - INTERVAL '1 hour'")
+                    .execute(&pool)
+                    .await
+                {
+                    Ok(result) => {
+                        let deleted = result.rows_affected();
+                        if deleted > 0 {
+                            tracing::debug!(deleted, "Cleaned stale positions");
+                        }
+                    }
+                    Err(e) => tracing::warn!("Position cleanup failed: {e}"),
+                }
+            }
+        });
+    }
 
     // Background task: listen for situation updates from pipeline
     {
@@ -334,6 +421,14 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // SEC-1: API key auth
+    let api_key = std::env::var("API_KEY").ok();
+    if api_key.is_some() {
+        info!("API_KEY is set — API authentication enabled");
+    } else {
+        warn!("API_KEY is not set — all API requests are unauthenticated (dev mode)");
+    }
+
     let state = AppState {
         db: pool,
         publish_tx,
@@ -345,10 +440,10 @@ async fn main() -> anyhow::Result<()> {
         situations,
         cameras,
         metrics,
-        entity_resolver: shared_entity_resolver,
-        entity_graph: shared_entity_graph,
         pipeline_config,
         intel_config,
+        api_key,
+        satellite_tles,
     };
 
     // API routes
@@ -381,11 +476,17 @@ async fn main() -> anyhow::Result<()> {
             "/api/pipeline/metrics",
             get(routes::pipeline::get_pipeline_metrics),
         )
+        .route(
+            "/api/pipeline/gpu/pause",
+            post(routes::pipeline::pause_gpu),
+        )
+        .route(
+            "/api/pipeline/gpu/resume",
+            post(routes::pipeline::resume_gpu),
+        )
         // Intelligence layer
         .route("/api/intel/latest", get(routes::intel::get_latest_analysis))
         .route("/api/intel/budget", get(routes::intel::get_budget))
-        // Translation stub (Haiku enrichment handles translation now)
-        .route("/api/translate", post(routes::translate::translate))
         // Entities
         .route("/api/entities", get(routes::entities::list_entities))
         .route("/api/entities/state-changes", get(routes::entities::list_state_changes))
@@ -396,6 +497,8 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/situations/{id}/narratives", get(routes::situations::get_situation_narratives))
         .route("/api/situations/{id}/events", get(routes::situations::get_situation_events))
         .route("/api/situations/{id}/cameras", get(routes::situations::get_situation_cameras))
+        // Correlated incidents
+        .route("/api/incidents", get(routes::incidents::list_incidents))
         // Shodan proxy routes
         .route("/api/shodan/search", get(routes::shodan::search_shodan))
         .route("/api/shodan/host/{ip}", get(routes::shodan::host_lookup))
@@ -416,7 +519,13 @@ async fn main() -> anyhow::Result<()> {
         // Alerts
         .route("/api/alerts/rules", get(routes::alerts::list_rules).post(routes::alerts::create_rule))
         .route("/api/alerts/rules/{id}", delete(routes::alerts::delete_rule))
-        .route("/api/alerts/history", get(routes::alerts::get_history));
+        .route("/api/alerts/history", get(routes::alerts::get_history))
+        // Satellite TLEs for FIRMS orbit tracking
+        .route("/api/satellite-tles", get(routes::satellites::get_satellite_tles))
+        // Replay / algorithm testing
+        .route("/api/replay/run", post(routes::replay::run_replay))
+        .route("/api/replay/compare", post(routes::replay::compare_replay))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), auth::require_api_key));
 
     // Static file serving for SvelteKit SPA
     let static_dir = std::env::var("STATIC_DIR")
@@ -431,15 +540,31 @@ async fn main() -> anyhow::Result<()> {
             }
         });
 
+    // SEC-2: CORS restriction
+    let cors_layer = {
+        let cors = CorsLayer::new()
+            .allow_methods([Method::GET, Method::POST, Method::PUT, Method::DELETE])
+            .allow_headers([
+                HeaderName::from_static("content-type"),
+                HeaderName::from_static("authorization"),
+            ]);
+
+        match std::env::var("CORS_ORIGIN") {
+            Ok(origin) => {
+                info!(origin = %origin, "CORS restricted to specified origin");
+                cors.allow_origin(origin.parse::<axum::http::HeaderValue>().expect("Invalid CORS_ORIGIN value"))
+            }
+            Err(_) => {
+                info!("CORS_ORIGIN not set — allowing any origin (dev mode)");
+                cors.allow_origin(Any)
+            }
+        }
+    };
+
     let app = Router::new()
         .merge(api)
         .merge(static_files::static_file_router(static_dir))
-        .layer(
-            CorsLayer::new()
-                .allow_origin(Any)
-                .allow_methods(Any)
-                .allow_headers(Any),
-        )
+        .layer(cors_layer)
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
