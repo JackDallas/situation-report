@@ -778,7 +778,35 @@ pub struct SeverityConfig {
     pub medium_min_sources: usize,
     /// Minimum events for MEDIUM severity (3+ independent sources).
     pub medium_min_events: usize,
+
+    // -- Rolling percentile adaptive thresholds --
+
+    /// Enable adaptive percentile-based severity thresholds.
+    #[serde(default = "default_true")]
+    pub adaptive_enabled: bool,
+    /// Rolling window size (number of sweep snapshots to retain).
+    /// At 30s sweep intervals, 2880 = ~24h of history.
+    #[serde(default = "default_percentile_window")]
+    pub percentile_window: usize,
+    /// Minimum observations before percentile thresholds activate (cold-start guard).
+    #[serde(default = "default_percentile_cold_start")]
+    pub percentile_cold_start: usize,
+    /// Percentile rank for MEDIUM threshold (0.0–1.0).
+    #[serde(default = "default_p75")]
+    pub percentile_medium: f64,
+    /// Percentile rank for HIGH threshold (0.0–1.0).
+    #[serde(default = "default_p90")]
+    pub percentile_high: f64,
+    /// Percentile rank for CRITICAL threshold (0.0–1.0).
+    #[serde(default = "default_p99")]
+    pub percentile_critical: f64,
 }
+
+fn default_percentile_window() -> usize { 2880 }
+fn default_percentile_cold_start() -> usize { 50 }
+fn default_p75() -> f64 { 0.75 }
+fn default_p90() -> f64 { 0.90 }
+fn default_p99() -> f64 { 0.99 }
 
 impl Default for SeverityConfig {
     fn default() -> Self {
@@ -788,6 +816,12 @@ impl Default for SeverityConfig {
             high_min_events: 25,
             medium_min_sources: 2,
             medium_min_events: 5,
+            adaptive_enabled: true,
+            percentile_window: 2880,
+            percentile_cold_start: 50,
+            percentile_medium: 0.75,
+            percentile_high: 0.90,
+            percentile_critical: 0.99,
         }
     }
 }
