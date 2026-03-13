@@ -481,9 +481,9 @@ impl OllamaClient {
             options: ChatOptions {
                 temperature: 0.0,
                 num_ctx: 2048,
-                num_predict: None,
+                num_predict: Some(50),
             },
-            think: Some(true),
+            think: Some(false),
         };
 
         let url = format!("{}/api/chat", self.base_url);

@@ -286,11 +286,11 @@ impl DataSource for RssNewsSource {
                 }
             };
 
-            // Check for 429 rate limit — skip this feed but don't fail the whole poll
+            // Check for HTTP errors (429 rate limit, 403 forbidden, etc.)
             let resp = match check_rate_limit(resp, &format!("rss:{}", feed.id)) {
                 Ok(r) => r,
                 Err(e) => {
-                    warn!(feed_id = feed.id, error = %e, "RSS feed rate-limited, skipping");
+                    warn!(feed_id = feed.id, error = %e, "RSS feed fetch failed, skipping");
                     continue;
                 }
             };

@@ -320,6 +320,9 @@ impl SituationGraph {
                     if cluster_titles_similar >= 0.6 {
                         score += mc.vector_boost_title_similar;
                     }
+                    if shared_topics >= 2 {
+                        score += mc.vector_boost_shared_topics;
+                    }
 
                     // Natural disasters are genuinely global — don't penalize cross-region
                     let both_natural_disaster = {

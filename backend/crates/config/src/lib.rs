@@ -177,6 +177,8 @@ pub struct MergeConfig {
     pub vector_boost_region: f64,
     /// Vector-primary: boost when cluster_titles_similar >= 0.6.
     pub vector_boost_title_similar: f64,
+    /// Vector-primary: boost when shared_topics >= 2.
+    pub vector_boost_shared_topics: f64,
 }
 
 fn default_true() -> bool {
@@ -214,7 +216,7 @@ impl Default for MergeConfig {
             heuristic_title_threshold: 0.50,
             entity_empty_semantic_threshold: 0.75,
             low_content_semantic_threshold: 0.80,
-            regional_absorb_max_smaller: 20,
+            regional_absorb_max_smaller: 75,
             regional_absorb_min_larger: 50,
             use_vector_primary_merge: true,
             vector_threshold_cross_region: 0.80,
@@ -224,6 +226,7 @@ impl Default for MergeConfig {
             vector_boost_entity_region: 0.05,
             vector_boost_region: 0.03,
             vector_boost_title_similar: 0.05,
+            vector_boost_shared_topics: 0.05,
         }
     }
 }
