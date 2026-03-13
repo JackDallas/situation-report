@@ -17,10 +17,12 @@ const BROWSER_USER_AGENT: &str =
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
 /// Initial backoff delay after a connection failure.
-const INITIAL_BACKOFF: Duration = Duration::from_secs(5);
+const INITIAL_BACKOFF: Duration = Duration::from_secs(30);
 
 /// Maximum backoff delay between reconnection attempts.
-const MAX_BACKOFF: Duration = Duration::from_secs(120);
+/// Set high (30 min) because aisstream.io is under sustained load pressure
+/// since early 2026 — be a good citizen and don't hammer them.
+const MAX_BACKOFF: Duration = Duration::from_secs(1800);
 
 use sr_types::{EventType, Severity, SourceType};
 
