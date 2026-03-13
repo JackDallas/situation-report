@@ -9,6 +9,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::state::AppState;
+use crate::validate;
 
 #[derive(Debug, Deserialize)]
 pub struct SearchParams {
@@ -71,7 +72,9 @@ pub async fn search_events(
     let results = if let (Some(lat), Some(lon), Some(radius_km)) =
         (params.lat, params.lon, params.radius_km)
     {
-        let radius_m = radius_km * 1000.0;
+        let lat = validate::clamp_lat(lat);
+        let lon = validate::clamp_lon(lon);
+        let radius_m = validate::clamp_radius_km(radius_km) * 1000.0;
         sqlx::query_as::<_, SearchRow>(
             r#"
             SELECT source_type, source_id, title, event_type, severity,

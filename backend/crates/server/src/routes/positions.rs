@@ -3,6 +3,7 @@ use axum::Json;
 use serde::Deserialize;
 use crate::error::ApiError;
 use crate::state::AppState;
+use crate::validate;
 
 #[derive(Debug, Deserialize)]
 pub struct PositionQuery {
@@ -60,7 +61,12 @@ pub async fn list_positions(
 ) -> Result<Json<Vec<sr_sources::db::models::LatestPosition>>, ApiError> {
     let bbox = match (params.min_lat, params.min_lon, params.max_lat, params.max_lon) {
         (Some(min_lat), Some(min_lon), Some(max_lat), Some(max_lon)) => {
-            Some((min_lon, min_lat, max_lon, max_lat))
+            Some((
+                validate::clamp_lon(min_lon),
+                validate::clamp_lat(min_lat),
+                validate::clamp_lon(max_lon),
+                validate::clamp_lat(max_lat),
+            ))
         }
         _ => None,
     };
@@ -81,7 +87,7 @@ pub async fn list_positions(
     let filtered = if show_all {
         positions
     } else {
-        positions.into_iter().filter(|p| is_interesting_vessel(p)).collect()
+        positions.into_iter().filter(is_interesting_vessel).collect()
     };
 
     Ok(Json(filtered))
@@ -98,8 +104,8 @@ pub async fn get_position_trail(
     Path(entity_id): Path<String>,
     Query(params): Query<TrailQuery>,
 ) -> Result<Json<Vec<sr_sources::db::queries::TrailPoint>>, ApiError> {
-    let hours = params.hours.unwrap_or(2.0);
-    let limit = params.limit.unwrap_or(500);
+    let hours = validate::clamp_hours(params.hours.unwrap_or(2.0));
+    let limit = validate::clamp_limit(params.limit.unwrap_or(500), 2000);
     let trail = sr_sources::db::queries::get_position_trail(
         &state.db,
         &entity_id,

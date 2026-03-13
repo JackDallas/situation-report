@@ -7,13 +7,38 @@ use uuid::Uuid;
 
 use crate::state::AppState;
 
-/// GET /api/situations — current active situation clusters
+/// GET /api/situations — current active situation clusters (with latest narrative text)
 pub async fn list_situations(
     State(state): State<AppState>,
 ) -> Json<Vec<SituationClusterDTO>> {
-    let clusters = state.situations.read()
+    let mut clusters = state.situations.read()
         .map(|lock| lock.clone())
         .unwrap_or_default();
+
+    // Attach the latest narrative text to each cluster for display in the UI.
+    // Single query fetches all latest narratives efficiently.
+    let ids: Vec<Uuid> = clusters.iter().map(|c| c.id).collect();
+    if !ids.is_empty() {
+        if let Ok(rows) = sqlx::query_as::<_, (Uuid, String)>(
+            "SELECT DISTINCT ON (situation_id) situation_id, narrative_text \
+             FROM situation_narratives \
+             WHERE situation_id = ANY($1) \
+             ORDER BY situation_id, version DESC"
+        )
+        .bind(&ids)
+        .fetch_all(&state.db)
+        .await
+        {
+            let narr_map: std::collections::HashMap<Uuid, String> =
+                rows.into_iter().collect();
+            for cluster in &mut clusters {
+                if let Some(text) = narr_map.get(&cluster.id) {
+                    cluster.narrative_text = Some(text.clone());
+                }
+            }
+        }
+    }
+
     Json(clusters)
 }
 

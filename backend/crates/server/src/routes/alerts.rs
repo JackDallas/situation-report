@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::error::ApiError;
 use crate::state::AppState;
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -55,7 +56,7 @@ pub struct AlertHistoryParams {
 }
 
 /// GET /api/alerts/rules
-pub async fn list_rules(State(state): State<AppState>) -> Json<Vec<AlertRule>> {
+pub async fn list_rules(State(state): State<AppState>) -> Result<Json<Vec<AlertRule>>, ApiError> {
     let rows = sqlx::query_as::<_, AlertRuleRow>(
         "SELECT id, name, rule_type, conditions, delivery, enabled, \
          EXTRACT(EPOCH FROM cooldown)::int / 60 as cooldown_minutes, \
@@ -63,10 +64,9 @@ pub async fn list_rules(State(state): State<AppState>) -> Json<Vec<AlertRule>> {
          FROM alert_rules ORDER BY created_at DESC",
     )
     .fetch_all(&state.db)
-    .await
-    .unwrap_or_default();
+    .await?;
 
-    Json(
+    Ok(Json(
         rows.into_iter()
             .map(|r| AlertRule {
                 id: r.id,
@@ -82,14 +82,14 @@ pub async fn list_rules(State(state): State<AppState>) -> Json<Vec<AlertRule>> {
                 created_at: r.created_at,
             })
             .collect(),
-    )
+    ))
 }
 
 /// POST /api/alerts/rules
 pub async fn create_rule(
     State(state): State<AppState>,
     Json(input): Json<CreateAlertRule>,
-) -> Json<AlertRule> {
+) -> Result<Json<AlertRule>, ApiError> {
     let id = Uuid::new_v4();
     let now = Utc::now();
     let delivery = input
@@ -101,7 +101,7 @@ pub async fn create_rule(
         .min_severity
         .unwrap_or_else(|| "medium".to_string());
 
-    let _ = sqlx::query(
+    sqlx::query(
         "INSERT INTO alert_rules (id, name, rule_type, conditions, delivery, \
          cooldown, max_per_hour, min_severity, created_at) \
          VALUES ($1, $2, $3, $4, $5, $6::int * INTERVAL '1 minute', $7, $8, $9)",
@@ -116,9 +116,9 @@ pub async fn create_rule(
     .bind(&min_severity)
     .bind(now)
     .execute(&state.db)
-    .await;
+    .await?;
 
-    Json(AlertRule {
+    Ok(Json(AlertRule {
         id,
         name: input.name,
         rule_type: input.rule_type,
@@ -130,30 +130,27 @@ pub async fn create_rule(
         min_severity,
         last_fired_at: None,
         created_at: now,
-    })
+    }))
 }
 
 /// DELETE /api/alerts/rules/:id
 pub async fn delete_rule(
     State(state): State<AppState>,
     Path(rule_id): Path<Uuid>,
-) -> Json<serde_json::Value> {
-    let result = sqlx::query("DELETE FROM alert_rules WHERE id = $1")
+) -> Result<Json<serde_json::Value>, ApiError> {
+    sqlx::query("DELETE FROM alert_rules WHERE id = $1")
         .bind(rule_id)
         .execute(&state.db)
-        .await;
+        .await?;
 
-    match result {
-        Ok(_) => Json(serde_json::json!({"deleted": true})),
-        Err(e) => Json(serde_json::json!({"error": e.to_string()})),
-    }
+    Ok(Json(serde_json::json!({"deleted": true})))
 }
 
 /// GET /api/alerts/history
 pub async fn get_history(
     State(state): State<AppState>,
     Query(params): Query<AlertHistoryParams>,
-) -> Json<Vec<AlertHistoryEntry>> {
+) -> Result<Json<Vec<AlertHistoryEntry>>, ApiError> {
     let limit = params.limit.unwrap_or(50).min(200);
     let since = params
         .since
@@ -167,10 +164,9 @@ pub async fn get_history(
     .bind(since)
     .bind(limit)
     .fetch_all(&state.db)
-    .await
-    .unwrap_or_default();
+    .await?;
 
-    Json(
+    Ok(Json(
         rows.into_iter()
             .map(|r| AlertHistoryEntry {
                 id: r.id,
@@ -183,7 +179,7 @@ pub async fn get_history(
                 fired_at: r.fired_at,
             })
             .collect(),
-    )
+    ))
 }
 
 // --- Row types ---

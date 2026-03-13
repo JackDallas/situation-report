@@ -8,6 +8,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+use crate::error::ApiError;
 use crate::state::AppState;
 
 #[derive(Debug, Deserialize)]
@@ -55,13 +56,14 @@ pub struct SourceHealthEntry {
 pub async fn get_timeseries(
     State(state): State<AppState>,
     Query(params): Query<TimeseriesParams>,
-) -> Json<Vec<TimeseriesBucket>> {
+) -> Result<Json<Vec<TimeseriesBucket>>, ApiError> {
     let resolution = params.resolution.as_deref().unwrap_or("hourly");
     let from = params
         .from
         .unwrap_or_else(|| Utc::now() - chrono::Duration::hours(24));
     let to = params.to.unwrap_or_else(Utc::now);
 
+    // SAFETY: table name is from a fixed allowlist — never from user input.
     let table = match resolution {
         "5min" => "events_5min",
         "15min" => "events_15min",
@@ -124,27 +126,22 @@ pub async fn get_timeseries(
         }
     };
 
-    match rows {
-        Ok(rows) => Json(
-            rows.into_iter()
-                .map(|r| TimeseriesBucket {
-                    bucket: r.bucket,
-                    event_count: r.event_count,
-                    region_code: r.region_code,
-                    source_type: r.source_type,
-                    unique_entities: r.unique_entities,
-                })
-                .collect(),
-        ),
-        Err(e) => {
-            tracing::error!("Timeseries query failed: {e}");
-            Json(Vec::new())
-        }
-    }
+    let rows = rows?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| TimeseriesBucket {
+                bucket: r.bucket,
+                event_count: r.event_count,
+                region_code: r.region_code,
+                source_type: r.source_type,
+                unique_entities: r.unique_entities,
+            })
+            .collect(),
+    ))
 }
 
 /// GET /api/analytics/anomalies
-pub async fn get_anomalies(State(state): State<AppState>) -> Json<Vec<AnomalyResult>> {
+pub async fn get_anomalies(State(state): State<AppState>) -> Result<Json<Vec<AnomalyResult>>, ApiError> {
     // Z-score anomaly detection: compare current hourly counts against 7-day baselines.
     // Baselines are computed inline from the anomaly_baseline continuous aggregate
     // (hourly event counts populated by TimescaleDB), falling back to direct event
@@ -199,64 +196,60 @@ pub async fn get_anomalies(State(state): State<AppState>) -> Json<Vec<AnomalyRes
     .fetch_all(&state.db)
     .await;
 
-    match result {
-        Ok(rows) => Json(
-            rows.into_iter()
-                .map(|r| AnomalyResult {
-                    metric_name: r.metric_name,
-                    region_code: r.region_code,
-                    source_type: r.source_type,
-                    current_value: r.current_value,
-                    baseline_mean: r.baseline_mean,
-                    baseline_stddev: r.baseline_stddev,
-                    z_score: r.z_score,
-                    detected_at: r.detected_at,
-                })
-                .collect(),
-        ),
-        Err(e) => {
-            tracing::error!("Anomaly query failed: {e}");
-            Json(Vec::new())
-        }
-    }
+    let rows = result?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| AnomalyResult {
+                metric_name: r.metric_name,
+                region_code: r.region_code,
+                source_type: r.source_type,
+                current_value: r.current_value,
+                baseline_mean: r.baseline_mean,
+                baseline_stddev: r.baseline_stddev,
+                z_score: r.z_score,
+                detected_at: r.detected_at,
+            })
+            .collect(),
+    ))
 }
 
 /// GET /api/analytics/sources/health
-pub async fn get_sources_health(State(state): State<AppState>) -> Json<Vec<SourceHealthEntry>> {
+pub async fn get_sources_health(State(state): State<AppState>) -> Result<Json<Vec<SourceHealthEntry>>, ApiError> {
     let result = sqlx::query_as::<_, SourceHealthRow>(
         r#"
         SELECT
-            source_id,
-            status,
-            last_success,
-            last_error,
-            consecutive_failures,
-            total_events_24h
-        FROM source_health
-        ORDER BY source_id
+            sh.source_id,
+            sh.status,
+            sh.last_success,
+            sh.last_error,
+            sh.consecutive_failures,
+            COALESCE(ec.cnt, 0)::int4 AS total_events_24h
+        FROM source_health sh
+        LEFT JOIN (
+            SELECT source_type, COUNT(*)::int4 AS cnt
+            FROM events
+            WHERE event_time >= NOW() - INTERVAL '24 hours'
+            GROUP BY source_type
+        ) ec ON ec.source_type = sh.source_id
+        ORDER BY sh.source_id
         "#,
     )
     .fetch_all(&state.db)
     .await;
 
-    match result {
-        Ok(rows) => Json(
-            rows.into_iter()
-                .map(|r| SourceHealthEntry {
-                    source_id: r.source_id,
-                    status: r.status,
-                    last_success: r.last_success,
-                    last_error: r.last_error,
-                    consecutive_failures: r.consecutive_failures,
-                    total_events_24h: r.total_events_24h,
-                })
-                .collect(),
-        ),
-        Err(e) => {
-            tracing::error!("Source health query failed: {e}");
-            Json(Vec::new())
-        }
-    }
+    let rows = result?;
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| SourceHealthEntry {
+                source_id: r.source_id,
+                status: r.status,
+                last_success: r.last_success,
+                last_error: r.last_error,
+                consecutive_failures: r.consecutive_failures,
+                total_events_24h: r.total_events_24h,
+            })
+            .collect(),
+    ))
 }
 
 // --- Row types for sqlx ---

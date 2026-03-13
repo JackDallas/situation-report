@@ -29,12 +29,16 @@ fn shodan_api_key() -> Result<String, ApiError> {
         .map_err(|_| anyhow::anyhow!("SHODAN_API_KEY environment variable not set").into())
 }
 
-fn shodan_http_client() -> Result<reqwest::Client, ApiError> {
-    reqwest::Client::builder()
-        .user_agent("SituationReport/0.1")
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| anyhow::anyhow!("Failed to build HTTP client: {e}").into())
+fn shodan_http_client() -> &'static reqwest::Client {
+    use std::sync::OnceLock;
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .user_agent("SituationReport/0.1")
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .expect("Failed to build HTTP client")
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -55,7 +59,7 @@ pub async fn search_shodan(
         page = page,
     );
 
-    let client = shodan_http_client()?;
+    let client = shodan_http_client();
     let resp = client
         .get(&url)
         .send()
@@ -88,7 +92,7 @@ pub async fn host_lookup(
         key = api_key,
     );
 
-    let client = shodan_http_client()?;
+    let client = shodan_http_client();
     let resp = client
         .get(&url)
         .send()
@@ -113,9 +117,9 @@ pub async fn list_alerts(
     State(_state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let api_key = shodan_api_key()?;
-    let client = shodan_http_client()?;
+    let client = shodan_http_client();
 
-    let alerts = sr_sources::shodan::list_alerts_api(&client, &api_key)
+    let alerts = sr_sources::shodan::list_alerts_api(client, &api_key)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to list Shodan alerts: {e}"))?;
 
@@ -133,9 +137,9 @@ pub async fn api_info(
     State(_state): State<AppState>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let api_key = shodan_api_key()?;
-    let client = shodan_http_client()?;
+    let client = shodan_http_client();
 
-    let info = sr_sources::shodan::get_api_info(&client, &api_key)
+    let info = sr_sources::shodan::get_api_info(client, &api_key)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to get Shodan API info: {e}"))?;
 
@@ -154,7 +158,7 @@ pub async fn submit_scan(
     Json(body): Json<ScanRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let api_key = shodan_api_key()?;
-    let client = shodan_http_client()?;
+    let client = shodan_http_client();
 
     if body.ips.is_empty() {
         return Err(anyhow::anyhow!("No IPs provided for scan").into());
@@ -166,7 +170,7 @@ pub async fn submit_scan(
         );
     }
 
-    let result = sr_sources::shodan::submit_scan_api(&client, &api_key, &body.ips)
+    let result = sr_sources::shodan::submit_scan_api(client, &api_key, &body.ips)
         .await
         .map_err(|e| anyhow::anyhow!("Scan submission failed: {e}"))?;
 
@@ -192,13 +196,13 @@ pub async fn trigger_discovery(
     // search/alert endpoints directly. This route provides a status check.
 
     let api_key = shodan_api_key()?;
-    let client = shodan_http_client()?;
+    let client = shodan_http_client();
 
-    let info = sr_sources::shodan::get_api_info(&client, &api_key)
+    let info = sr_sources::shodan::get_api_info(client, &api_key)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to get API info: {e}"))?;
 
-    let alerts = sr_sources::shodan::list_alerts_api(&client, &api_key)
+    let alerts = sr_sources::shodan::list_alerts_api(client, &api_key)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to list alerts: {e}"))?;
 

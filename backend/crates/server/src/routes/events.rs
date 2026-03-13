@@ -5,6 +5,7 @@ use serde::Deserialize;
 
 use crate::error::ApiError;
 use crate::state::AppState;
+use crate::validate;
 
 #[derive(Debug, Deserialize)]
 pub struct EventsQuery {
@@ -93,12 +94,17 @@ pub async fn events_geo(
         .map(|s| s.split(',').map(|t| t.trim().to_string()).collect());
 
     // Zoom-aware severity filter and adaptive limit
-    let (severity_filter, zoom_limit) = zoom_to_severity_filter(params.zoom);
-    let limit = params.limit.unwrap_or(zoom_limit);
+    let zoom = params.zoom.map(validate::clamp_zoom);
+    let (severity_filter, zoom_limit) = zoom_to_severity_filter(zoom);
+    let limit = validate::clamp_limit(params.limit.unwrap_or(zoom_limit), 1000);
 
     // Build optional bbox from query parameters, with 20% padding for smooth panning
     let bbox = match (params.min_lon, params.min_lat, params.max_lon, params.max_lat) {
         (Some(west), Some(south), Some(east), Some(north)) => {
+            let west = validate::clamp_lon(west);
+            let east = validate::clamp_lon(east);
+            let south = validate::clamp_lat(south);
+            let north = validate::clamp_lat(north);
             let lon_pad = (east - west) * 0.2;
             let lat_pad = (north - south) * 0.2;
             Some((

@@ -19,12 +19,18 @@ pub async fn list_sources(
     let configs = sr_sources::db::queries::get_all_source_configs(&state.db).await?;
     let health = sr_sources::db::queries::get_all_source_health(&state.db).await?;
 
+    // O(1) lookups instead of O(n*m) linear scans
+    let config_map: std::collections::HashMap<&str, &sr_sources::db::models::SourceConfig> =
+        configs.iter().map(|c| (c.source_id.as_str(), c)).collect();
+    let health_map: std::collections::HashMap<&str, &sr_sources::db::models::SourceHealth> =
+        health.iter().map(|h| (h.source_id.as_str(), h)).collect();
+
     let sources: Vec<SourceInfo> = state
         .source_registry
         .sources()
         .iter()
         .map(|s| {
-            let cfg = configs.iter().find(|c| c.source_id == s.id()).cloned()
+            let cfg = config_map.get(s.id()).cloned().cloned()
                 .or_else(|| Some(sr_sources::db::models::SourceConfig {
                     source_id: s.id().to_string(),
                     enabled: true,
@@ -33,7 +39,7 @@ pub async fn list_sources(
                     extra_config: serde_json::json!({}),
                     updated_at: chrono::Utc::now(),
                 }));
-            let h = health.iter().find(|h| h.source_id == s.id()).cloned();
+            let h = health_map.get(s.id()).cloned().cloned();
             SourceInfo {
                 id: s.id().to_string(),
                 name: s.name().to_string(),

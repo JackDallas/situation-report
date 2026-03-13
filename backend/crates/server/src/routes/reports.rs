@@ -8,9 +8,10 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use crate::error::ApiError;
 use crate::state::AppState;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct IntelReport {
     pub id: Uuid,
     pub report_type: String,
@@ -37,14 +38,14 @@ pub struct ReportListParams {
 pub async fn list_reports(
     State(state): State<AppState>,
     Query(params): Query<ReportListParams>,
-) -> Json<Vec<IntelReport>> {
+) -> Result<Json<Vec<IntelReport>>, ApiError> {
     let limit = params.limit.unwrap_or(20).min(100);
     let since = params
         .since
         .unwrap_or_else(|| Utc::now() - chrono::Duration::days(7));
 
     let rows = if let Some(ref report_type) = params.report_type {
-        sqlx::query_as::<_, ReportRow>(
+        sqlx::query_as::<_, IntelReport>(
             "SELECT id, report_type, title, content_json, content_html, situation_id, entity_id, \
              model, tokens_used, generated_at \
              FROM intel_reports WHERE report_type = $1 AND generated_at >= $2 \
@@ -54,9 +55,9 @@ pub async fn list_reports(
         .bind(since)
         .bind(limit)
         .fetch_all(&state.db)
-        .await
+        .await?
     } else if let Some(situation_id) = params.situation_id {
-        sqlx::query_as::<_, ReportRow>(
+        sqlx::query_as::<_, IntelReport>(
             "SELECT id, report_type, title, content_json, content_html, situation_id, entity_id, \
              model, tokens_used, generated_at \
              FROM intel_reports WHERE situation_id = $1 AND generated_at >= $2 \
@@ -66,9 +67,9 @@ pub async fn list_reports(
         .bind(since)
         .bind(limit)
         .fetch_all(&state.db)
-        .await
+        .await?
     } else if let Some(entity_id) = params.entity_id {
-        sqlx::query_as::<_, ReportRow>(
+        sqlx::query_as::<_, IntelReport>(
             "SELECT id, report_type, title, content_json, content_html, situation_id, entity_id, \
              model, tokens_used, generated_at \
              FROM intel_reports WHERE entity_id = $1 AND generated_at >= $2 \
@@ -78,9 +79,9 @@ pub async fn list_reports(
         .bind(since)
         .bind(limit)
         .fetch_all(&state.db)
-        .await
+        .await?
     } else {
-        sqlx::query_as::<_, ReportRow>(
+        sqlx::query_as::<_, IntelReport>(
             "SELECT id, report_type, title, content_json, content_html, situation_id, entity_id, \
              model, tokens_used, generated_at \
              FROM intel_reports WHERE generated_at >= $1 \
@@ -89,75 +90,25 @@ pub async fn list_reports(
         .bind(since)
         .bind(limit)
         .fetch_all(&state.db)
-        .await
+        .await?
     };
 
-    match rows {
-        Ok(rows) => Json(
-            rows.into_iter()
-                .map(|r| IntelReport {
-                    id: r.id,
-                    report_type: r.report_type,
-                    title: r.title,
-                    content_json: r.content_json,
-                    content_html: r.content_html,
-                    situation_id: r.situation_id,
-                    entity_id: r.entity_id,
-                    model: r.model,
-                    tokens_used: r.tokens_used,
-                    generated_at: r.generated_at,
-                })
-                .collect(),
-        ),
-        Err(e) => {
-            tracing::error!("Report query failed: {e}");
-            Json(Vec::new())
-        }
-    }
+    Ok(Json(rows))
 }
 
 /// GET /api/reports/:id
 pub async fn get_report(
     State(state): State<AppState>,
     Path(report_id): Path<Uuid>,
-) -> Json<Option<IntelReport>> {
-    let row = sqlx::query_as::<_, ReportRow>(
+) -> Result<Json<Option<IntelReport>>, ApiError> {
+    let row = sqlx::query_as::<_, IntelReport>(
         "SELECT id, report_type, title, content_json, content_html, situation_id, entity_id, \
          model, tokens_used, generated_at \
          FROM intel_reports WHERE id = $1",
     )
     .bind(report_id)
     .fetch_optional(&state.db)
-    .await
-    .ok()
-    .flatten();
+    .await?;
 
-    Json(row.map(|r| IntelReport {
-        id: r.id,
-        report_type: r.report_type,
-        title: r.title,
-        content_json: r.content_json,
-        content_html: r.content_html,
-        situation_id: r.situation_id,
-        entity_id: r.entity_id,
-        model: r.model,
-        tokens_used: r.tokens_used,
-        generated_at: r.generated_at,
-    }))
-}
-
-// --- Row types ---
-
-#[derive(sqlx::FromRow)]
-struct ReportRow {
-    id: Uuid,
-    report_type: String,
-    title: String,
-    content_json: serde_json::Value,
-    content_html: Option<String>,
-    situation_id: Option<Uuid>,
-    entity_id: Option<Uuid>,
-    model: String,
-    tokens_used: i32,
-    generated_at: DateTime<Utc>,
+    Ok(Json(row))
 }

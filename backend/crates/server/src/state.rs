@@ -4,14 +4,17 @@ use std::sync::atomic::AtomicU64;
 
 use sqlx::PgPool;
 use sr_intel::{BudgetManager, SharedAnalysis};
-use sr_pipeline::{PipelineConfig, PipelineMetrics, PublishEvent, SharedSummaries, SituationClusterDTO, SharedEntityResolver, SharedEntityGraph};
+use sr_pipeline::{PipelineConfig, PipelineMetrics, PublishEvent, SharedSummaries, SituationClusterDTO};
 use sr_sources::registry::SourceRegistry;
 use sr_sources::shodan::CameraResult;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
+use crate::routes::satellites::SatelliteTle;
+
 pub type SharedSituations = Arc<std::sync::RwLock<Vec<SituationClusterDTO>>>;
 pub type SharedCameras = Arc<std::sync::RwLock<HashMap<Uuid, Vec<CameraResult>>>>;
+pub type SharedSatelliteTles = Arc<std::sync::RwLock<Vec<SatelliteTle>>>;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -25,8 +28,8 @@ pub struct AppState {
     pub situations: SharedSituations,
     pub cameras: SharedCameras,
     pub metrics: Arc<PipelineMetrics>,
-    pub entity_resolver: SharedEntityResolver,
-    pub entity_graph: SharedEntityGraph,
     pub pipeline_config: Arc<PipelineConfig>,
     pub intel_config: Arc<sr_config::IntelConfig>,
+    pub api_key: Option<String>,
+    pub satellite_tles: SharedSatelliteTles,
 }
