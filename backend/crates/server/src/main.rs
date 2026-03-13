@@ -85,7 +85,9 @@ async fn main() -> anyhow::Result<()> {
     registry.register(Arc::new(sr_sources::shodan::ShodanSearch::new()));
 
     // Conflict data
-    registry.register(Arc::new(sr_sources::acled::AcledSource::new()));
+    // ACLED disabled — free tier lacks API access, burns error logs every poll.
+    // Needs Research tier (institutional email) or contact access@acleddata.com.
+    // registry.register(Arc::new(sr_sources::acled::AcledSource::new()));
     registry.register(Arc::new(sr_sources::gdelt::GdeltSource::new()));
     registry.register(Arc::new(sr_sources::geoconfirmed::GeoConfirmedSource::new()));
 
