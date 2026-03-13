@@ -168,7 +168,7 @@ class SituationsStore {
 				['cloudflare', 'ioda', 'bgp', 'otx', 'certstream', 'ooni', 'shodan'].includes(s)
 			);
 			const hasEnvironmental = cluster.source_types.some((s) =>
-				['gdacs', 'usgs', 'firms', 'reliefweb', 'copernicus'].includes(s)
+				['gdacs', 'usgs', 'firms', 'copernicus'].includes(s)
 			);
 			const category: SituationCategory = hasConflict
 				? 'conflict'

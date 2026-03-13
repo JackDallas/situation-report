@@ -778,7 +778,7 @@ impl SituationGraph {
         // overlap calculation since they indicate data source, not situation topic.
         let mut topical_orphaned = 0usize;
         let source_topics: HashSet<&str> = [
-            "gdacs", "firms", "copernicus", "usgs", "reliefweb", "acled",
+            "gdacs", "firms", "copernicus", "usgs", "acled",
             "gdelt", "green", "orange", "red", "closed",
         ].into_iter().collect();
         {

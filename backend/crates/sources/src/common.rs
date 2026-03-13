@@ -154,7 +154,7 @@ pub fn country_center(cc: &str) -> Option<(f64, f64)> {
         "IN" => Some((20.6, 78.9)),
         "PK" => Some((30.4, 69.3)),
         "AF" => Some((33.9, 67.7)),
-        // Humanitarian crisis countries (commonly in ReliefWeb)
+        // Humanitarian crisis countries
         "HT" => Some((19.0, -72.4)),    // Haiti
         "BD" => Some((23.7, 90.4)),     // Bangladesh
         "MZ" => Some((-18.7, 35.5)),    // Mozambique
@@ -252,7 +252,7 @@ pub fn country_center_for_name(name: &str) -> Option<(f64, f64)> {
         "venezuela" => Some((6.4, -66.6)),
         "brazil" => Some((-14.2, -51.9)),
         "argentina" => Some((-38.4, -63.6)),
-        // Additional humanitarian crisis countries (ReliefWeb coverage)
+        // Additional humanitarian crisis countries
         "haiti" => Some((19.0, -72.4)),
         "bangladesh" => Some((23.7, 90.4)),
         "nepal" => Some((28.4, 84.1)),
