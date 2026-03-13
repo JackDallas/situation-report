@@ -14,6 +14,7 @@ use sr_embeddings::EmbeddingCache;
 use tracing::{debug, info};
 
 use super::scoring::{effective_source_diversity, is_conflict_source, is_conflict_topic, is_cyber_source, is_natural_disaster_topic};
+use super::percentile::DynamicThresholds;
 use super::{SituationCluster, SituationGraph};
 
 // Re-export the shared enum from sr-types.
@@ -211,7 +212,13 @@ pub(crate) fn evaluate_phase_transition(
 /// Recompute cluster severity based on aggregate signals beyond individual event severity.
 /// Computes severity from scratch (can both escalate and downgrade).
 /// Returns true if severity changed.
-pub(crate) fn recompute_cluster_severity(cluster: &mut SituationCluster, severity_config: &sr_config::SeverityConfig, certainty_config: &sr_config::CertaintyConfig, now: DateTime<Utc>) -> bool {
+pub(crate) fn recompute_cluster_severity(
+    cluster: &mut SituationCluster,
+    severity_config: &sr_config::SeverityConfig,
+    certainty_config: &sr_config::CertaintyConfig,
+    now: DateTime<Utc>,
+    dynamic: Option<&DynamicThresholds>,
+) -> bool {
     let old_severity = cluster.severity;
     let is_child = cluster.parent_id.is_some();
 
@@ -244,19 +251,25 @@ pub(crate) fn recompute_cluster_severity(cluster: &mut SituationCluster, severit
     let has_cyber_sources = effective_source_types.iter().any(|s| is_cyber_source(*s));
     let source_diversity = super::scoring::effective_source_diversity(effective_source_types);
 
+    // Event count thresholds: use dynamic (percentile-based) when available,
+    // otherwise fall back to static config values.
+    let critical_min_events = dynamic.map_or(severity_config.critical_min_events, |d| d.critical_events);
+    let high_min_events = dynamic.map_or(severity_config.high_min_events, |d| d.high_events);
+    let medium_min_events = dynamic.map_or(severity_config.medium_min_events, |d| d.medium_events);
+
     // Compute severity from scratch based on current cluster state.
     // Multiple paths to escalation: conflict, cyber, environmental, or sheer corroboration.
     let computed = if cluster.phase == SituationPhase::Active
         && has_conflict_sources
         && has_conflict_topics
-        && effective_event_count >= severity_config.critical_min_events
+        && effective_event_count >= critical_min_events
         && source_diversity >= severity_config.critical_min_sources
     {
         // Active armed conflict with heavy multi-source corroboration
         Severity::Critical.min(severity_cap)
     } else if is_active_or_developing
         && has_conflict_topics
-        && effective_event_count >= severity_config.high_min_events
+        && effective_event_count >= high_min_events
         && source_diversity >= severity_config.critical_min_sources.min(3)
     {
         // Developing/active conflict situation with multi-source corroboration
@@ -264,7 +277,7 @@ pub(crate) fn recompute_cluster_severity(cluster: &mut SituationCluster, severit
     } else if is_active_or_developing
         && (has_cyber_sources || is_natural_disaster)
         && source_diversity >= severity_config.medium_min_sources
-        && effective_event_count >= severity_config.high_min_events
+        && effective_event_count >= high_min_events
     {
         // Multi-source cyber or environmental disaster, actively developing
         Severity::High.min(severity_cap)
@@ -273,7 +286,7 @@ pub(crate) fn recompute_cluster_severity(cluster: &mut SituationCluster, severit
     {
         // Corroborated situation (2+ sources) with meaningful topic signal
         Severity::Medium
-    } else if source_diversity >= severity_config.critical_min_sources && effective_event_count >= severity_config.medium_min_events {
+    } else if source_diversity >= severity_config.critical_min_sources && effective_event_count >= medium_min_events {
         // Any situation with 3+ independent sources is noteworthy
         Severity::Medium
     } else {
@@ -424,6 +437,24 @@ impl SituationGraph {
         let pre_recompute_severity: std::collections::HashMap<Uuid, Severity> = parent_set.iter()
             .filter_map(|pid| self.clusters.get(pid).map(|c| (*pid, c.severity)))
             .collect();
+
+        // Record a percentile snapshot of all active cluster event counts, then
+        // compute dynamic thresholds (returns None during cold start).
+        let dynamic_thresholds = if self.config.severity.adaptive_enabled {
+            let event_counts: Vec<usize> = self.clusters.values()
+                .map(|c| c.event_count)
+                .collect();
+            self.percentile_tracker.record(event_counts);
+            let sev = &self.config.severity;
+            self.percentile_tracker.thresholds(
+                sev.percentile_cold_start,
+                sev.percentile_medium,
+                sev.percentile_high,
+                sev.percentile_critical,
+            )
+        } else {
+            None
+        };
 
         let cluster_ids: Vec<Uuid> = self.clusters.keys().copied().collect();
         for cid in cluster_ids {
@@ -600,7 +631,7 @@ impl SituationGraph {
             // this, causing stale HIGH severity to persist indefinitely.
             if let Some(cluster) = self.clusters.get_mut(&cid) {
                 let old_sev = cluster.severity;
-                if recompute_cluster_severity(cluster, &self.config.severity, &self.config.certainty, now) {
+                if recompute_cluster_severity(cluster, &self.config.severity, &self.config.certainty, now, dynamic_thresholds.as_ref()) {
                     // Only log for non-parent clusters; parent severity is logged
                     // after propagation to avoid oscillation spam.
                     if !parent_set.contains(&cid) {

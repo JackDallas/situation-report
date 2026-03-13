@@ -2,6 +2,7 @@ pub mod scoring;
 pub mod lifecycle;
 pub mod dto;
 pub mod merge;
+pub mod percentile;
 
 // Re-export public types from submodules so callers don't need to know the internal structure.
 pub use dto::{SituationClusterDTO, ClusterGapAnalysis};
@@ -27,6 +28,7 @@ use scoring::{
     extract_entities, extract_topics, is_high_signal_event,
     normalize_region, region_code_to_name, title_case,
 };
+use percentile::PercentileTracker;
 
 // ---------------------------------------------------------------------------
 // Core types
@@ -65,6 +67,8 @@ pub struct SituationGraph {
     /// Override clock for deterministic replay. When set, `self.now()` returns
     /// this value instead of `Utc::now()`. Advanced by replay harness.
     clock_override: Option<DateTime<Utc>>,
+    /// Rolling percentile tracker for adaptive severity thresholds.
+    percentile_tracker: PercentileTracker,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -218,6 +222,7 @@ pub(crate) fn median_centroid(coords: &[(f64, f64)]) -> (f64, f64) {
 
 impl SituationGraph {
     pub fn new(config: Arc<PipelineConfig>) -> Self {
+        let percentile_window = config.severity.percentile_window;
         Self {
             entity_index: HashMap::new(),
             topic_index: HashMap::new(),
@@ -229,6 +234,7 @@ impl SituationGraph {
             merge_rejections: HashMap::new(),
             pending_buffer: Vec::new(),
             clock_override: None,
+            percentile_tracker: PercentileTracker::new(percentile_window),
         }
     }
 
