@@ -478,10 +478,10 @@ fn cluster_from_db_row(row: &SituationDbRow) -> Option<SituationCluster> {
         total_events_ingested: props["total_events_ingested"]
             .as_u64()
             .unwrap_or(row.event_count_5m.max(0) as u64) as usize,
-        // Direct stats are not persisted — they default to zero.
-        // Clusters loaded from DB start fresh; direct stats accumulate as new events arrive.
-        direct_event_count: 0,
-        direct_source_types: HashSet::new(),
+        direct_event_count: props["direct_event_count"]
+            .as_u64()
+            .unwrap_or(0) as usize,
+        direct_source_types: json_string_array_to_source_types(&props["direct_source_types"]),
     })
 }
 
@@ -613,6 +613,8 @@ async fn upsert_situation(
         "coord_buffer": cluster.coord_buffer,
         "certainty": cluster.certainty,
         "total_events_ingested": cluster.total_events_ingested,
+        "direct_event_count": cluster.direct_event_count,
+        "direct_source_types": &cluster.direct_source_types,
     });
 
     // Build PostGIS point from centroid if available

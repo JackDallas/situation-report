@@ -82,6 +82,14 @@ pub struct SituationClusterDTO {
     #[serde(default, skip_serializing)]
     #[ts(skip)]
     pub total_events_ingested: usize,
+    /// Count of events directly ingested into this cluster (not inherited from merges).
+    #[serde(default, skip_serializing)]
+    #[ts(skip)]
+    pub direct_event_count: usize,
+    /// Source types from directly ingested events only (not inherited from merges).
+    #[serde(default, skip_serializing)]
+    #[ts(skip)]
+    pub direct_source_types: Vec<String>,
 }
 
 /// Result of gap analysis for a cluster -- used to drive intelligent search selection.
@@ -196,6 +204,8 @@ impl SituationGraph {
             last_title_gen: c.last_title_gen,
             event_ids,
             total_events_ingested: c.total_events_ingested,
+            direct_event_count: c.direct_event_count,
+            direct_source_types: c.direct_source_types.iter().map(|st| st.to_string()).collect(),
         }
     }
 
@@ -339,6 +349,8 @@ impl SituationGraph {
                     last_title_gen: c.last_title_gen,
                     event_ids,
                     total_events_ingested: c.total_events_ingested,
+                    direct_event_count: c.direct_event_count,
+                    direct_source_types: c.direct_source_types.iter().map(|st| st.to_string()).collect(),
                 }
             })
             .collect();
