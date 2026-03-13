@@ -3429,6 +3429,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "rand 0.8.5",
  "reqwest",
  "serde",
  "serde_json",
@@ -3531,6 +3532,7 @@ dependencies = [
  "grammers-session",
  "http",
  "quick-xml",
+ "rand 0.8.5",
  "regex",
  "reqwest",
  "serde",

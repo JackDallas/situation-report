@@ -4,6 +4,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
+use rand::Rng;
 use tokio::sync::broadcast;
 use tokio_tungstenite::connect_async;
 use tracing::{debug, error, info, warn};
@@ -48,6 +49,146 @@ const HIGH_KEYWORDS: &[&str] = &[
     "mobilization", "escalation", "retaliation", "sanctions",
     "radar", "submarine", "warship", "convoy", "airspace",
 ];
+
+// ---------------------------------------------------------------------------
+// Content quality filtering
+// ---------------------------------------------------------------------------
+
+/// Minimum text length for a post to be ingested, unless it has an external
+/// link embed or matches an OSINT keyword.
+const MIN_TEXT_LENGTH: usize = 80;
+
+/// Minimum text length for image posts — below this they're likely memes.
+const MIN_TEXT_LENGTH_IMAGE: usize = 20;
+
+/// Case-insensitive negative keywords. Matched on word boundaries.
+const NEGATIVE_KEYWORDS: &[&str] = &[
+    "lol", "lmao", "rofl", "happy birthday", "recipe",
+    "good morning", "mornin", "it's friday", "its friday",
+];
+
+/// OSINT signal keywords — posts matching any of these bypass the 80-char
+/// minimum length requirement.
+const OSINT_KEYWORDS: &[&str] = &[
+    "military", "strike", "missile", "drone", "conflict", "attack",
+    "deployed", "intelligence", "sanctions", "nuclear", "cyber",
+    "geolocation", "satellite", "airstrike", "casualt", "weapon",
+    "artillery", "convoy", "intercept", "radar", "warship", "submarine",
+    "fighter", "bomber", "reconnaissance", "sigint", "humint", "geoint",
+    "osint", "ceasefire", "escalat", "deescalat", "mobiliz", "incursion",
+    "blockade", "embargo", "militia", "insurgent", "separatist", "annex",
+];
+
+/// Reason a post was filtered out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FilterReason {
+    ShortText,
+    NegativeKeyword,
+    Repost,
+    ImageMeme,
+}
+
+impl FilterReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ShortText => "short_text",
+            Self::NegativeKeyword => "negative_keyword",
+            Self::Repost => "repost",
+            Self::ImageMeme => "image_meme",
+        }
+    }
+}
+
+/// Check whether a word-boundary match exists for `keyword` in `haystack`.
+/// Both inputs must already be lowercased.
+fn contains_word(haystack: &str, keyword: &str) -> bool {
+    let bytes = haystack.as_bytes();
+    let kw_bytes = keyword.as_bytes();
+    let kw_len = kw_bytes.len();
+
+    let mut start = 0;
+    while let Some(pos) = haystack[start..].find(keyword) {
+        let abs_pos = start + pos;
+        let before_ok = abs_pos == 0 || !bytes[abs_pos - 1].is_ascii_alphanumeric();
+        let after_pos = abs_pos + kw_len;
+        let after_ok = after_pos >= bytes.len() || !bytes[after_pos].is_ascii_alphanumeric();
+
+        if before_ok && after_ok {
+            return true;
+        }
+        start = abs_pos + 1;
+    }
+    false
+}
+
+/// Determine whether a Jetstream commit message represents a repost.
+///
+/// In the AT Protocol, reposts are records in the `app.bsky.feed.repost`
+/// collection, which we already skip via the collection check. This function
+/// provides an additional safety net by checking for a `reason` field with
+/// type `app.bsky.feed.defs#reasonRepost` (present in feed-view style
+/// messages) and by verifying the collection directly.
+fn is_repost(msg: &serde_json::Value) -> bool {
+    // Check feed-view style reason (not typical in raw Jetstream, but defensive)
+    if let Some(reason) = msg.get("reason") {
+        if let Some(rtype) = reason.get("$type").and_then(|v| v.as_str()) {
+            if rtype.contains("reasonRepost") {
+                return true;
+            }
+        }
+    }
+
+    // Check commit collection
+    if let Some(commit) = msg.get("commit") {
+        if let Some(collection) = commit.get("collection").and_then(|v| v.as_str()) {
+            if collection == "app.bsky.feed.repost" {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// Returns `Some(reason)` if the post should be filtered, `None` if it should
+/// be ingested.
+fn should_filter(
+    text: &str,
+    msg: &serde_json::Value,
+    has_external_link: bool,
+    has_images: bool,
+) -> Option<FilterReason> {
+    // 1. Repost check (before anything else)
+    if is_repost(msg) {
+        return Some(FilterReason::Repost);
+    }
+
+    let lower = text.to_lowercase();
+
+    // 2. Negative keyword filter (word-boundary match)
+    for kw in NEGATIVE_KEYWORDS {
+        if contains_word(&lower, kw) {
+            return Some(FilterReason::NegativeKeyword);
+        }
+    }
+
+    // 3. Image-only meme filter
+    if has_images && text.len() < MIN_TEXT_LENGTH_IMAGE {
+        return Some(FilterReason::ImageMeme);
+    }
+
+    // 4. Text length gate (with OSINT keyword boost bypass)
+    if text.len() < MIN_TEXT_LENGTH && !has_external_link {
+        // Check for OSINT keyword boost — substring match is fine here
+        // since these are domain-specific stems (e.g. "casualt", "escalat").
+        let has_osint_keyword = OSINT_KEYWORDS.iter().any(|kw| lower.contains(kw));
+        if !has_osint_keyword {
+            return Some(FilterReason::ShortText);
+        }
+    }
+
+    None
+}
 
 // ---------------------------------------------------------------------------
 // Hardcoded fallback OSINT accounts (used if list API fails)
@@ -412,6 +553,23 @@ impl BlueskySource {
             }
         }
 
+        // ---- Content quality filter ----
+        let has_external_link = content_tags.contains(&"has_link".to_string());
+        let has_images = content_tags.contains(&"has_images".to_string());
+
+        if let Some(reason) = should_filter(text, msg, has_external_link, has_images) {
+            let handle = did_to_name
+                .get(did)
+                .map(|s| s.as_str())
+                .unwrap_or(did);
+            debug!(
+                author = %handle,
+                reason = reason.as_str(),
+                "Bluesky post filtered"
+            );
+            return None;
+        }
+
         // Reply detection
         let is_reply = record.get("reply").is_some();
         if is_reply {
@@ -592,8 +750,10 @@ impl DataSource for BlueskySource {
                     conn
                 }
                 Err(e) => {
-                    error!(error = %e, backoff_secs, "Failed to connect to Jetstream");
-                    tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                    let jitter_ms = rand::thread_rng().gen_range(0..=backoff_secs * 1000 / 4);
+                    let total = Duration::from_millis(backoff_secs * 1000 + jitter_ms);
+                    error!(error = %e, backoff_ms = total.as_millis() as u64, "Failed to connect to Jetstream");
+                    tokio::time::sleep(total).await;
                     backoff_secs = (backoff_secs * 2).min(120);
                     continue;
                 }
@@ -691,12 +851,14 @@ impl DataSource for BlueskySource {
                 }
             };
 
+            let jitter_ms = rand::thread_rng().gen_range(0..=backoff_secs * 1000 / 4);
+            let total = Duration::from_millis(backoff_secs * 1000 + jitter_ms);
             warn!(
                 reason = %disconnect_reason,
-                backoff_secs,
+                backoff_ms = total.as_millis() as u64,
                 "Bluesky Jetstream disconnected, reconnecting"
             );
-            tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+            tokio::time::sleep(total).await;
             backoff_secs = (backoff_secs * 2).min(120);
         }
     }
@@ -938,7 +1100,7 @@ mod tests {
                 "collection": "app.bsky.feed.post",
                 "rkey": "reply123",
                 "record": {
-                    "text": "I agree with this assessment",
+                    "text": "I agree with this assessment about the ongoing military deployment and its implications for the region overall",
                     "createdAt": "2026-03-10T12:00:00Z",
                     "reply": {
                         "root": {"uri": "at://did:plc:other/app.bsky.feed.post/root1"},
@@ -1005,5 +1167,360 @@ mod tests {
         assert!(event.title.as_ref().unwrap().len() <= 104);
         // Description truncated to 500
         assert!(event.description.as_ref().unwrap().len() <= 500);
+    }
+
+    // -----------------------------------------------------------------------
+    // Content quality filtering tests
+    // -----------------------------------------------------------------------
+
+    fn dummy_msg() -> serde_json::Value {
+        serde_json::json!({
+            "kind": "commit",
+            "did": "did:plc:test",
+            "commit": {
+                "operation": "create",
+                "collection": "app.bsky.feed.post",
+                "rkey": "test1"
+            }
+        })
+    }
+
+    #[test]
+    fn test_filter_short_text() {
+        let msg = dummy_msg();
+        assert_eq!(
+            should_filter("short", &msg, false, false),
+            Some(FilterReason::ShortText),
+        );
+    }
+
+    #[test]
+    fn test_filter_short_text_with_link_bypass() {
+        let msg = dummy_msg();
+        // Short text with external link should pass
+        assert_eq!(should_filter("short", &msg, true, false), None);
+    }
+
+    #[test]
+    fn test_filter_short_text_osint_keyword_bypass() {
+        let msg = dummy_msg();
+        // Short text but has OSINT keyword
+        assert_eq!(should_filter("missile fired", &msg, false, false), None);
+        assert_eq!(should_filter("drone spotted", &msg, false, false), None);
+        assert_eq!(should_filter("ceasefire announced", &msg, false, false), None);
+        assert_eq!(should_filter("OSINT thread", &msg, false, false), None);
+        // Substring match: "casualt" matches "casualties"
+        assert_eq!(should_filter("casualties reported", &msg, false, false), None);
+        // "escalat" matches "escalation"
+        assert_eq!(should_filter("escalation risk", &msg, false, false), None);
+    }
+
+    #[test]
+    fn test_filter_long_text_passes() {
+        let msg = dummy_msg();
+        let long = "This is a sufficiently long post about something that happened in the world, providing enough context.";
+        assert!(long.len() >= 80);
+        assert_eq!(should_filter(long, &msg, false, false), None);
+    }
+
+    #[test]
+    fn test_filter_negative_keyword_lol() {
+        let msg = dummy_msg();
+        let long = "This is a really really long post that contains lol somewhere in the middle of the text for some reason.";
+        assert_eq!(
+            should_filter(long, &msg, false, false),
+            Some(FilterReason::NegativeKeyword),
+        );
+    }
+
+    #[test]
+    fn test_filter_negative_keyword_word_boundary() {
+        let msg = dummy_msg();
+        // "lol" should NOT match inside "colloquial"
+        let text = "A colloquial expression used in academic discourse about regional geopolitical dynamics around the world.";
+        assert!(text.len() >= 80);
+        assert_eq!(should_filter(text, &msg, false, false), None);
+
+        // "lol" should NOT match inside "lollipop"
+        let text2 = "The lollipop factory opened today in a big ceremony attended by many officials from the surrounding region.";
+        assert!(text2.len() >= 80);
+        assert_eq!(should_filter(text2, &msg, false, false), None);
+    }
+
+    #[test]
+    fn test_filter_negative_keyword_happy_birthday() {
+        let msg = dummy_msg();
+        let text = "Happy birthday to my dear friend who has been such an amazing person over the years, wishing the best for you.";
+        assert_eq!(
+            should_filter(text, &msg, false, false),
+            Some(FilterReason::NegativeKeyword),
+        );
+    }
+
+    #[test]
+    fn test_filter_negative_keyword_good_morning() {
+        let msg = dummy_msg();
+        let text = "Good morning everyone, hope you all have a wonderful day ahead with lots of good things coming your way today.";
+        assert_eq!(
+            should_filter(text, &msg, false, false),
+            Some(FilterReason::NegativeKeyword),
+        );
+    }
+
+    #[test]
+    fn test_filter_negative_keyword_case_insensitive() {
+        let msg = dummy_msg();
+        let text = "LMAO this is hilarious but also quite a long post about random things that are happening in the world right now.";
+        assert_eq!(
+            should_filter(text, &msg, false, false),
+            Some(FilterReason::NegativeKeyword),
+        );
+    }
+
+    #[test]
+    fn test_filter_negative_keyword_its_friday() {
+        let msg = dummy_msg();
+        let text = "Its friday and I am so ready for the weekend, let us celebrate with some good food and friends gathering.";
+        assert_eq!(
+            should_filter(text, &msg, false, false),
+            Some(FilterReason::NegativeKeyword),
+        );
+    }
+
+    #[test]
+    fn test_filter_image_meme() {
+        let msg = dummy_msg();
+        // Image with very short text -> meme
+        assert_eq!(
+            should_filter("lmfao", &msg, false, true),
+            Some(FilterReason::ImageMeme),
+        );
+        // Image with empty-ish text
+        assert_eq!(
+            should_filter("😂😂😂", &msg, false, true),
+            Some(FilterReason::ImageMeme),
+        );
+    }
+
+    #[test]
+    fn test_filter_image_with_sufficient_text() {
+        let msg = dummy_msg();
+        // Image with 20+ chars of text should pass (if also passes other filters)
+        let text = "Satellite imagery shows new military buildup near the northern border region, significant vehicle movement visible.";
+        assert_eq!(should_filter(text, &msg, false, true), None);
+    }
+
+    #[test]
+    fn test_filter_repost_by_collection() {
+        let msg = serde_json::json!({
+            "kind": "commit",
+            "did": "did:plc:test",
+            "commit": {
+                "operation": "create",
+                "collection": "app.bsky.feed.repost",
+                "rkey": "test1"
+            }
+        });
+        let text = "This is a long enough post that would normally pass all the content quality filters without issue.";
+        assert_eq!(
+            should_filter(text, &msg, false, false),
+            Some(FilterReason::Repost),
+        );
+    }
+
+    #[test]
+    fn test_filter_repost_by_reason() {
+        let msg = serde_json::json!({
+            "kind": "commit",
+            "did": "did:plc:test",
+            "reason": {
+                "$type": "app.bsky.feed.defs#reasonRepost"
+            },
+            "commit": {
+                "operation": "create",
+                "collection": "app.bsky.feed.post",
+                "rkey": "test1"
+            }
+        });
+        let text = "This is a long enough post that would normally pass all the content quality filters without issue.";
+        assert_eq!(
+            should_filter(text, &msg, false, false),
+            Some(FilterReason::Repost),
+        );
+    }
+
+    #[test]
+    fn test_contains_word_boundary() {
+        // Exact word match
+        assert!(contains_word("this is lol funny", "lol"));
+        // At start
+        assert!(contains_word("lol that was great", "lol"));
+        // At end
+        assert!(contains_word("that was great lol", "lol"));
+        // Entire string
+        assert!(contains_word("lol", "lol"));
+        // With punctuation (non-alphanumeric boundary)
+        assert!(contains_word("haha, lol!", "lol"));
+        // Multi-word keyword
+        assert!(contains_word("have a good morning today", "good morning"));
+
+        // Should NOT match substrings
+        assert!(!contains_word("colloquial", "lol"));
+        assert!(!contains_word("lollipop", "lol"));
+        assert!(!contains_word("trollop", "lol"));
+    }
+
+    #[test]
+    fn test_filter_priority_repost_before_negative_kw() {
+        // Repost check should fire before negative keyword
+        let msg = serde_json::json!({
+            "kind": "commit",
+            "did": "did:plc:test",
+            "reason": {
+                "$type": "app.bsky.feed.defs#reasonRepost"
+            },
+            "commit": {
+                "operation": "create",
+                "collection": "app.bsky.feed.post",
+                "rkey": "test1"
+            }
+        });
+        let text = "lol this is both a repost and has negative keywords and its way long enough to clear the bar.";
+        assert_eq!(
+            should_filter(text, &msg, false, false),
+            Some(FilterReason::Repost),
+        );
+    }
+
+    #[test]
+    fn test_process_commit_filters_short_text() {
+        let mut did_map = HashMap::new();
+        did_map.insert("did:plc:test".to_string(), "Tester".to_string());
+
+        let msg = serde_json::json!({
+            "kind": "commit",
+            "did": "did:plc:test",
+            "time_us": 1710000000000000_u64,
+            "commit": {
+                "operation": "create",
+                "collection": "app.bsky.feed.post",
+                "rkey": "short1",
+                "record": {
+                    "text": "just vibes",
+                    "createdAt": "2026-03-10T12:00:00Z"
+                }
+            }
+        });
+
+        // Short text, no link, no OSINT keyword -> filtered
+        assert!(BlueskySource::process_commit(&msg, &did_map).is_none());
+    }
+
+    #[test]
+    fn test_process_commit_short_text_with_link_passes() {
+        let mut did_map = HashMap::new();
+        did_map.insert("did:plc:test".to_string(), "Tester".to_string());
+
+        let msg = serde_json::json!({
+            "kind": "commit",
+            "did": "did:plc:test",
+            "time_us": 1710000000000000_u64,
+            "commit": {
+                "operation": "create",
+                "collection": "app.bsky.feed.post",
+                "rkey": "link1",
+                "record": {
+                    "text": "Thread on drone strikes",
+                    "createdAt": "2026-03-10T12:00:00Z",
+                    "embed": {
+                        "$type": "app.bsky.embed.external",
+                        "external": {
+                            "uri": "https://example.com/article",
+                            "title": "Report",
+                            "description": "desc"
+                        }
+                    }
+                }
+            }
+        });
+
+        // Short text but has external link embed -> passes
+        assert!(BlueskySource::process_commit(&msg, &did_map).is_some());
+    }
+
+    #[test]
+    fn test_process_commit_negative_keyword_filtered() {
+        let mut did_map = HashMap::new();
+        did_map.insert("did:plc:test".to_string(), "Tester".to_string());
+
+        let msg = serde_json::json!({
+            "kind": "commit",
+            "did": "did:plc:test",
+            "time_us": 1710000000000000_u64,
+            "commit": {
+                "operation": "create",
+                "collection": "app.bsky.feed.post",
+                "rkey": "neg1",
+                "record": {
+                    "text": "Good morning everyone, hope you all have a wonderful day ahead with lots of good things coming your way today.",
+                    "createdAt": "2026-03-10T12:00:00Z"
+                }
+            }
+        });
+
+        assert!(BlueskySource::process_commit(&msg, &did_map).is_none());
+    }
+
+    #[test]
+    fn test_process_commit_image_meme_filtered() {
+        let mut did_map = HashMap::new();
+        did_map.insert("did:plc:test".to_string(), "Tester".to_string());
+
+        let msg = serde_json::json!({
+            "kind": "commit",
+            "did": "did:plc:test",
+            "time_us": 1710000000000000_u64,
+            "commit": {
+                "operation": "create",
+                "collection": "app.bsky.feed.post",
+                "rkey": "meme1",
+                "record": {
+                    "text": "mood",
+                    "createdAt": "2026-03-10T12:00:00Z",
+                    "embed": {
+                        "$type": "app.bsky.embed.images",
+                        "images": [
+                            {"alt": "funny pic", "image": {}}
+                        ]
+                    }
+                }
+            }
+        });
+
+        assert!(BlueskySource::process_commit(&msg, &did_map).is_none());
+    }
+
+    #[test]
+    fn test_process_commit_osint_keyword_short_passes() {
+        let mut did_map = HashMap::new();
+        did_map.insert("did:plc:test".to_string(), "Tester".to_string());
+
+        let msg = serde_json::json!({
+            "kind": "commit",
+            "did": "did:plc:test",
+            "time_us": 1710000000000000_u64,
+            "commit": {
+                "operation": "create",
+                "collection": "app.bsky.feed.post",
+                "rkey": "osint1",
+                "record": {
+                    "text": "SIGINT intercept confirmed",
+                    "createdAt": "2026-03-10T12:00:00Z"
+                }
+            }
+        });
+
+        // Short text but has OSINT keyword -> passes
+        assert!(BlueskySource::process_commit(&msg, &did_map).is_some());
     }
 }

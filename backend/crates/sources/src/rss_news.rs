@@ -9,6 +9,7 @@ use sr_types::{EventType, Severity, SourceType};
 
 use crate::{DataSource, InsertableEvent, SourceContext};
 use crate::common;
+use crate::rate_limit::check_rate_limit;
 
 /// Browser-like User-Agent for RSS fetches. Some feeds (breakingdefense.com,
 /// warontherocks.com) return 403 when they see a bot-style UA string.
@@ -281,6 +282,15 @@ impl DataSource for RssNewsSource {
                 Ok(r) => r,
                 Err(e) => {
                     warn!(feed_id = feed.id, error = %e, "RSS fetch failed");
+                    continue;
+                }
+            };
+
+            // Check for 429 rate limit — skip this feed but don't fail the whole poll
+            let resp = match check_rate_limit(resp, &format!("rss:{}", feed.id)) {
+                Ok(r) => r,
+                Err(e) => {
+                    warn!(feed_id = feed.id, error = %e, "RSS feed rate-limited, skipping");
                     continue;
                 }
             };

@@ -10,6 +10,7 @@ use tracing::{debug, info};
 use sr_types::{EventType, Severity, SourceType};
 
 use crate::common;
+use crate::rate_limit::check_rate_limit;
 use crate::{DataSource, InsertableEvent, SourceContext};
 
 /// ArcGIS Feature Service base URL for NGA Anti-Shipping Activity Messages.
@@ -379,6 +380,7 @@ impl DataSource for UkmtoSource {
             .timeout(Duration::from_secs(30))
             .send()
             .await?;
+        let resp = check_rate_limit(resp, "ukmto")?;
 
         if !resp.status().is_success() {
             anyhow::bail!("ASAM query returned HTTP {}", resp.status());

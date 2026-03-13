@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::Utc;
+use rand::Rng;
 use sqlx::PgPool;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
@@ -86,8 +87,8 @@ impl SourceRegistry {
             }
         }
 
-        // No health record — first run, poll immediately
-        Duration::ZERO
+        // No health record — first run, stagger 0-5s to avoid cold-start thundering herd
+        Duration::from_millis(rand::thread_rng().gen_range(0..5000))
     }
 
     /// Spawn tokio tasks for all registered sources.
@@ -171,14 +172,14 @@ impl SourceRegistry {
                                         return;
                                     }
 
-                                    let backoff = std::time::Duration::from_secs(
-                                        (10u64 * 2u64.pow(consecutive_failures.min(8))).min(1800),
-                                    );
+                                    let backoff_ms = ((10u64 * 2u64.pow(consecutive_failures.min(8))).min(1800)) * 1000;
+                                    let jitter = rand::thread_rng().gen_range(0..=backoff_ms / 4);
+                                    let backoff = std::time::Duration::from_millis(backoff_ms + jitter);
                                     error!(
                                         source_id = source.id(),
                                         error = %e,
                                         consecutive_failures,
-                                        backoff_secs = backoff.as_secs(),
+                                        backoff_ms = backoff.as_millis() as u64,
                                         "Stream failed, reconnecting after backoff"
                                     );
 
@@ -332,9 +333,9 @@ impl SourceRegistry {
                                     // Additive backoff: server's retry-after + 30s per consecutive failure.
                                     // Avoids exponential death spiral (10s * 2^4 = 160s) while still
                                     // increasing backoff on repeated failures.
-                                    let effective = std::time::Duration::from_secs(
-                                        (retry_delay.as_secs() + 30 * (consecutive_failures as u64)).min(600),
-                                    );
+                                    let effective_ms = ((retry_delay.as_secs() + 30 * (consecutive_failures as u64)).min(600)) * 1000;
+                                    let jitter = rand::thread_rng().gen_range(0..=effective_ms / 4);
+                                    let effective = std::time::Duration::from_millis(effective_ms + jitter);
 
                                     warn!(
                                         source_id = source.id(),
@@ -363,9 +364,9 @@ impl SourceRegistry {
                                         &pool, source.id(), "error", consecutive_failures,
                                         Some(&e.to_string()), &health_tx,
                                     ).await;
-                                    std::time::Duration::from_secs(
-                                        (30u64 * 2u64.pow(consecutive_failures.min(4))).min(300),
-                                    )
+                                    let backoff_ms = ((30u64 * 2u64.pow(consecutive_failures.min(4))).min(300)) * 1000;
+                                    let jitter = rand::thread_rng().gen_range(0..=backoff_ms / 4);
+                                    std::time::Duration::from_millis(backoff_ms + jitter)
                                 };
 
                                 if consecutive_failures >= 8 {

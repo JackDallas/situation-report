@@ -11,6 +11,7 @@ use tracing::{debug, info};
 use sr_types::{EventType, Severity, SourceType};
 
 use crate::common::region_from_coords;
+use crate::rate_limit::check_rate_limit;
 use crate::{DataSource, InsertableEvent, SourceContext};
 
 /// MSCIO mirror of UKMTO warnings — lists maritime security warning PDFs.
@@ -687,6 +688,7 @@ impl DataSource for UkmtoWarningsSource {
             .timeout(Duration::from_secs(30))
             .send()
             .await?;
+        let resp = check_rate_limit(resp, "ukmto_warnings")?;
 
         let status = resp.status();
         if !status.is_success() {

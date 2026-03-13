@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
+use rand::Rng;
 use tokio::sync::broadcast;
 use tokio_tungstenite::connect_async;
 use tracing::{debug, error, info, warn};
@@ -448,12 +449,14 @@ impl DataSource for AisSource {
                     stream
                 }
                 Err(e) => {
+                    let jitter_ms = rand::thread_rng().gen_range(0..=backoff.as_millis() as u64 / 4);
+                    let total = backoff + Duration::from_millis(jitter_ms);
                     error!(
                         error = %e,
-                        backoff_secs = backoff.as_secs(),
+                        backoff_ms = total.as_millis() as u64,
                         "Failed to connect to aisstream.io, retrying after backoff"
                     );
-                    tokio::time::sleep(backoff).await;
+                    tokio::time::sleep(total).await;
                     backoff = (backoff * 2).min(MAX_BACKOFF);
                     continue;
                 }
@@ -468,12 +471,14 @@ impl DataSource for AisSource {
                 ))
                 .await
             {
+                let jitter_ms = rand::thread_rng().gen_range(0..=backoff.as_millis() as u64 / 4);
+                let total = backoff + Duration::from_millis(jitter_ms);
                 error!(
                     error = %e,
-                    backoff_secs = backoff.as_secs(),
+                    backoff_ms = total.as_millis() as u64,
                     "Failed to send AIS subscribe message, reconnecting"
                 );
-                tokio::time::sleep(backoff).await;
+                tokio::time::sleep(total).await;
                 backoff = (backoff * 2).min(MAX_BACKOFF);
                 continue;
             }
@@ -618,12 +623,14 @@ impl DataSource for AisSource {
             }
 
             // Transient disconnect — reconnect after backoff.
+            let jitter_ms = rand::thread_rng().gen_range(0..=backoff.as_millis() as u64 / 4);
+            let total = backoff + Duration::from_millis(jitter_ms);
             warn!(
-                backoff_secs = backoff.as_secs(),
+                backoff_ms = total.as_millis() as u64,
                 total_processed = message_count,
                 "AIS stream disconnected, reconnecting after backoff"
             );
-            tokio::time::sleep(backoff).await;
+            tokio::time::sleep(total).await;
             backoff = (backoff * 2).min(MAX_BACKOFF);
         }
     }

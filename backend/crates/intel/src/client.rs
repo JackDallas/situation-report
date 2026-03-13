@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
@@ -124,7 +125,9 @@ impl ClaudeClient {
         let mut last_err = String::new();
         for attempt in 0..4u32 {
             if attempt > 0 {
-                let delay = std::time::Duration::from_millis(500 * 2u64.pow(attempt));
+                let base = 500 * 2u64.pow(attempt);
+                let jitter = rand::thread_rng().gen_range(0..500);
+                let delay = std::time::Duration::from_millis(base + jitter);
                 tokio::time::sleep(delay).await;
             }
 

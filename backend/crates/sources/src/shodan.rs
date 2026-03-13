@@ -4,6 +4,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::Utc;
 use futures_util::StreamExt;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
@@ -657,9 +658,11 @@ impl DataSource for ShodanStream {
                 }
             }
 
-            // Exponential backoff: 1s -> 2s -> 4s -> ... -> 60s max
-            info!(backoff_secs = backoff_secs, "Reconnecting after backoff");
-            tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+            // Exponential backoff: 1s -> 2s -> 4s -> ... -> 60s max, with jitter
+            let jitter_ms = rand::thread_rng().gen_range(0..=backoff_secs * 1000 / 4);
+            let total = Duration::from_millis(backoff_secs * 1000 + jitter_ms);
+            info!(backoff_ms = total.as_millis() as u64, "Reconnecting after backoff");
+            tokio::time::sleep(total).await;
             backoff_secs = (backoff_secs * 2).min(60);
         }
     }

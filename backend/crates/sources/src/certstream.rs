@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use futures_util::StreamExt;
+use rand::Rng;
 use tokio::sync::broadcast;
 use tokio_tungstenite::connect_async;
 use tracing::{debug, error, info, warn};
@@ -125,8 +126,10 @@ impl DataSource for CertstreamSource {
                     ws
                 }
                 Err(e) => {
+                    let jitter_ms = rand::thread_rng().gen_range(0..=backoff_secs * 1000 / 4);
+                    let total = Duration::from_millis(backoff_secs * 1000 + jitter_ms);
                     error!(error = %e, "Failed to connect to CertStream");
-                    tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+                    tokio::time::sleep(total).await;
                     backoff_secs = (backoff_secs * 2).min(60);
                     continue;
                 }
@@ -253,7 +256,9 @@ impl DataSource for CertstreamSource {
             }
 
             // Exponential backoff before reconnect
-            tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
+            let jitter_ms = rand::thread_rng().gen_range(0..=backoff_secs * 1000 / 4);
+            let total = Duration::from_millis(backoff_secs * 1000 + jitter_ms);
+            tokio::time::sleep(total).await;
             backoff_secs = (backoff_secs * 2).min(60);
         }
     }
