@@ -490,7 +490,35 @@ impl SituationGraph {
             }
         });
 
-        // --- Pass D: Final orphan cleanup after ND cap ---
+        // --- Pass C2: Cap routine-event top-level situations ---
+        // Routine diplomatic/institutional/economic events should not flood the board.
+        let mut routine_standalone = 0usize;
+        let mut routine_parent = 0usize;
+        dtos.retain(|d| {
+            if d.parent_id.is_some() {
+                return true;
+            }
+            // Skip if it has conflict topics — those are genuine crises that happen to
+            // overlap with a routine event context (e.g., attack during a summit).
+            let has_conflict = d.topics.iter().any(|t| super::scoring::is_conflict_topic(t));
+            if has_conflict {
+                return true;
+            }
+            let is_routine = d.topics.iter().any(|t| super::scoring::is_routine_event_topic(t))
+                || super::scoring::is_routine_event_title(&d.title);
+            if !is_routine {
+                return true;
+            }
+            if d.child_ids.is_empty() {
+                routine_standalone += 1;
+                routine_standalone <= self.config.quality.routine_standalone_cap
+            } else {
+                routine_parent += 1;
+                routine_parent <= self.config.quality.routine_parent_cap
+            }
+        });
+
+        // --- Pass D: Final orphan cleanup after ND/routine caps ---
         {
             let final_ids: HashSet<Uuid> = dtos.iter().map(|d| d.id).collect();
             let mut promote = Vec::new();

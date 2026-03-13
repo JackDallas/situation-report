@@ -503,6 +503,48 @@ pub(crate) fn is_natural_disaster_title(title: &str) -> bool {
     .any(|p| lower.contains(p))
 }
 
+/// Returns true if the topic indicates a routine institutional, diplomatic, economic,
+/// or political event that is NOT an OSINT-relevant crisis (conflict, disaster, security).
+/// These clusters get severity-capped to prevent routine UN sessions, trade summits,
+/// elections, and economic reports from dominating the situation board.
+pub(crate) fn is_routine_event_topic(topic: &str) -> bool {
+    let lower = topic.to_lowercase();
+    let patterns = [
+        // Diplomatic / institutional
+        "summit", "session", "commission", "conference", "assembly",
+        "committee", "delegation", "negotiation", "diplomatic",
+        "diplomacy", "treaty", "accord", "resolution", "bilateral",
+        "multilateral", "ministerial", "plenary", "caucus",
+        // Elections / governance
+        "election", "ballot", "referendum", "inauguration", "legislation",
+        "parliamentary", "legislative", "judicial", "regulatory",
+        "governance", "constituency", "campaign",
+        // Economic / trade (non-crisis)
+        "trade-deal", "trade-agreement", "economic-forum", "fiscal-policy",
+        "monetary-policy", "interest-rate", "stock-market", "gdp",
+        "earnings", "quarterly-report", "central-bank", "imf",
+        "world-bank", "economic-outlook", "market-rally",
+        // Sports / entertainment / cultural (non-crisis)
+        "tournament", "championship", "olympics", "world-cup",
+        "ceremony", "festival", "award",
+    ];
+    patterns.iter().any(|p| lower.contains(p))
+}
+
+/// Returns true if the title text indicates a routine event (not a crisis).
+/// Complements topic-based detection for situations like "UN Commission Session".
+pub(crate) fn is_routine_event_title(title: &str) -> bool {
+    let lower = title.to_lowercase();
+    let patterns = [
+        "commission", "session", "summit", "conference", "assembly",
+        "committee", "forum", "symposium", "convention", "congress",
+        "inauguration", "election", "referendum", "bilateral talks",
+        "trade deal", "trade agreement", "quarterly report",
+        "annual meeting", "general debate", "plenary",
+    ];
+    patterns.iter().any(|p| lower.contains(p))
+}
+
 /// Conflict-indicating source types.
 pub(crate) fn is_conflict_source(st: SourceType) -> bool {
     matches!(

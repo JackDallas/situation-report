@@ -438,6 +438,10 @@ pub struct QualityConfig {
     pub nd_standalone_cap: usize,
     /// Natural disaster parent cap.
     pub nd_parent_cap: usize,
+    /// Routine event (diplomatic/institutional) standalone cap.
+    pub routine_standalone_cap: usize,
+    /// Routine event parent cap.
+    pub routine_parent_cap: usize,
 }
 
 impl Default for QualityConfig {
@@ -455,6 +459,8 @@ impl Default for QualityConfig {
             incoherent_topic_penalty: 0.6,
             nd_standalone_cap: 2,
             nd_parent_cap: 3,
+            routine_standalone_cap: 2,
+            routine_parent_cap: 1,
         }
     }
 }
@@ -912,6 +918,8 @@ impl PipelineConfig {
         env_override!(config.quality.incoherent_topic_penalty, "PIPELINE_QUALITY_INCOHERENT_TOPIC_PENALTY", f64);
         env_override!(config.quality.nd_standalone_cap, "PIPELINE_QUALITY_ND_STANDALONE_CAP", usize);
         env_override!(config.quality.nd_parent_cap, "PIPELINE_QUALITY_ND_PARENT_CAP", usize);
+        env_override!(config.quality.routine_standalone_cap, "PIPELINE_QUALITY_ROUTINE_STANDALONE_CAP", usize);
+        env_override!(config.quality.routine_parent_cap, "PIPELINE_QUALITY_ROUTINE_PARENT_CAP", usize);
 
         // Merge
         env_override!(config.merge.semantic_threshold, "PIPELINE_MERGE_SEMANTIC_THRESHOLD", f64);

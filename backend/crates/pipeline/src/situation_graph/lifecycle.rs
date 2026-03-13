@@ -13,7 +13,7 @@ use uuid::Uuid;
 use sr_embeddings::EmbeddingCache;
 use tracing::{debug, info};
 
-use super::scoring::{effective_source_diversity, is_conflict_source, is_conflict_topic, is_cyber_source, is_natural_disaster_topic};
+use super::scoring::{effective_source_diversity, is_conflict_source, is_conflict_topic, is_cyber_source, is_natural_disaster_topic, is_routine_event_topic, is_routine_event_title};
 use super::{SituationCluster, SituationGraph};
 
 // Re-export the shared enum from sr-types.
@@ -216,6 +216,8 @@ pub(crate) fn recompute_cluster_severity(cluster: &mut SituationCluster, severit
     let has_conflict_sources = cluster.source_types.iter().any(|s| is_conflict_source(*s));
     let has_conflict_topics = cluster.topics.iter().any(|t| is_conflict_topic(t));
     let is_natural_disaster = cluster.topics.iter().any(|t| is_natural_disaster_topic(t));
+    let is_routine_event = cluster.topics.iter().any(|t| is_routine_event_topic(t))
+        || is_routine_event_title(&cluster.title);
     let is_active_or_developing = matches!(
         cluster.phase,
         SituationPhase::Developing | SituationPhase::Active
@@ -224,13 +226,29 @@ pub(crate) fn recompute_cluster_severity(cluster: &mut SituationCluster, severit
     // Natural disaster clusters (wildfire, earthquake, flood, etc.) cap at high severity
     // unless they also have genuine conflict signals (e.g., arson in conflict zone).
     let disaster_only = is_natural_disaster && !has_conflict_topics;
-    let severity_cap = if disaster_only { Severity::High } else { Severity::Critical };
+    // Routine institutional/diplomatic/economic events (UN sessions, trade summits,
+    // elections, etc.) cap at MEDIUM — they are not OSINT-relevant crises.
+    // Override only if there are genuine conflict topics signaling a real crisis
+    // happening alongside the routine event (e.g., "UN session + bombing").
+    let routine_only = is_routine_event && !has_conflict_topics;
+    let severity_cap = if routine_only {
+        Severity::Medium
+    } else if disaster_only {
+        Severity::High
+    } else {
+        Severity::Critical
+    };
 
     let has_cyber_sources = cluster.source_types.iter().any(|s| is_cyber_source(*s));
     let source_diversity = cluster.source_types.len();
 
     // Compute severity from scratch based on current cluster state.
     // Multiple paths to escalation: conflict, cyber, environmental, or sheer corroboration.
+    //
+    // The HIGH conflict path requires conflict TOPICS (not just conflict sources).
+    // GDELT/GdeltGeo are classified as conflict sources but they report on everything
+    // (UN meetings, trade deals, sports, etc.). Having GDELT events alone is not
+    // evidence of conflict — the actual event topics must indicate armed conflict.
     let computed = if cluster.phase == SituationPhase::Active
         && has_conflict_sources
         && has_conflict_topics
@@ -240,11 +258,12 @@ pub(crate) fn recompute_cluster_severity(cluster: &mut SituationCluster, severit
         // Active armed conflict with heavy multi-source corroboration
         Severity::Critical.min(severity_cap)
     } else if is_active_or_developing
-        && (has_conflict_sources || has_conflict_topics)
+        && has_conflict_topics
         && cluster.event_count >= severity_config.high_min_events
         && source_diversity >= severity_config.medium_min_sources
     {
-        // Developing/active conflict situation with multi-source corroboration
+        // Developing/active conflict situation with multi-source corroboration.
+        // Requires conflict TOPICS — conflict sources alone (GDELT) are too broad.
         Severity::High.min(severity_cap)
     } else if is_active_or_developing
         && (has_cyber_sources || is_natural_disaster)
@@ -257,10 +276,10 @@ pub(crate) fn recompute_cluster_severity(cluster: &mut SituationCluster, severit
         && source_diversity >= severity_config.medium_min_sources
     {
         // Corroborated situation (2+ sources) with meaningful topic signal
-        Severity::Medium
+        Severity::Medium.min(severity_cap)
     } else if source_diversity >= severity_config.critical_min_sources && cluster.event_count >= severity_config.medium_min_events {
         // Any situation with 3+ independent sources is noteworthy
-        Severity::Medium
+        Severity::Medium.min(severity_cap)
     } else {
         Severity::Low
     };
