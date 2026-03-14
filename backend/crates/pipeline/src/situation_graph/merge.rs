@@ -241,14 +241,19 @@ impl SituationGraph {
                     && b.source_types.iter().all(|s| matches!(s,
                     SourceType::RssNews | SourceType::Gdelt | SourceType::GdeltGeo));
 
-                // Title-similarity fast path: if titles are highly similar and
-                // regions overlap (or both lack region data), merge regardless of
-                // embedding state. This handles duplicate clusters from restart
-                // and related sub-topics.
+                // Title-similarity fast path: merge clusters with similar titles.
+                // Very high similarity (≥0.80) merges regardless of region — identical
+                // titles obviously belong together even with different region codes.
+                // Moderate similarity (≥threshold) requires region overlap.
                 let both_regions_empty = a.region_codes.is_empty() && b.region_codes.is_empty();
-                let title_identity_merge = cluster_titles_similar >= self.config.merge.title_identity_threshold
-                    && (shared_region || both_regions_empty)
-                    && !cross_region;
+                let title_identity_merge = if cluster_titles_similar >= 0.80 {
+                    // Near-identical titles: skip region check entirely
+                    true
+                } else {
+                    cluster_titles_similar >= self.config.merge.title_identity_threshold
+                        && (shared_region || both_regions_empty)
+                        && !cross_region
+                };
 
                 // Guard: if both clusters have zero entities — allow through if
                 // titles are moderately similar in the same region
@@ -554,6 +559,420 @@ impl SituationGraph {
         }
 
         applied_merges
+    }
+
+    /// Topic-density consolidation pass — catches related situations that the
+    /// pairwise embedding merge misses.
+    ///
+    /// Algorithm:
+    /// 1. Collect top-level situations (no parent_id) with their entities and topics.
+    /// 2. Build entity groups: for each entity appearing in >=2 top-level situations,
+    ///    collect those situation IDs. Only considers "key entities" (>= min_entity_len chars).
+    /// 3. Within each entity group, for each pair of situations sharing the key entity,
+    ///    check if they also share >= min_shared_topics topics. If so, merge (larger absorbs smaller).
+    /// 4. Skips pairs in merge_rejections. Respects max_children and max_events caps.
+    /// 5. Returns merges with skip_audit=true (forced consolidation, no LLM audit needed).
+    pub fn consolidate_by_topic(&mut self) -> Vec<(Uuid, Uuid, bool)> {
+        let min_entity_len = self.config.merge.min_entity_len_consolidation;
+        let min_shared_topics = self.config.merge.min_shared_topics_consolidation;
+        let max_children = self.config.cluster_caps.max_children_per_parent;
+        let max_events = self.config.cluster_caps.max_events_per_parent;
+
+        // 1. Collect top-level situation IDs
+        let top_level_ids: Vec<Uuid> = self.clusters.iter()
+            .filter(|(_, c)| c.parent_id.is_none())
+            .map(|(&id, _)| id)
+            .collect();
+
+        if top_level_ids.len() < 2 {
+            return Vec::new();
+        }
+
+        // 2. Build entity -> set of top-level situation IDs (key entities only)
+        let mut entity_groups: HashMap<String, HashSet<Uuid>> = HashMap::new();
+        for &sid in &top_level_ids {
+            if let Some(cluster) = self.clusters.get(&sid) {
+                for entity in &cluster.entities {
+                    if entity.len() >= min_entity_len {
+                        entity_groups.entry(entity.clone()).or_default().insert(sid);
+                    }
+                }
+            }
+        }
+
+        // Only keep entities that appear in >=2 top-level situations
+        entity_groups.retain(|_, sids| sids.len() >= 2);
+
+        if entity_groups.is_empty() {
+            return Vec::new();
+        }
+
+        // Pre-count children per cluster for cap enforcement
+        let mut child_count: HashMap<Uuid, usize> = HashMap::new();
+        for c in self.clusters.values() {
+            if let Some(pid) = c.parent_id {
+                *child_count.entry(pid).or_default() += 1;
+            }
+        }
+
+        // 3. Collect candidate merges: pairs sharing a key entity + enough topics
+        let mut merge_candidates: Vec<(Uuid, Uuid)> = Vec::new();
+        let mut seen_pairs: HashSet<(Uuid, Uuid)> = HashSet::new();
+
+        for (_entity, sids) in &entity_groups {
+            let sid_vec: Vec<Uuid> = sids.iter().copied().collect();
+            for i in 0..sid_vec.len() {
+                for j in (i + 1)..sid_vec.len() {
+                    let a_id = sid_vec[i];
+                    let b_id = sid_vec[j];
+                    let canonical = if a_id < b_id { (a_id, b_id) } else { (b_id, a_id) };
+
+                    // Skip already-seen pairs and rejected pairs
+                    if seen_pairs.contains(&canonical) {
+                        continue;
+                    }
+                    seen_pairs.insert(canonical);
+
+                    if self.merge_rejections.contains_key(&canonical) {
+                        continue;
+                    }
+
+                    // Check shared topics
+                    let shared_topics = match (self.clusters.get(&a_id), self.clusters.get(&b_id)) {
+                        (Some(a), Some(b)) => a.topics.intersection(&b.topics).count(),
+                        _ => continue,
+                    };
+
+                    if shared_topics >= min_shared_topics {
+                        merge_candidates.push((a_id, b_id));
+                    }
+                }
+            }
+        }
+
+        if merge_candidates.is_empty() {
+            return Vec::new();
+        }
+
+        // 4. Apply merges: larger absorbs smaller
+        let mut applied_merges: Vec<(Uuid, Uuid, bool)> = Vec::new();
+
+        for (a_id, b_id) in merge_candidates {
+            // Re-check both are still top-level (a previous merge in this pass
+            // may have already made one a child)
+            let (a_events, a_parent) = match self.clusters.get(&a_id) {
+                Some(c) => (c.event_count, c.parent_id),
+                None => continue,
+            };
+            let (b_events, b_parent) = match self.clusters.get(&b_id) {
+                Some(c) => (c.event_count, c.parent_id),
+                None => continue,
+            };
+
+            if a_parent.is_some() || b_parent.is_some() {
+                continue;
+            }
+
+            // Determine parent (larger) and child (smaller)
+            let (parent_id, child_id) = if a_events >= b_events {
+                (a_id, b_id)
+            } else {
+                (b_id, a_id)
+            };
+
+            // Cap checks
+            let live_children = child_count.get(&parent_id).copied().unwrap_or(0);
+            let child_has_children = self.clusters.values().any(|c| c.parent_id == Some(child_id));
+            let effective_cap = if child_has_children { max_children + 1 } else { max_children };
+            if live_children >= effective_cap {
+                continue;
+            }
+            let parent_events = self.clusters.get(&parent_id).map(|c| c.event_count).unwrap_or(0);
+            if parent_events >= max_events {
+                continue;
+            }
+
+            // Grandparent guard: don't make a large parent a child
+            let child_own_children = self.clusters.values()
+                .filter(|c| c.parent_id == Some(child_id))
+                .count();
+            if child_own_children >= 3 {
+                continue;
+            }
+
+            // Perform the merge
+            if let Some(child) = self.clusters.get_mut(&child_id) {
+                child.parent_id = Some(parent_id);
+            }
+            *child_count.entry(parent_id).or_default() += 1;
+
+            // Reparent grandchildren to parent (same logic as merge_overlapping)
+            if !child_has_children {
+                let grandchild_ids: Vec<Uuid> = self.clusters.values()
+                    .filter(|c| c.parent_id == Some(child_id))
+                    .map(|c| c.id)
+                    .collect();
+                let current_children = child_count.get(&parent_id).copied().unwrap_or(0);
+                let can_absorb = max_children.saturating_sub(current_children);
+                for gc_id in grandchild_ids.iter().take(can_absorb) {
+                    if let Some(gc) = self.clusters.get_mut(gc_id) {
+                        gc.parent_id = Some(parent_id);
+                    }
+                    *child_count.entry(parent_id).or_default() += 1;
+                }
+                for gc_id in grandchild_ids.iter().skip(can_absorb) {
+                    if let Some(gc) = self.clusters.get_mut(gc_id) {
+                        gc.parent_id = None;
+                    }
+                }
+            }
+
+            // Merge child data into parent (same as merge_overlapping)
+            let (child_event_ids, child_source_types,
+                 child_event_titles, child_severity,
+                 child_first_seen, child_last_updated, child_coord_buffer, child_event_count,
+                 child_signal_count) = {
+                let child = self.clusters.get(&child_id).unwrap();
+                (
+                    child.event_ids.clone(),
+                    child.source_types.clone(),
+                    child.event_titles.clone(),
+                    child.severity,
+                    child.first_seen,
+                    child.last_updated,
+                    child.coord_buffer.clone(),
+                    child.event_count,
+                    child.signal_event_count,
+                )
+            };
+
+            let parent_child_count = self.clusters.values().filter(|c| c.parent_id == Some(parent_id)).count();
+
+            if let Some(parent) = self.clusters.get_mut(&parent_id) {
+                let source_types_before = parent.source_types.len();
+                parent.event_ids.extend(child_event_ids);
+                let max_eids = self.config.cluster_caps.max_event_ids;
+                if parent.event_ids.len() > max_eids {
+                    let drain_count = parent.event_ids.len() - max_eids;
+                    parent.event_ids.drain(..drain_count);
+                }
+                parent.event_count += child_event_count;
+                parent.signal_event_count += child_signal_count;
+                parent.source_types.extend(child_source_types);
+                for title in child_event_titles {
+                    if parent.event_titles.len() < self.config.cluster_caps.max_event_titles {
+                        parent.event_titles.push(title);
+                    }
+                }
+                if child_event_count >= self.config.quality.min_events_standalone {
+                    parent.severity = parent.severity.max(child_severity);
+                }
+                if child_first_seen < parent.first_seen {
+                    parent.first_seen = child_first_seen;
+                }
+                if child_last_updated > parent.last_updated {
+                    parent.last_updated = child_last_updated;
+                }
+                if !child_coord_buffer.is_empty() {
+                    parent.coord_buffer.extend(child_coord_buffer);
+                    if parent.coord_buffer.len() > 30 {
+                        parent.coord_buffer.drain(..parent.coord_buffer.len() - 30);
+                    }
+                    parent.centroid = Some(median_centroid(&parent.coord_buffer));
+                }
+                let source_types_added = parent.source_types.len().saturating_sub(source_types_before);
+                if source_types_added >= 1 {
+                    parent.has_ai_title = false;
+                    parent.title_signal_count_at_gen = 0;
+                }
+                if !parent.has_ai_title {
+                    let new_title = Self::generate_title(
+                        &parent.entities,
+                        &parent.topics,
+                        &parent.region_codes,
+                    );
+                    if Self::should_accept_title(&parent.title, &new_title, parent_child_count, parent.event_count, parent.phase, parent.severity) {
+                        parent.title = new_title;
+                    }
+                }
+            }
+
+            applied_merges.push((parent_id, child_id, true));
+            info!(
+                %parent_id, %child_id,
+                "Topic-density consolidation: merged (shared entity + topics)"
+            );
+        }
+
+        applied_merges
+    }
+
+    /// Return top-level situations for periodic LLM batch consolidation.
+    ///
+    /// Returns `(id, title, topics)` for each top-level situation (no parent_id).
+    /// The pipeline layer uses this to build entity-based groups and send them
+    /// to the LLM for grouping decisions.
+    pub fn situations_for_llm_consolidation(&self) -> Vec<(Uuid, String, Vec<String>)> {
+        self.clusters.values()
+            .filter(|c| c.parent_id.is_none())
+            .map(|c| (
+                c.id,
+                c.title.clone(),
+                c.entities.iter().cloned().collect::<Vec<_>>(),
+                c.topics.iter().cloned().collect::<Vec<_>>(),
+            ))
+            .map(|(id, title, _entities, topics)| (id, title, topics))
+            .collect()
+    }
+
+    /// Return top-level situations with entities for LLM consolidation grouping.
+    ///
+    /// Returns `(id, title, entities, topics, event_count)` for each top-level situation.
+    pub fn situations_for_llm_consolidation_with_entities(&self) -> Vec<(Uuid, String, Vec<String>, Vec<String>, usize)> {
+        self.clusters.values()
+            .filter(|c| c.parent_id.is_none())
+            .map(|c| (
+                c.id,
+                c.title.clone(),
+                c.entities.iter().cloned().collect(),
+                c.topics.iter().cloned().collect(),
+                c.event_count,
+            ))
+            .collect()
+    }
+
+    /// Apply LLM-decided consolidation merges.
+    ///
+    /// Takes groups of situation IDs (each group should be merged together).
+    /// Within each group, the situation with the most events becomes the parent.
+    /// Returns merges as `(parent_id, child_id, skip_audit=true)`.
+    pub fn apply_llm_consolidation_groups(&mut self, groups: &[Vec<Uuid>]) -> Vec<(Uuid, Uuid, bool)> {
+        let max_children = self.config.cluster_caps.max_children_per_parent;
+        let max_events = self.config.cluster_caps.max_events_per_parent;
+
+        let mut child_count: HashMap<Uuid, usize> = HashMap::new();
+        for c in self.clusters.values() {
+            if let Some(pid) = c.parent_id {
+                *child_count.entry(pid).or_default() += 1;
+            }
+        }
+
+        let mut applied: Vec<(Uuid, Uuid, bool)> = Vec::new();
+
+        for group in groups {
+            if group.len() < 2 {
+                continue;
+            }
+
+            // Find the largest situation in this group (by event_count)
+            let mut group_with_events: Vec<(Uuid, usize)> = group.iter()
+                .filter_map(|&id| {
+                    let c = self.clusters.get(&id)?;
+                    if c.parent_id.is_some() {
+                        return None; // already merged
+                    }
+                    Some((id, c.event_count))
+                })
+                .collect();
+
+            if group_with_events.len() < 2 {
+                continue;
+            }
+
+            // Sort descending by event_count — first is the parent
+            group_with_events.sort_by(|a, b| b.1.cmp(&a.1));
+            let parent_id = group_with_events[0].0;
+
+            for &(child_id, _) in group_with_events.iter().skip(1) {
+                // Cap checks
+                let live_children = child_count.get(&parent_id).copied().unwrap_or(0);
+                if live_children >= max_children {
+                    break;
+                }
+                let parent_events = self.clusters.get(&parent_id).map(|c| c.event_count).unwrap_or(0);
+                if parent_events >= max_events {
+                    break;
+                }
+
+                // Skip rejected pairs
+                let rejection_key = if parent_id < child_id { (parent_id, child_id) } else { (child_id, parent_id) };
+                if self.merge_rejections.contains_key(&rejection_key) {
+                    continue;
+                }
+
+                // Re-verify child is still top-level
+                if self.clusters.get(&child_id).is_some_and(|c| c.parent_id.is_some()) {
+                    continue;
+                }
+
+                // Perform the merge
+                if let Some(child) = self.clusters.get_mut(&child_id) {
+                    child.parent_id = Some(parent_id);
+                }
+                *child_count.entry(parent_id).or_default() += 1;
+
+                // Merge child data into parent (abbreviated — same pattern as consolidate_by_topic)
+                let (child_event_ids, child_source_types, child_event_titles,
+                     child_severity, child_first_seen, child_last_updated,
+                     child_coord_buffer, child_event_count, child_signal_count) = {
+                    let child = self.clusters.get(&child_id).unwrap();
+                    (
+                        child.event_ids.clone(),
+                        child.source_types.clone(),
+                        child.event_titles.clone(),
+                        child.severity,
+                        child.first_seen,
+                        child.last_updated,
+                        child.coord_buffer.clone(),
+                        child.event_count,
+                        child.signal_event_count,
+                    )
+                };
+
+                if let Some(parent) = self.clusters.get_mut(&parent_id) {
+                    parent.event_ids.extend(child_event_ids);
+                    let max_eids = self.config.cluster_caps.max_event_ids;
+                    if parent.event_ids.len() > max_eids {
+                        let drain_count = parent.event_ids.len() - max_eids;
+                        parent.event_ids.drain(..drain_count);
+                    }
+                    parent.event_count += child_event_count;
+                    parent.signal_event_count += child_signal_count;
+                    parent.source_types.extend(child_source_types);
+                    for title in child_event_titles {
+                        if parent.event_titles.len() < self.config.cluster_caps.max_event_titles {
+                            parent.event_titles.push(title);
+                        }
+                    }
+                    if child_event_count >= self.config.quality.min_events_standalone {
+                        parent.severity = parent.severity.max(child_severity);
+                    }
+                    if child_first_seen < parent.first_seen {
+                        parent.first_seen = child_first_seen;
+                    }
+                    if child_last_updated > parent.last_updated {
+                        parent.last_updated = child_last_updated;
+                    }
+                    if !child_coord_buffer.is_empty() {
+                        parent.coord_buffer.extend(child_coord_buffer);
+                        if parent.coord_buffer.len() > 30 {
+                            parent.coord_buffer.drain(..parent.coord_buffer.len() - 30);
+                        }
+                        parent.centroid = Some(median_centroid(&parent.coord_buffer));
+                    }
+                    parent.has_ai_title = false;
+                    parent.title_signal_count_at_gen = 0;
+                }
+
+                applied.push((parent_id, child_id, true));
+                info!(
+                    %parent_id, %child_id,
+                    "LLM consolidation: merged by batch grouping"
+                );
+            }
+        }
+
+        applied
     }
 
     /// Undo a merge: clear the child's parent_id so it becomes a standalone cluster again.

@@ -65,6 +65,7 @@ async fn main() -> anyhow::Result<()> {
                             status: ev.status,
                             consecutive_failures: ev.consecutive_failures,
                             last_error: ev.last_error,
+                            last_success: ev.last_success,
                         });
                     }
                     Err(broadcast::error::RecvError::Lagged(n)) => {

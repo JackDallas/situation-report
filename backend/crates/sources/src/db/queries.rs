@@ -874,10 +874,14 @@ pub async fn upsert_situation_summary(
     key_entities: &serde_json::Value,
     key_dates: &serde_json::Value,
 ) -> anyhow::Result<()> {
+    // Use a CTE to only insert if the parent situation exists,
+    // avoiding FK violations when the summary is generated before
+    // the situation row is persisted.
     sqlx::query(
         r#"
         INSERT INTO situation_summaries (situation_id, summary_text, key_entities, key_dates, updated_at)
-        VALUES ($1, $2, $3, $4, NOW())
+        SELECT $1, $2, $3, $4, NOW()
+        WHERE EXISTS (SELECT 1 FROM situations WHERE id = $1)
         ON CONFLICT (situation_id) DO UPDATE SET
             summary_text = EXCLUDED.summary_text,
             key_entities = EXCLUDED.key_entities,

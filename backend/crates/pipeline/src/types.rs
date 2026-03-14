@@ -48,6 +48,7 @@ pub enum PublishEvent {
         status: String,
         consecutive_failures: u32,
         last_error: Option<String>,
+        last_success: Option<DateTime<Utc>>,
     },
 }
 

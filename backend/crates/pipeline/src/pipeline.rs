@@ -290,6 +290,11 @@ struct MergeAuditResult {
     child_id: uuid::Uuid,
 }
 
+/// Result from an async LLM batch consolidation — groups of situation IDs to merge.
+struct ConsolidationResult {
+    groups: Vec<Vec<uuid::Uuid>>,
+}
+
 // NarrativeState is defined in core.rs and re-exported from lib.rs
 
 /// Load alert rules from the database.
@@ -973,6 +978,9 @@ async fn run_pipeline(
     // Merge audit infrastructure — Qwen post-hoc validation of situation merges
     let (merge_audit_tx, mut merge_audit_rx) = mpsc::channel::<MergeAuditResult>(32);
 
+    // LLM batch consolidation infrastructure — receives groups from async LLM calls
+    let (consolidation_tx, mut consolidation_rx) = mpsc::channel::<ConsolidationResult>(8);
+
     // LLM health check watchdog — periodic background check, logs status.
     if let Some(ref llm) = llm_client {
         let llm = llm.clone();
@@ -1320,6 +1328,7 @@ async fn run_pipeline(
                     &llm_client,
                     &gemini_client,
                     &merge_audit_tx,
+                    &consolidation_tx.clone(),
                     &claude_client,
                     &budget,
                     &title_tx,
@@ -1536,6 +1545,17 @@ async fn run_pipeline(
             }
             Some(result) = merge_audit_rx.recv() => {
                 core.graph.unmerge(result.parent_id, result.child_id);
+            }
+            Some(result) = consolidation_rx.recv() => {
+                if !result.groups.is_empty() {
+                    let merges = core.graph.apply_llm_consolidation_groups(&result.groups);
+                    if !merges.is_empty() {
+                        info!(
+                            merge_count = merges.len(),
+                            "Applied LLM batch consolidation merges"
+                        );
+                    }
+                }
             }
             // Ollama health check moved to background task (see above) — no longer blocks select! loop
             _ = retro_sweep_interval.tick() => {
@@ -1880,6 +1900,7 @@ fn tick_situations(
     llm_client: &Option<Arc<LlmClient>>,
     gemini_client: &Option<Arc<GeminiClient>>,
     merge_audit_tx: &mpsc::Sender<MergeAuditResult>,
+    consolidation_tx: &mpsc::Sender<ConsolidationResult>,
     claude_client: &Option<Arc<ClaudeClient>>,
     budget: &Arc<BudgetManager>,
     title_tx: &mpsc::Sender<TitleResult>,
@@ -1932,6 +1953,113 @@ fn tick_situations(
                                 let _ = tx.send(MergeAuditResult { parent_id, child_id }).await;
                             }
                             Err(e) => { warn!(%parent_id, %child_id, error = %e, "Merge audit failed, skipping"); }
+                        }
+                    }
+                });
+            }
+        }
+    }
+
+    // ── LLM batch consolidation (every N ticks) ─────────────────────────
+    // Groups related top-level situations by shared entities, sends to LLM
+    // for batch grouping. Results arrive via consolidation_rx channel and
+    // are applied on a subsequent select! iteration.
+    let consolidation_interval = core.config().merge.consolidation_interval_ticks;
+    if consolidation_interval > 0
+        && core.tick_count() % consolidation_interval == 0
+        && !gpu_paused
+    {
+        if let Some(llm) = llm_client {
+            let situations = core.graph.situations_for_llm_consolidation_with_entities();
+            let min_entity_len = core.config().merge.min_entity_len_consolidation;
+            let min_group_size = core.config().merge.llm_consolidation_min_group;
+
+            // Build entity groups: entity -> list of situation indices
+            let mut entity_to_sids: HashMap<String, Vec<usize>> = HashMap::new();
+            for (idx, (_id, _title, entities, _topics, _event_count)) in situations.iter().enumerate() {
+                for entity in entities {
+                    if entity.len() >= min_entity_len {
+                        entity_to_sids.entry(entity.clone()).or_default().push(idx);
+                    }
+                }
+            }
+
+            // Only consider entities appearing in >= min_group_size situations
+            entity_to_sids.retain(|_, sids| sids.len() >= min_group_size);
+
+            // Build distinct groups of situation indices (union of overlapping entity groups)
+            let mut processed: HashSet<usize> = HashSet::new();
+            let mut llm_groups: Vec<Vec<usize>> = Vec::new();
+            for (_entity, sids) in &entity_to_sids {
+                let unprocessed: Vec<usize> = sids.iter()
+                    .copied()
+                    .filter(|idx| !processed.contains(idx))
+                    .collect();
+                if unprocessed.len() >= 2 {
+                    for &idx in &unprocessed {
+                        processed.insert(idx);
+                    }
+                    llm_groups.push(unprocessed);
+                }
+            }
+
+            // Send each entity-group to LLM for batch consolidation
+            for group_indices in llm_groups {
+                if group_indices.len() < 2 || group_indices.len() > 20 {
+                    continue;
+                }
+
+                // Build numbered titles (1-based) and map back to situation IDs
+                let titled: Vec<(usize, String, uuid::Uuid)> = group_indices.iter()
+                    .enumerate()
+                    .filter_map(|(i, &idx)| {
+                        let (id, title, _, _, _) = &situations[idx];
+                        Some((i + 1, title.clone(), *id))
+                    })
+                    .collect();
+
+                let titles_for_llm: Vec<(usize, String)> = titled.iter()
+                    .map(|(num, title, _)| (*num, title.clone()))
+                    .collect();
+
+                // Map from 1-based LLM index -> situation UUID
+                let id_map: Vec<(usize, uuid::Uuid)> = titled.iter()
+                    .map(|(num, _, id)| (*num, *id))
+                    .collect();
+
+                let llm = Arc::clone(llm);
+                let tx = consolidation_tx.clone();
+                tokio::spawn(async move {
+                    match llm.consolidate_situations(
+                        &titles_for_llm.iter().map(|(n, t)| (*n, t.as_str())).collect::<Vec<_>>()
+                    ).await {
+                        Ok(groups) if !groups.is_empty() => {
+                            // Convert 1-based indices to UUIDs
+                            let uuid_groups: Vec<Vec<uuid::Uuid>> = groups.into_iter()
+                                .filter_map(|group| {
+                                    let uuids: Vec<uuid::Uuid> = group.iter()
+                                        .filter_map(|&num| {
+                                            id_map.iter()
+                                                .find(|(n, _)| *n == num)
+                                                .map(|(_, id)| *id)
+                                        })
+                                        .collect();
+                                    if uuids.len() >= 2 { Some(uuids) } else { None }
+                                })
+                                .collect();
+                            if !uuid_groups.is_empty() {
+                                info!(
+                                    group_count = uuid_groups.len(),
+                                    "LLM batch consolidation: sending merge groups"
+                                );
+                                let _ = tx.send(ConsolidationResult { groups: uuid_groups }).await;
+                            }
+                        }
+                        Ok(_) => {
+                            debug!("LLM batch consolidation: no merge groups suggested");
+                        }
+                        Err(e) => {
+                            debug!(error = %e, "LLM batch consolidation failed");
                         }
                     }
                 });

@@ -161,6 +161,17 @@ impl PipelineCore {
             };
             merges = self.graph.merge_overlapping(cache_ref);
 
+            // Topic-density consolidation: catch related situations that pairwise
+            // embedding merge misses (shared key entities + shared topics).
+            let topic_merges = self.graph.consolidate_by_topic();
+            if !topic_merges.is_empty() {
+                info!(
+                    count = topic_merges.len(),
+                    "Topic-density consolidation produced merges"
+                );
+                merges.extend(topic_merges);
+            }
+
             self.graph.split_divergent();
 
             if self.tick_count % 4 == 0 {

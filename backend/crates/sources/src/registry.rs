@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use rand::Rng;
 use sqlx::PgPool;
 use tokio::sync::broadcast;
@@ -19,6 +19,7 @@ pub struct SourceHealthEvent {
     pub status: String,
     pub consecutive_failures: u32,
     pub last_error: Option<String>,
+    pub last_success: Option<DateTime<Utc>>,
 }
 
 /// Registry of all data sources. Manages their lifecycle.
@@ -425,11 +426,22 @@ async fn update_and_emit_health(
     if let Err(e) = sr_db::queries::update_source_health(pool, source_id, status, last_error).await {
         warn!(source_id, error = %e, "Failed to update source health");
     }
+    // Compute last_success to match DB logic: NOW() when healthy, otherwise read from DB
+    let last_success = if status == "healthy" {
+        Some(Utc::now())
+    } else {
+        sr_db::queries::get_source_health(pool, source_id)
+            .await
+            .ok()
+            .flatten()
+            .and_then(|h| h.last_success)
+    };
     let _ = health_tx.send(SourceHealthEvent {
         source_id: source_id.to_owned(),
         status: status.to_owned(),
         consecutive_failures,
         last_error: last_error.map(|s| s.to_owned()),
+        last_success,
     });
 
     // Alert on first transition to error (consecutive_failures == 1 means just transitioned)

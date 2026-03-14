@@ -181,10 +181,39 @@ pub struct MergeConfig {
     pub vector_boost_title_similar: f64,
     /// Vector-primary: boost when shared_topics >= 2.
     pub vector_boost_shared_topics: f64,
+
+    // -- Topic-density consolidation --
+    /// Min shared topics for entity-group consolidation (topic-density pass).
+    /// Pairs sharing a key entity must also share at least this many topics to merge.
+    #[serde(default = "default_min_shared_topics_consolidation")]
+    pub min_shared_topics_consolidation: usize,
+    /// Min entity length (chars) to qualify as a "key entity" for consolidation.
+    /// Filters out short/noisy entity strings like country codes.
+    #[serde(default = "default_min_entity_len_consolidation")]
+    pub min_entity_len_consolidation: usize,
+    /// How often (in sweep ticks) to run LLM batch consolidation.
+    /// 0 disables LLM consolidation. Default: 5.
+    #[serde(default = "default_consolidation_interval_ticks")]
+    pub consolidation_interval_ticks: u64,
+    /// Min situations sharing an entity before LLM consolidation considers that entity group.
+    #[serde(default = "default_llm_consolidation_min_group")]
+    pub llm_consolidation_min_group: usize,
 }
 
 fn default_true() -> bool {
     true
+}
+fn default_min_shared_topics_consolidation() -> usize {
+    3
+}
+fn default_min_entity_len_consolidation() -> usize {
+    3
+}
+fn default_consolidation_interval_ticks() -> u64 {
+    5
+}
+fn default_llm_consolidation_min_group() -> usize {
+    3
 }
 
 impl Default for MergeConfig {
@@ -229,6 +258,10 @@ impl Default for MergeConfig {
             vector_boost_region: 0.03,
             vector_boost_title_similar: 0.05,
             vector_boost_shared_topics: 0.05,
+            min_shared_topics_consolidation: 3,
+            min_entity_len_consolidation: 3,
+            consolidation_interval_ticks: 5,
+            llm_consolidation_min_group: 3,
         }
     }
 }
