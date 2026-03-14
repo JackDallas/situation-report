@@ -191,13 +191,13 @@ impl LlmClient {
         let _permit = self.gpu_semaphore.acquire().await
             .map_err(|_| anyhow::anyhow!("GPU semaphore closed"))?;
 
-        let user_msg = prompts::enrichment_user(
+        let user_msg = format!("{}\n/no_think", prompts::enrichment_user(
             &article.title,
             &article.description,
             article.source_country.as_deref(),
             article.language_hint.as_deref(),
             article.source_type.as_deref(),
-        );
+        ));
 
         let request = ChatRequest {
             messages: vec![
@@ -266,6 +266,10 @@ impl LlmClient {
         let _permit = self.gpu_semaphore.acquire().await
             .map_err(|_| anyhow::anyhow!("GPU semaphore closed"))?;
 
+        // Append /no_think to suppress Qwen 3.5 chain-of-thought reasoning,
+        // which consumes all output tokens leaving no room for actual content.
+        let user_content = format!("{user}\n/no_think");
+
         let request = ChatRequest {
             messages: vec![
                 ChatMessage {
@@ -274,7 +278,7 @@ impl LlmClient {
                 },
                 ChatMessage {
                     role: "user".to_string(),
-                    content: user.to_string(),
+                    content: user_content,
                 },
             ],
             temperature: Some(0.0),
@@ -368,6 +372,8 @@ impl LlmClient {
         let _permit = self.gpu_semaphore.acquire().await
             .map_err(|_| anyhow::anyhow!("GPU semaphore closed"))?;
 
+        let user_content = format!("{user}\n/no_think");
+
         let request = ChatRequest {
             messages: vec![
                 ChatMessage {
@@ -376,7 +382,7 @@ impl LlmClient {
                 },
                 ChatMessage {
                     role: "user".to_string(),
-                    content: user.to_string(),
+                    content: user_content,
                 },
             ],
             temperature: Some(0.1),
@@ -439,9 +445,7 @@ impl LlmClient {
             "Are these two situations about the same underlying event or conflict?\n\n\
              Situation A: {}\nTopics: {}\n\n\
              Situation B: {}\nTopics: {}\n\n\
-             Think carefully about whether these are truly the same situation or just \
-             superficially similar (e.g. same region but different events). \
-             After reasoning, answer ONLY 'yes' or 'no'.",
+             Answer ONLY 'yes' or 'no'.\n/no_think",
             parent_title,
             parent_topics.join(", "),
             child_title,
