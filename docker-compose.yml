@@ -125,7 +125,6 @@ services:
       --parallel 1
       --ctx-size 8192
       --flash-attn on
-      --think off
     volumes:
       - llama-models:/models
     deploy:

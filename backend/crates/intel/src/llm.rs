@@ -28,6 +28,11 @@ struct ChatRequest {
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<ResponseFormat>,
+    /// Controls Qwen 3.5 thinking mode. Set to false for direct output
+    /// (titles, enrichment, analysis). True for narratives that benefit
+    /// from chain-of-thought reasoning.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<bool>,
     stream: bool,
 }
 
@@ -215,6 +220,7 @@ impl LlmClient {
                     schema: enrichment_schema(),
                 },
             }),
+            thinking: Some(false),
             stream: false,
         };
 
@@ -274,6 +280,7 @@ impl LlmClient {
             temperature: Some(0.0),
             max_tokens: Some(max_tokens),
             response_format: None,
+            thinking: Some(false),
             stream: false,
         };
 
@@ -321,6 +328,7 @@ impl LlmClient {
             temperature: Some(0.1),
             max_tokens: None,
             response_format: None,
+            thinking: Some(true),
             stream: false,
         };
 
@@ -381,6 +389,7 @@ impl LlmClient {
                     schema: analysis_schema(),
                 },
             }),
+            thinking: Some(false),
             stream: false,
         };
 
@@ -453,6 +462,7 @@ impl LlmClient {
             temperature: Some(0.0),
             max_tokens: Some(100),
             response_format: None,
+            thinking: Some(false),
             stream: false,
         };
 
