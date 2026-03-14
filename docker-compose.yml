@@ -106,7 +106,7 @@ services:
         apk add --no-cache curl
         echo "Downloading Qwen3.5-9B Q4_K_M GGUF (~5.5GB)..."
         curl -L --progress-bar -o /models/qwen3.5-9b-q4_k_m.gguf \
-          "https://huggingface.co/bartowski/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf"
+          "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf"
     volumes:
       - llama-models:/models
     restart: "no"
