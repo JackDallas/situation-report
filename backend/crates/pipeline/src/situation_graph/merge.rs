@@ -565,11 +565,12 @@ impl SituationGraph {
     /// pairwise embedding merge misses.
     ///
     /// Algorithm:
-    /// 1. Collect top-level situations (no parent_id) with their entities and topics.
-    /// 2. Build entity groups: for each entity appearing in >=2 top-level situations,
-    ///    collect those situation IDs. Only considers "key entities" (>= min_entity_len chars).
-    /// 3. Within each entity group, for each pair of situations sharing the key entity,
-    ///    check if they also share >= min_shared_topics topics. If so, merge (larger absorbs smaller).
+    /// 1. Collect top-level situations (no parent_id) with their topics and entities.
+    /// 2. Build topic groups: for each topic appearing in >=2 top-level situations,
+    ///    collect those situation IDs. Only considers topics >= min_entity_len chars.
+    /// 3. For each pair found via shared topics, check if they share >= min_shared_topics
+    ///    topics total. If so, merge (larger absorbs smaller).
+    ///    Also merges pairs sharing a key entity + any shared topic.
     /// 4. Skips pairs in merge_rejections. Respects max_children and max_events caps.
     /// 5. Returns merges with skip_audit=true (forced consolidation, no LLM audit needed).
     pub fn consolidate_by_topic(&mut self) -> Vec<(Uuid, Uuid, bool)> {
@@ -588,7 +589,21 @@ impl SituationGraph {
             return Vec::new();
         }
 
-        // 2. Build entity -> set of top-level situation IDs (key entities only)
+        // 2. Build topic -> set of top-level situation IDs
+        // Use topics as the primary grouping signal (entities are often empty
+        // because enrichment populates topics but not always entities).
+        let mut topic_groups: HashMap<String, HashSet<Uuid>> = HashMap::new();
+        for &sid in &top_level_ids {
+            if let Some(cluster) = self.clusters.get(&sid) {
+                for topic in &cluster.topics {
+                    if topic.len() >= min_entity_len {
+                        topic_groups.entry(topic.clone()).or_default().insert(sid);
+                    }
+                }
+            }
+        }
+
+        // Also build entity groups for entity-based matching
         let mut entity_groups: HashMap<String, HashSet<Uuid>> = HashMap::new();
         for &sid in &top_level_ids {
             if let Some(cluster) = self.clusters.get(&sid) {
@@ -600,10 +615,11 @@ impl SituationGraph {
             }
         }
 
-        // Only keep entities that appear in >=2 top-level situations
+        // Only keep topics/entities that appear in >=2 top-level situations
+        topic_groups.retain(|_, sids| sids.len() >= 2);
         entity_groups.retain(|_, sids| sids.len() >= 2);
 
-        if entity_groups.is_empty() {
+        if topic_groups.is_empty() && entity_groups.is_empty() {
             return Vec::new();
         }
 
@@ -615,11 +631,12 @@ impl SituationGraph {
             }
         }
 
-        // 3. Collect candidate merges: pairs sharing a key entity + enough topics
+        // 3. Collect candidate merges from topic groups
         let mut merge_candidates: Vec<(Uuid, Uuid)> = Vec::new();
         let mut seen_pairs: HashSet<(Uuid, Uuid)> = HashSet::new();
 
-        for (_entity, sids) in &entity_groups {
+        // Topic-based: pairs sharing a topic, then check if they share >= N total topics
+        for (_topic, sids) in &topic_groups {
             let sid_vec: Vec<Uuid> = sids.iter().copied().collect();
             for i in 0..sid_vec.len() {
                 for j in (i + 1)..sid_vec.len() {
@@ -627,7 +644,6 @@ impl SituationGraph {
                     let b_id = sid_vec[j];
                     let canonical = if a_id < b_id { (a_id, b_id) } else { (b_id, a_id) };
 
-                    // Skip already-seen pairs and rejected pairs
                     if seen_pairs.contains(&canonical) {
                         continue;
                     }
@@ -637,13 +653,42 @@ impl SituationGraph {
                         continue;
                     }
 
-                    // Check shared topics
                     let shared_topics = match (self.clusters.get(&a_id), self.clusters.get(&b_id)) {
                         (Some(a), Some(b)) => a.topics.intersection(&b.topics).count(),
                         _ => continue,
                     };
 
                     if shared_topics >= min_shared_topics {
+                        merge_candidates.push((a_id, b_id));
+                    }
+                }
+            }
+        }
+
+        // Entity-based: pairs sharing a key entity + at least 1 shared topic
+        for (_entity, sids) in &entity_groups {
+            let sid_vec: Vec<Uuid> = sids.iter().copied().collect();
+            for i in 0..sid_vec.len() {
+                for j in (i + 1)..sid_vec.len() {
+                    let a_id = sid_vec[i];
+                    let b_id = sid_vec[j];
+                    let canonical = if a_id < b_id { (a_id, b_id) } else { (b_id, a_id) };
+
+                    if seen_pairs.contains(&canonical) {
+                        continue;
+                    }
+                    seen_pairs.insert(canonical);
+
+                    if self.merge_rejections.contains_key(&canonical) {
+                        continue;
+                    }
+
+                    let shared_topics = match (self.clusters.get(&a_id), self.clusters.get(&b_id)) {
+                        (Some(a), Some(b)) => a.topics.intersection(&b.topics).count(),
+                        _ => continue,
+                    };
+
+                    if shared_topics >= 1 {
                         merge_candidates.push((a_id, b_id));
                     }
                 }

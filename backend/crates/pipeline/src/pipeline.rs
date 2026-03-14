@@ -1961,9 +1961,9 @@ fn tick_situations(
     }
 
     // ── LLM batch consolidation (every N ticks) ─────────────────────────
-    // Groups related top-level situations by shared entities, sends to LLM
-    // for batch grouping. Results arrive via consolidation_rx channel and
-    // are applied on a subsequent select! iteration.
+    // Groups related top-level situations by shared topics (or entities),
+    // sends to LLM for batch grouping. Results arrive via consolidation_rx
+    // channel and are applied on a subsequent select! iteration.
     let consolidation_interval = core.config().merge.consolidation_interval_ticks;
     if consolidation_interval > 0
         && core.tick_count() % consolidation_interval == 0
@@ -1974,23 +1974,33 @@ fn tick_situations(
             let min_entity_len = core.config().merge.min_entity_len_consolidation;
             let min_group_size = core.config().merge.llm_consolidation_min_group;
 
-            // Build entity groups: entity -> list of situation indices
-            let mut entity_to_sids: HashMap<String, Vec<usize>> = HashMap::new();
-            for (idx, (_id, _title, entities, _topics, _event_count)) in situations.iter().enumerate() {
-                for entity in entities {
-                    if entity.len() >= min_entity_len {
-                        entity_to_sids.entry(entity.clone()).or_default().push(idx);
+            // Build topic groups: topic -> list of situation indices
+            // Topics are the primary signal (entities are often empty).
+            let mut topic_to_sids: HashMap<String, Vec<usize>> = HashMap::new();
+            for (idx, (_id, _title, _entities, topics, _event_count)) in situations.iter().enumerate() {
+                for topic in topics {
+                    if topic.len() >= min_entity_len {
+                        topic_to_sids.entry(topic.clone()).or_default().push(idx);
                     }
                 }
             }
 
-            // Only consider entities appearing in >= min_group_size situations
-            entity_to_sids.retain(|_, sids| sids.len() >= min_group_size);
+            // Also add entity groups as a secondary signal
+            for (idx, (_id, _title, entities, _topics, _event_count)) in situations.iter().enumerate() {
+                for entity in entities {
+                    if entity.len() >= min_entity_len {
+                        topic_to_sids.entry(entity.clone()).or_default().push(idx);
+                    }
+                }
+            }
 
-            // Build distinct groups of situation indices (union of overlapping entity groups)
+            // Only consider topics/entities appearing in >= min_group_size situations
+            topic_to_sids.retain(|_, sids| sids.len() >= min_group_size);
+
+            // Build distinct groups of situation indices (union of overlapping topic groups)
             let mut processed: HashSet<usize> = HashSet::new();
             let mut llm_groups: Vec<Vec<usize>> = Vec::new();
-            for (_entity, sids) in &entity_to_sids {
+            for (_topic, sids) in &topic_to_sids {
                 let unprocessed: Vec<usize> = sids.iter()
                     .copied()
                     .filter(|idx| !processed.contains(idx))
