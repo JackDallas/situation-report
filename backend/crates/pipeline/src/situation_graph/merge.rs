@@ -619,7 +619,54 @@ impl SituationGraph {
         topic_groups.retain(|_, sids| sids.len() >= 2);
         entity_groups.retain(|_, sids| sids.len() >= 2);
 
-        if topic_groups.is_empty() && entity_groups.is_empty() {
+        // 2b. Build title word sets for Jaccard-based title consolidation.
+        // This catches near-duplicate situations with empty topics but similar titles.
+        let title_jaccard_threshold = self.config.merge.title_jaccard_consolidation;
+        let title_words: HashMap<Uuid, HashSet<String>> = top_level_ids.iter()
+            .filter_map(|&sid| {
+                let cluster = self.clusters.get(&sid)?;
+                let words: HashSet<String> = cluster.title.to_lowercase()
+                    .split(|c: char| !c.is_alphanumeric())
+                    .filter(|w| w.len() >= 3)
+                    .filter(|w| !matches!(*w,
+                        // English stopwords
+                        "the" | "and" | "for" | "with" | "from" | "that" | "this"
+                        | "into" | "over" | "has" | "are" | "was" | "were" | "been"
+                        | "have" | "will" | "not" | "but" | "its" | "says" | "new"
+                        | "after" | "amid" | "near" | "against"
+                        // Region/geography stopwords — prevent "{Country} — REGION" false matches
+                        | "middle" | "east" | "west" | "north" | "south" | "southeast"
+                        | "asia" | "africa" | "europe" | "america" | "americas" | "pacific"
+                        | "atlantic" | "eastern" | "western" | "southern" | "northern"
+                        | "central" | "region" | "global"
+                    ))
+                    // Stem-normalize by truncating to 4 chars: "iranian"→"iran", "israeli"→"isra"
+                    .map(|w| {
+                        let stem: String = w.chars().take(4).collect();
+                        stem
+                    })
+                    .collect();
+                if words.is_empty() { None } else { Some((sid, words)) }
+            })
+            .collect();
+
+        // Build word -> situation IDs index for efficient pair generation
+        let mut word_groups: HashMap<String, HashSet<Uuid>> = HashMap::new();
+        for (&sid, words) in &title_words {
+            for word in words {
+                word_groups.entry(word.clone()).or_default().insert(sid);
+            }
+        }
+        word_groups.retain(|_, sids| sids.len() >= 2);
+
+        // Track word frequency for specificity filtering: a "specific" word
+        // appears in ≤8 titles. Shared words that are ALL generic (>8 titles)
+        // won't count as valid Jaccard matches.
+        let word_freq: HashMap<&str, usize> = word_groups.iter()
+            .map(|(w, sids)| (w.as_str(), sids.len()))
+            .collect();
+
+        if topic_groups.is_empty() && entity_groups.is_empty() && word_groups.is_empty() {
             return Vec::new();
         }
 
@@ -695,6 +742,54 @@ impl SituationGraph {
             }
         }
 
+        // Title-word Jaccard: pairs sharing a title word, then check Jaccard >= threshold.
+        // Catches near-duplicate situations with empty topics but similar titles,
+        // e.g. "Iran-Israel Conflict Escalates" + "Iran-Israel Conflict Escalation".
+        if title_jaccard_threshold > 0.0 {
+            for (_word, sids) in &word_groups {
+                let sid_vec: Vec<Uuid> = sids.iter().copied().collect();
+                for i in 0..sid_vec.len() {
+                    for j in (i + 1)..sid_vec.len() {
+                        let a_id = sid_vec[i];
+                        let b_id = sid_vec[j];
+                        let canonical = if a_id < b_id { (a_id, b_id) } else { (b_id, a_id) };
+
+                        if seen_pairs.contains(&canonical) {
+                            continue;
+                        }
+                        seen_pairs.insert(canonical);
+
+                        if self.merge_rejections.contains_key(&canonical) {
+                            continue;
+                        }
+
+                        // Compute Jaccard similarity on title words
+                        let (a_words, b_words) = match (title_words.get(&a_id), title_words.get(&b_id)) {
+                            (Some(a), Some(b)) => (a, b),
+                            _ => continue,
+                        };
+                        let shared: Vec<&String> = a_words.intersection(b_words).collect();
+                        let union = a_words.union(b_words).count();
+                        // Require at least 2 shared stemmed words
+                        if union == 0 || shared.len() < 2 {
+                            continue;
+                        }
+                        // At least one shared word must be "specific" (appears in ≤8 titles)
+                        let has_specific = shared.iter().any(|w| {
+                            word_freq.get(w.as_str()).copied().unwrap_or(0) <= 8
+                        });
+                        if !has_specific {
+                            continue;
+                        }
+                        let jaccard = shared.len() as f64 / union as f64;
+                        if jaccard >= title_jaccard_threshold {
+                            merge_candidates.push((a_id, b_id));
+                        }
+                    }
+                }
+            }
+        }
+
         if merge_candidates.is_empty() {
             return Vec::new();
         }
@@ -737,22 +832,14 @@ impl SituationGraph {
                 continue;
             }
 
-            // Grandparent guard: don't make a large parent a child
-            let child_own_children = self.clusters.values()
-                .filter(|c| c.parent_id == Some(child_id))
-                .count();
-            if child_own_children >= 3 {
-                continue;
-            }
-
             // Perform the merge
             if let Some(child) = self.clusters.get_mut(&child_id) {
                 child.parent_id = Some(parent_id);
             }
             *child_count.entry(parent_id).or_default() += 1;
 
-            // Reparent grandchildren to parent (same logic as merge_overlapping)
-            if !child_has_children {
+            // Reparent grandchildren to parent (flatten hierarchy)
+            if child_has_children {
                 let grandchild_ids: Vec<Uuid> = self.clusters.values()
                     .filter(|c| c.parent_id == Some(child_id))
                     .map(|c| c.id)
@@ -765,11 +852,7 @@ impl SituationGraph {
                     }
                     *child_count.entry(parent_id).or_default() += 1;
                 }
-                for gc_id in grandchild_ids.iter().skip(can_absorb) {
-                    if let Some(gc) = self.clusters.get_mut(gc_id) {
-                        gc.parent_id = None;
-                    }
-                }
+                // Any that can't be absorbed stay as children of the (now child) situation
             }
 
             // Merge child data into parent (same as merge_overlapping)

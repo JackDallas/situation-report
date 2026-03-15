@@ -2013,7 +2013,20 @@ fn tick_situations(
                 }
             }
 
-            // Send each entity-group to LLM for batch consolidation
+            // Also add ungrouped top-level situations as one batch (chunked).
+            // This lets the LLM consolidate situations with empty topics that the
+            // topic-based grouping couldn't reach.
+            let ungrouped: Vec<usize> = (0..situations.len())
+                .filter(|idx| !processed.contains(idx))
+                .collect();
+            if ungrouped.len() >= 2 {
+                // Chunk into batches of 20 for LLM
+                for chunk in ungrouped.chunks(20) {
+                    llm_groups.push(chunk.to_vec());
+                }
+            }
+
+            // Send each group to LLM for batch consolidation
             for group_indices in llm_groups {
                 if group_indices.len() < 2 || group_indices.len() > 20 {
                     continue;

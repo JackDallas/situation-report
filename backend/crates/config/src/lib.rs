@@ -198,13 +198,17 @@ pub struct MergeConfig {
     /// Min situations sharing an entity before LLM consolidation considers that entity group.
     #[serde(default = "default_llm_consolidation_min_group")]
     pub llm_consolidation_min_group: usize,
+    /// Min title-word Jaccard similarity (0.0–1.0) for title-based consolidation.
+    /// Situations with title word overlap >= this threshold merge even without shared topics.
+    #[serde(default = "default_title_jaccard_consolidation")]
+    pub title_jaccard_consolidation: f64,
 }
 
 fn default_true() -> bool {
     true
 }
 fn default_min_shared_topics_consolidation() -> usize {
-    3
+    2
 }
 fn default_min_entity_len_consolidation() -> usize {
     3
@@ -214,6 +218,9 @@ fn default_consolidation_interval_ticks() -> u64 {
 }
 fn default_llm_consolidation_min_group() -> usize {
     3
+}
+fn default_title_jaccard_consolidation() -> f64 {
+    0.40
 }
 
 impl Default for MergeConfig {
@@ -258,10 +265,11 @@ impl Default for MergeConfig {
             vector_boost_region: 0.03,
             vector_boost_title_similar: 0.05,
             vector_boost_shared_topics: 0.05,
-            min_shared_topics_consolidation: 3,
+            min_shared_topics_consolidation: 2,
             min_entity_len_consolidation: 3,
             consolidation_interval_ticks: 5,
             llm_consolidation_min_group: 3,
+            title_jaccard_consolidation: 0.40,
         }
     }
 }

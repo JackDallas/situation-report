@@ -492,12 +492,16 @@ impl LlmClient {
         let titles_block = numbered.join("\n");
 
         let user_msg = format!(
-            "These intelligence situations may overlap. Group them by number \u{2014} \
-             situations in the same group should be merged into one parent. \
-             Return groups as JSON: {{\"groups\": [[1,3,5], [2,4]]}}\n\
-             Only group situations that clearly cover the same conflict, crisis, or topic area. \
-             Situations that are merely tangentially related should NOT be grouped.\n\
-             If no situations should be merged, return {{\"groups\": []}}\n\n\
+            "These intelligence situations may overlap or fragment. Group them by number \u{2014} \
+             situations in the same group should be merged into one parent situation.\n\
+             Return groups as JSON: {{\"groups\": [[1,3,5], [2,4]]}}\n\n\
+             Rules:\n\
+             - Group situations about the SAME country/region AND the same broad conflict or crisis\n\
+             - Group near-duplicate titles (e.g. 'Iran President Raisi Death' and 'Iran President Raisi Dies in Plane Crash')\n\
+             - Group different facets of one crisis (e.g. 'Iran Executes Spy' + 'Iranian Judiciary Crackdown' = same Iranian domestic policy)\n\
+             - Do NOT group situations from different countries/regions just because they share a keyword\n\
+             - Prefer larger groups when situations clearly belong together\n\
+             - If no situations should be merged, return {{\"groups\": []}}\n\n\
              {}\n/no_think",
             titles_block
         );
