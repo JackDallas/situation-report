@@ -28,6 +28,11 @@ use state::AppState;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Log spawned-task panics instead of silently swallowing them
+    std::panic::set_hook(Box::new(|info| {
+        tracing::error!("Task panic: {info}");
+    }));
+
     // Load .env file (looks in cwd and parent directories)
     dotenvy::dotenv().ok();
 
@@ -562,8 +567,16 @@ async fn main() -> anyhow::Result<()> {
 
         match std::env::var("CORS_ORIGIN") {
             Ok(origin) => {
-                info!(origin = %origin, "CORS restricted to specified origin");
-                cors.allow_origin(origin.parse::<axum::http::HeaderValue>().expect("Invalid CORS_ORIGIN value"))
+                match origin.parse::<axum::http::HeaderValue>() {
+                    Ok(val) => {
+                        info!(origin = %origin, "CORS restricted to specified origin");
+                        cors.allow_origin(val)
+                    }
+                    Err(e) => {
+                        warn!("Invalid CORS_ORIGIN '{}': {} — falling back to allow any origin", origin, e);
+                        cors.allow_origin(Any)
+                    }
+                }
             }
             Err(_) => {
                 info!("CORS_ORIGIN not set — allowing any origin (dev mode)");

@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use tokio::sync::broadcast;
 use tokio_tungstenite::connect_async;
@@ -11,6 +10,9 @@ use tracing::{debug, error, info, warn};
 use chrono::Utc;
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::{DataSource, InsertableEvent, SourceContext};
 use crate::common::region_for_country;
@@ -94,7 +96,6 @@ impl BgpSource {
     }
 }
 
-#[async_trait]
 impl DataSource for BgpSource {
     fn id(&self) -> &str {
         "bgp"
@@ -112,16 +113,19 @@ impl DataSource for BgpSource {
         true
     }
 
-    async fn poll(&self, _ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, _ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         // Streaming source; poll is unused.
         Ok(vec![])
+        })
     }
 
-    async fn start_stream(
-        &self,
-        _ctx: &SourceContext,
+    fn start_stream<'a>(
+        &'a self,
+        _ctx: &'a SourceContext,
         tx: broadcast::Sender<InsertableEvent>,
-    ) -> anyhow::Result<()> {
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
         info!("Connecting to RIPE RIS Live WebSocket");
 
         let (ws_stream, _response) = connect_async(RIS_LIVE_URL)
@@ -291,7 +295,7 @@ impl DataSource for BgpSource {
                         entity_id: Some(format!("AS{}", origin_asn)),
                         entity_name: None,
                         event_type: EventType::BgpAnomaly,
-                        severity: Severity::High,
+                        severity: Severity::Medium,
                         confidence: None,
                         tags: vec![],
                         title: Some(title),
@@ -322,5 +326,6 @@ impl DataSource for BgpSource {
         }
 
         Err(anyhow::anyhow!("RIS Live stream ended unexpectedly"))
+        })
     }
 }

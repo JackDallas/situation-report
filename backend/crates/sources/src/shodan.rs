@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use chrono::Utc;
 use futures_util::StreamExt;
 use rand::Rng;
@@ -10,6 +9,9 @@ use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::common::{region_for_country, urlencode};
 use crate::{DataSource, InsertableEvent, SourceContext};
@@ -452,7 +454,6 @@ impl ShodanStream {
     }
 }
 
-#[async_trait]
 impl DataSource for ShodanStream {
     fn id(&self) -> &str {
         "shodan-stream"
@@ -470,15 +471,18 @@ impl DataSource for ShodanStream {
         true
     }
 
-    async fn poll(&self, _ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, _ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         Ok(vec![])
+        })
     }
 
-    async fn start_stream(
-        &self,
-        _ctx: &SourceContext,
+    fn start_stream<'a>(
+        &'a self,
+        _ctx: &'a SourceContext,
         tx: broadcast::Sender<InsertableEvent>,
-    ) -> anyhow::Result<()> {
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
         let key = api_key()?;
 
         // Build a client with NO timeout for the infinite stream.
@@ -577,10 +581,8 @@ impl DataSource for ShodanStream {
                             let has_ics = tags.iter().any(|t| t == "ics");
                             let has_vulns = banner.get("vulns").is_some();
 
-                            let severity = if has_vulns {
-                                Severity::Critical
-                            } else if has_ics || is_ics_port(port) {
-                                Severity::High
+                            let severity = if has_vulns || has_ics || is_ics_port(port) {
+                                Severity::Medium
                             } else {
                                 Severity::Info
                             };
@@ -665,6 +667,7 @@ impl DataSource for ShodanStream {
             tokio::time::sleep(total).await;
             backoff_secs = (backoff_secs * 2).min(60);
         }
+        })
     }
 }
 
@@ -728,7 +731,6 @@ impl DiscoveryResults {
     }
 }
 
-#[async_trait]
 impl DataSource for ShodanDiscovery {
     fn id(&self) -> &str {
         "shodan-discovery"
@@ -746,7 +748,8 @@ impl DataSource for ShodanDiscovery {
         false
     }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         let key = api_key()?;
         let mut events = Vec::new();
 
@@ -860,7 +863,7 @@ impl DataSource for ShodanDiscovery {
                             let region = region_for_country(country_code);
                             let entity_id_str = format!("{}:{}", ip, banner.port);
                             let title_str = format!("Shodan banner: {}:{}", ip, banner.port);
-                            let severity = if has_vulns { Severity::Critical } else if has_ics || is_ics_port(banner.port) { Severity::High } else { Severity::Low };
+                            let severity = if has_vulns || has_ics || is_ics_port(banner.port) { Severity::Medium } else { Severity::Low };
                             let tags_vec: Vec<String> = tags.iter().map(|s| s.to_string()).collect();
 
                             events.push(InsertableEvent {
@@ -998,6 +1001,7 @@ impl DataSource for ShodanDiscovery {
         );
 
         Ok(events)
+        })
     }
 }
 
@@ -1058,7 +1062,6 @@ impl ShodanSearch {
     }
 }
 
-#[async_trait]
 impl DataSource for ShodanSearch {
     fn id(&self) -> &str {
         "shodan-search"
@@ -1076,7 +1079,8 @@ impl DataSource for ShodanSearch {
         false
     }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         let key = api_key()?;
         let mut events = Vec::new();
 
@@ -1136,6 +1140,7 @@ impl DataSource for ShodanSearch {
         }
 
         Ok(events)
+        })
     }
 }
 

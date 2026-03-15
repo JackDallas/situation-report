@@ -1,16 +1,17 @@
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
+use axum::Json;
 
 pub struct ApiError(anyhow::Error);
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        tracing::error!(error = %self.0, "API error");
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            serde_json::json!({ "error": self.0.to_string() }).to_string(),
-        )
-            .into_response()
+        let status = StatusCode::INTERNAL_SERVER_ERROR;
+        tracing::error!("API error: {:?}", self.0);
+        let body = Json(serde_json::json!({
+            "error": "Internal server error"
+        }));
+        (status, body).into_response()
     }
 }
 
