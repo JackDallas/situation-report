@@ -1054,15 +1054,15 @@ impl SituationGraph {
                     break;
                 }
 
-                // Skip rejected pairs
+                // LLM consolidation overrides audit rejections — batch grouping
+                // is a more deliberate decision than single-pair audit.
                 let rejection_key = if parent_id < child_id { (parent_id, child_id) } else { (child_id, parent_id) };
-                if self.merge_rejections.contains_key(&rejection_key) {
+                if self.merge_rejections.remove(&rejection_key).is_some() {
                     let child_title = self.clusters.get(&child_id).map(|c| c.title.as_str()).unwrap_or("?");
                     info!(
                         parent = %parent_title, child = child_title,
-                        "LLM consolidation blocked: merge rejection exists"
+                        "LLM consolidation: cleared prior rejection, proceeding with merge"
                     );
-                    continue;
                 }
 
                 // Re-verify child is still top-level

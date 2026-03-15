@@ -506,6 +506,12 @@ impl LlmClient {
             titles_block
         );
 
+        let grammar = if self.use_gbnf {
+            Some(CONSOLIDATION_GBNF.to_string())
+        } else {
+            None
+        };
+
         let request = ChatRequest {
             messages: vec![
                 ChatMessage {
@@ -522,7 +528,7 @@ impl LlmClient {
             temperature: Some(0.0),
             max_tokens: Some(1024),
             response_format: None,
-            grammar: None,
+            grammar,
             thinking: Some(false),
             stream: false,
         };
@@ -551,15 +557,24 @@ impl LlmClient {
         let content = strip_think_tags(content);
 
         // Parse JSON — extract the "groups" array
-        // Try to find JSON in the response (LLM may wrap it in markdown)
-        let json_str = if let Some(start) = content.find('{') {
-            if let Some(end) = content.rfind('}') {
-                &content[start..=end]
-            } else {
-                &content
-            }
+        // Strip markdown code fences if present, then find JSON object
+        let stripped = if content.contains("```") {
+            content
+                .trim_start_matches("```json")
+                .trim_start_matches("```")
+                .trim_end_matches("```")
+                .trim()
         } else {
             &content
+        };
+        let json_str = if let Some(start) = stripped.find('{') {
+            if let Some(end) = stripped.rfind('}') {
+                &stripped[start..=end]
+            } else {
+                stripped
+            }
+        } else {
+            stripped
         };
 
         #[derive(Deserialize)]
@@ -758,6 +773,16 @@ boolean ::= "true" | "false"
 string-array ::= "[" ws "]" | "[" ws string (ws "," ws string)* ws "]"
 string ::= "\"" ([^"\\] | "\\" .)* "\""
 number ::= "-"? [0-9]+ ("." [0-9]+)? ([eE] [+-]? [0-9]+)?
+ws ::= [ \t\n\r]*
+"#;
+
+/// GBNF grammar for consolidation structured output.
+/// Produces: {"groups": [[1,3,5], [2,4]]}
+const CONSOLIDATION_GBNF: &str = r#"
+root ::= "{" ws "\"groups\"" ws ":" ws groups ws "}"
+groups ::= "[" ws "]" | "[" ws group (ws "," ws group)* ws "]"
+group ::= "[" ws number (ws "," ws number)* ws "]"
+number ::= [0-9]+
 ws ::= [ \t\n\r]*
 "#;
 
