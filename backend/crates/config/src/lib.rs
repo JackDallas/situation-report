@@ -308,8 +308,8 @@ impl Default for ClusterCapsConfig {
             max_event_ids: 500,
             max_event_titles: 30,
             leaf_cluster_hard_cap: 500,
-            max_children_per_parent: 15,
-            max_events_per_parent: 1000,
+            max_children_per_parent: 50,
+            max_events_per_parent: 5000,
             max_entities_per_event: 5,
             max_enrichment_topics: 3,
         }
@@ -1169,7 +1169,7 @@ mod tests {
         // Caps
         assert_eq!(config.cluster_caps.max_entities, 50);
         assert_eq!(config.cluster_caps.max_topics, 30);
-        assert_eq!(config.cluster_caps.max_children_per_parent, 15);
+        assert_eq!(config.cluster_caps.max_children_per_parent, 50);
 
         // Phases
         assert_eq!(config.phases.emerging_min_events, 3);

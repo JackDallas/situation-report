@@ -1994,41 +1994,101 @@ fn tick_situations(
                 }
             }
 
-            // Only consider topics/entities appearing in >= min_group_size situations
-            topic_to_sids.retain(|_, sids| sids.len() >= min_group_size);
-
-            // Build distinct groups of situation indices (union of overlapping topic groups)
-            let mut processed: HashSet<usize> = HashSet::new();
-            let mut llm_groups: Vec<Vec<usize>> = Vec::new();
-            for (_topic, sids) in &topic_to_sids {
-                let unprocessed: Vec<usize> = sids.iter()
-                    .copied()
-                    .filter(|idx| !processed.contains(idx))
-                    .collect();
-                if unprocessed.len() >= 2 {
-                    for &idx in &unprocessed {
-                        processed.insert(idx);
+            // Country-based grouping: extract country/region names from titles
+            // to ensure all situations about the same country go to the LLM together.
+            const COUNTRY_NAMES: &[&str] = &[
+                "iran", "iraq", "israel", "ukraine", "russia", "china", "india",
+                "japan", "korea", "yemen", "syria", "turkey", "pakistan", "afghan",
+                "sudan", "somalia", "libya", "egypt", "saudi", "qatar", "bahrain",
+                "canada", "france", "germany", "poland", "serbia", "mexico",
+                "venezuela", "peru", "guatemala", "indonesia", "vanuatu",
+                "taiwan", "philippines", "myanmar", "hormuz", "houthi",
+            ];
+            for (idx, (_id, title, _entities, _topics, _event_count)) in situations.iter().enumerate() {
+                let lower = title.to_lowercase();
+                for country in COUNTRY_NAMES {
+                    if lower.contains(country) {
+                        topic_to_sids.entry(format!("country:{}", country)).or_default().push(idx);
                     }
-                    llm_groups.push(unprocessed);
                 }
             }
 
-            // Also add ungrouped top-level situations as one batch (chunked).
-            // This lets the LLM consolidate situations with empty topics that the
-            // topic-based grouping couldn't reach.
-            let ungrouped: Vec<usize> = (0..situations.len())
-                .filter(|idx| !processed.contains(idx))
-                .collect();
+            // Only consider topics/entities appearing in >= min_group_size situations
+            topic_to_sids.retain(|_, sids| sids.len() >= min_group_size);
+
+            // Union-find: merge all situations sharing ANY topic/entity/country
+            // into connected components. This ensures e.g. all Iran situations
+            // end up in the same LLM batch regardless of which specific topics
+            // they share.
+            let n = situations.len();
+            let mut uf_parent: Vec<usize> = (0..n).collect();
+            let uf_find = |parent: &mut Vec<usize>, mut x: usize| -> usize {
+                while parent[x] != x {
+                    parent[x] = parent[parent[x]]; // path compression
+                    x = parent[x];
+                }
+                x
+            };
+            // Sort topic keys for deterministic iteration order
+            let mut sorted_topics: Vec<(&String, &Vec<usize>)> = topic_to_sids.iter().collect();
+            sorted_topics.sort_by_key(|(k, _)| (*k).clone());
+            for (_topic, sids) in &sorted_topics {
+                if sids.len() < 2 { continue; }
+                let root = uf_find(&mut uf_parent, sids[0]);
+                for &sid in sids.iter().skip(1) {
+                    let r = uf_find(&mut uf_parent, sid);
+                    if r != root {
+                        uf_parent[r] = root;
+                    }
+                }
+            }
+            // Collect connected components
+            let mut components: HashMap<usize, Vec<usize>> = HashMap::new();
+            for i in 0..n {
+                let root = uf_find(&mut uf_parent, i);
+                components.entry(root).or_default().push(i);
+            }
+            // Build LLM groups: components with ≥2 members + ungrouped chunks
+            let mut llm_groups: Vec<Vec<usize>> = Vec::new();
+            let mut ungrouped: Vec<usize> = Vec::new();
+            for (_root, mut members) in components {
+                members.sort(); // deterministic order
+                if members.len() >= 2 {
+                    llm_groups.push(members);
+                } else {
+                    ungrouped.extend(members);
+                }
+            }
+            // Sort groups by first member for deterministic processing
+            llm_groups.sort_by_key(|g| g[0]);
+            // Ungrouped situations get chunked into batches of 20
             if ungrouped.len() >= 2 {
-                // Chunk into batches of 20 for LLM
+                ungrouped.sort();
                 for chunk in ungrouped.chunks(20) {
                     llm_groups.push(chunk.to_vec());
                 }
             }
 
-            // Send each group to LLM for batch consolidation
-            for group_indices in llm_groups {
-                if group_indices.len() < 2 || group_indices.len() > 20 {
+            // Chunk large groups (>20) for the LLM context window
+            let mut chunked_groups: Vec<Vec<usize>> = Vec::new();
+            for group in llm_groups {
+                if group.len() <= 20 {
+                    chunked_groups.push(group);
+                } else {
+                    for chunk in group.chunks(20) {
+                        chunked_groups.push(chunk.to_vec());
+                    }
+                }
+            }
+
+            info!(
+                total_situations = situations.len(),
+                groups = chunked_groups.len(),
+                "LLM consolidation: batching situations"
+            );
+
+            for group_indices in chunked_groups {
+                if group_indices.len() < 2 {
                     continue;
                 }
 

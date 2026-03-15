@@ -742,6 +742,16 @@ impl SituationGraph {
             }
         }
 
+        // Country/proper-noun stems that should always count as "specific" for
+        // title-word matching, regardless of how many titles contain them.
+        const COUNTRY_STEMS: &[&str] = &[
+            "iran", "iraq", "isra", "ukra", "russ", "chin", "indi", "japa", "kore",
+            "yeme", "syri", "turk", "paki", "afgh", "suda", "soma", "liby", "egyp",
+            "saud", "qata", "bahr", "cana", "fran", "germ", "pola", "serb", "mexi",
+            "vene", "peru", "guat", "indo", "vanu", "taiw", "phil", "myan", "horm",
+            "hout", "hezb",
+        ];
+
         // Title-word Jaccard: pairs sharing a title word, then check Jaccard >= threshold.
         // Catches near-duplicate situations with empty topics but similar titles,
         // e.g. "Iran-Israel Conflict Escalates" + "Iran-Israel Conflict Escalation".
@@ -770,17 +780,26 @@ impl SituationGraph {
                         };
                         let shared: Vec<&String> = a_words.intersection(b_words).collect();
                         let union = a_words.union(b_words).count();
-                        // Require at least 2 shared stemmed words
-                        if union == 0 || shared.len() < 2 {
+                        if union == 0 || shared.is_empty() {
                             continue;
                         }
-                        // At least one shared word must be "specific" (appears in ≤8 titles)
-                        let has_specific = shared.iter().any(|w| {
+
+                        // Country stems always count as "specific" (proper nouns are
+                        // meaningful even when frequent). Other words use the ≤8 filter.
+                        let has_country = shared.iter().any(|w| COUNTRY_STEMS.contains(&w.as_str()));
+                        let has_specific = has_country || shared.iter().any(|w| {
                             word_freq.get(w.as_str()).copied().unwrap_or(0) <= 8
                         });
                         if !has_specific {
                             continue;
                         }
+
+                        // Require at least 2 shared words normally, but 1 country stem
+                        // + Jaccard >= threshold is enough (e.g. "Iran War" + "Iran Spy").
+                        if shared.len() < 2 && !has_country {
+                            continue;
+                        }
+
                         let jaccard = shared.len() as f64 / union as f64;
                         if jaccard >= title_jaccard_threshold {
                             merge_candidates.push((a_id, b_id));
@@ -1011,20 +1030,38 @@ impl SituationGraph {
             group_with_events.sort_by(|a, b| b.1.cmp(&a.1));
             let parent_id = group_with_events[0].0;
 
+            let parent_title = self.clusters.get(&parent_id).map(|c| c.title.clone()).unwrap_or_default();
             for &(child_id, _) in group_with_events.iter().skip(1) {
                 // Cap checks
                 let live_children = child_count.get(&parent_id).copied().unwrap_or(0);
                 if live_children >= max_children {
+                    let child_title = self.clusters.get(&child_id).map(|c| c.title.as_str()).unwrap_or("?");
+                    info!(
+                        parent = %parent_title, child = child_title,
+                        live_children, max_children,
+                        "LLM consolidation blocked: max_children cap"
+                    );
                     break;
                 }
                 let parent_events = self.clusters.get(&parent_id).map(|c| c.event_count).unwrap_or(0);
                 if parent_events >= max_events {
+                    let child_title = self.clusters.get(&child_id).map(|c| c.title.as_str()).unwrap_or("?");
+                    info!(
+                        parent = %parent_title, child = child_title,
+                        parent_events, max_events,
+                        "LLM consolidation blocked: max_events cap"
+                    );
                     break;
                 }
 
                 // Skip rejected pairs
                 let rejection_key = if parent_id < child_id { (parent_id, child_id) } else { (child_id, parent_id) };
                 if self.merge_rejections.contains_key(&rejection_key) {
+                    let child_title = self.clusters.get(&child_id).map(|c| c.title.as_str()).unwrap_or("?");
+                    info!(
+                        parent = %parent_title, child = child_title,
+                        "LLM consolidation blocked: merge rejection exists"
+                    );
                     continue;
                 }
 

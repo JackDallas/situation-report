@@ -2304,6 +2304,7 @@ mod tests {
     fn test_active_clusters_sorted() {
         let mut config = PipelineConfig::default();
         config.quality.min_events_standalone = 3; // Lower threshold for test
+        config.quality.medium_standalone_penalty = 0; // Disable penalty for test
         let mut g = SituationGraph::new(Arc::new(config));
 
         g.ingest(&make_event(json!({ "entity_name": "First", "source_type": "acled" })), None);
@@ -2324,10 +2325,12 @@ mod tests {
         g.ingest(&make_event(json!({ "entity_name": "Second", "tags": ["topic:y"], "source_type": "usgs" })), None);
         g.ingest(&make_event(json!({ "entity_name": "Second", "tags": ["topic:y"], "source_type": "usgs" })), None);
 
-        // Give clusters titles so they pass the quality gate
+        // Give clusters distinct titles so they pass the quality gate
+        // Titles must differ enough to avoid Jaccard dedup (Pass E in active_clusters)
+        let distinct_titles = ["Alpha Border Incident", "Bravo Harbor Disruption"];
         let ids: Vec<_> = g.clusters.keys().cloned().collect();
         for (i, id) in ids.iter().enumerate() {
-            g.update_cluster_title(*id, format!("Test Situation {i}"));
+            g.update_cluster_title(*id, distinct_titles[i].to_string());
         }
 
         let clusters = g.active_clusters();
@@ -2646,13 +2649,14 @@ mod tests {
             HashSet::from([SourceType::Gdelt, SourceType::Geoconfirmed, SourceType::Acled, SourceType::Firms]),
         );
         let critical_tol = compute_gap_tolerance(&critical_cluster, &sr_config::PhaseConfig::default(), Utc::now());
+        // Raw formula gives 39.0 but gap_tolerance_max_hours (24.0) caps it
         assert!(
             critical_tol > 20.0,
             "Critical/multi-source should give >20h tolerance, got {critical_tol}"
         );
         assert!(
-            (critical_tol - 39.0).abs() < 0.1,
-            "Expected ~39.0h for critical/4-source/15-rate, got {critical_tol}"
+            (critical_tol - 24.0).abs() < 0.1,
+            "Expected ~24.0h (capped) for critical/4-source/15-rate, got {critical_tol}"
         );
 
         let medium_cluster = make_cluster_for_phase(
@@ -2675,9 +2679,10 @@ mod tests {
             HashSet::from([SourceType::Gdelt, SourceType::Geoconfirmed, SourceType::Acled, SourceType::Firms]),
         );
         let gap_tolerance = compute_gap_tolerance(&cluster, &sr_config::PhaseConfig::default(), Utc::now());
+        // Raw formula gives 39.0 but gap_tolerance_max_hours (24.0) caps it
         assert!(
-            (gap_tolerance - 39.0).abs() < 0.1,
-            "Expected gap_tolerance ~39.0, got {gap_tolerance}"
+            (gap_tolerance - 24.0).abs() < 0.1,
+            "Expected gap_tolerance ~24.0 (capped), got {gap_tolerance}"
         );
 
         let metrics_5h = PhaseMetrics {

@@ -4,7 +4,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::prompts;
 use crate::types::{ArticleInput, EnrichedArticleV2};
@@ -577,7 +577,7 @@ impl LlmClient {
                 Ok(valid_groups)
             }
             Err(e) => {
-                debug!(error = %e, raw = %content, "Failed to parse LLM consolidation JSON");
+                warn!(error = %e, raw = %content, "Failed to parse LLM consolidation JSON — merge data lost");
                 Ok(Vec::new())
             }
         }
