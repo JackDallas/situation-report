@@ -556,8 +556,15 @@ impl LlmClient {
 
         let content = strip_think_tags(content);
 
-        // Parse JSON — extract the "groups" array
-        // Strip markdown code fences if present, then find JSON object
+        // Parse JSON — extract the "groups" object.
+        // LLM may wrap in code fences or append extra text with braces,
+        // so we use streaming deserializer to parse just the first JSON value.
+        #[derive(Deserialize)]
+        struct ConsolidationResponse {
+            groups: Vec<Vec<usize>>,
+        }
+
+        // Strip markdown code fences
         let stripped = if content.contains("```") {
             content
                 .trim_start_matches("```json")
@@ -567,23 +574,13 @@ impl LlmClient {
         } else {
             &content
         };
-        let json_str = if let Some(start) = stripped.find('{') {
-            if let Some(end) = stripped.rfind('}') {
-                &stripped[start..=end]
-            } else {
-                stripped
-            }
-        } else {
-            stripped
-        };
 
-        #[derive(Deserialize)]
-        struct ConsolidationResponse {
-            groups: Vec<Vec<usize>>,
-        }
-
-        match serde_json::from_str::<ConsolidationResponse>(json_str) {
-            Ok(parsed) => {
+        // Find the first '{' and parse from there (streaming — ignores trailing junk)
+        let json_start = stripped.find('{').unwrap_or(0);
+        let json_slice = &stripped[json_start..];
+        let mut de = serde_json::Deserializer::from_str(json_slice).into_iter::<ConsolidationResponse>();
+        match de.next() {
+            Some(Ok(parsed)) => {
                 // Filter out single-element groups and validate indices
                 let valid_groups: Vec<Vec<usize>> = parsed.groups.into_iter()
                     .filter(|g| g.len() >= 2)
@@ -591,8 +588,12 @@ impl LlmClient {
                 debug!(group_count = valid_groups.len(), "LLM consolidation parsed groups");
                 Ok(valid_groups)
             }
-            Err(e) => {
+            Some(Err(e)) => {
                 warn!(error = %e, raw = %content, "Failed to parse LLM consolidation JSON — merge data lost");
+                Ok(Vec::new())
+            }
+            None => {
+                warn!(raw = %content, "No JSON object found in LLM consolidation response");
                 Ok(Vec::new())
             }
         }
