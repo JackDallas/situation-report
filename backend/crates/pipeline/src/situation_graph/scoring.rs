@@ -17,12 +17,18 @@ use sr_sources::InsertableEvent;
 
 /// Streaming IDF tracker for topics or entities. Tracks observed frequency
 /// with exponential decay so that globally common terms get lower weight.
+///
+/// Uses lazy decay: instead of decaying all entries on every `observe()` call (O(F)),
+/// stores a global observation counter and per-term last-observation-count.
+/// Actual decay is computed on-demand in `score()`.
 pub(crate) struct StreamingIdf {
-    /// Decayed frequency counts per term.
-    freq: HashMap<String, f64>,
-    /// Running total of observations (also decayed).
+    /// Raw (un-decayed) frequency counts per term, paired with the obs_count at last update.
+    freq: HashMap<String, (f64, u64)>,
+    /// Running total of observations (lazily maintained — recomputed during cleanup).
     total: f64,
-    /// Decay factor applied to all counts on each observation.
+    /// The global obs_count at which `total` was last accurate.
+    total_at: u64,
+    /// Decay factor applied per observation.
     decay_factor: f64,
     /// Counter for periodic cleanup.
     obs_count: u64,
@@ -39,6 +45,7 @@ impl StreamingIdf {
         Self {
             freq: HashMap::new(),
             total: 0.0,
+            total_at: 0,
             decay_factor: idf_config.decay_factor,
             obs_count: 0,
             cleanup_interval: idf_config.cleanup_interval,
@@ -47,33 +54,59 @@ impl StreamingIdf {
         }
     }
 
-    /// Observe a set of terms from one event. Applies global decay then increments.
+    /// Compute the decayed value for a term given steps elapsed since its last update.
+    #[inline]
+    fn decayed_freq(&self, raw: f64, last_at: u64) -> f64 {
+        let steps = self.obs_count.saturating_sub(last_at);
+        if steps == 0 { return raw; }
+        raw * self.decay_factor.powi(steps as i32)
+    }
+
+    /// Observe a set of terms from one event.
+    /// Only touches the terms in this event — O(|terms|) not O(|freq|).
     pub(crate) fn observe(&mut self, terms: &HashSet<String>) {
-        // Apply decay to all existing counts
-        let d = self.decay_factor;
-        self.total *= d;
-        for v in self.freq.values_mut() {
-            *v *= d;
+        self.obs_count += 1;
+
+        // Lazily decay total
+        let total_steps = self.obs_count.saturating_sub(self.total_at);
+        if total_steps > 0 {
+            self.total *= self.decay_factor.powi(total_steps as i32);
+            self.total_at = self.obs_count;
         }
 
-        // Increment observed terms
+        // Increment observed terms (catch up their decay first)
         for t in terms {
-            *self.freq.entry(t.clone()).or_insert(0.0) += 1.0;
+            let entry = self.freq.entry(t.clone()).or_insert((0.0, self.obs_count));
+            let steps = self.obs_count.saturating_sub(entry.1);
+            if steps > 0 {
+                entry.0 *= self.decay_factor.powi(steps as i32);
+            }
+            entry.0 += 1.0;
+            entry.1 = self.obs_count;
             self.total += 1.0;
         }
 
-        self.obs_count += 1;
-
-        // Periodic cleanup: remove negligible entries
+        // Periodic cleanup: materialize decay and remove negligible entries
         if self.cleanup_interval > 0 && self.obs_count.is_multiple_of(self.cleanup_interval) {
             let thresh = self.cleanup_threshold;
-            self.freq.retain(|_, v| *v >= thresh);
+            let obs = self.obs_count;
+            let d = self.decay_factor;
+            self.freq.retain(|_, (v, at)| {
+                let steps = obs.saturating_sub(*at);
+                if steps > 0 {
+                    *v *= d.powi(steps as i32);
+                    *at = obs;
+                }
+                *v >= thresh
+            });
         }
     }
 
     /// IDF score for a term: ln(total / (1 + freq)). Higher = rarer.
     pub(crate) fn score(&self, term: &str) -> f64 {
-        let freq = self.freq.get(term).copied().unwrap_or(0.0);
+        let freq = self.freq.get(term)
+            .map(|&(raw, at)| self.decayed_freq(raw, at))
+            .unwrap_or(0.0);
         let total = self.total.max(self.min_total);
         (total / (1.0 + freq)).ln()
     }
@@ -83,13 +116,24 @@ impl StreamingIdf {
 // Burst detection — dual EWMA per topic
 // ---------------------------------------------------------------------------
 
+/// EWMA decay multiplier for a given elapsed time and half-life.
+/// Returns the factor to multiply the old value by (i.e. 1 - alpha).
+#[inline]
+fn ewma_decay(dt_secs: f64, half_life_secs: f64) -> f64 {
+    1.0 - (1.0 - (-0.693 * dt_secs / half_life_secs).exp())
+}
+
 /// Tracks short-term vs long-term event rate per topic to detect bursts.
+///
+/// Uses lazy decay: each entry stores its last-update timestamp. Decay is
+/// applied on-demand when reading (`burst_ratio`) or when touching the
+/// entry during `observe()`. Only O(|topics|) per event, not O(|all entries|).
 pub(crate) struct BurstDetector {
-    /// Short-window EWMA
-    short: HashMap<String, f64>,
-    /// Long-window EWMA
-    long: HashMap<String, f64>,
-    /// Last update time for computing dt-based decay
+    /// Short-window EWMA, with per-entry last-update timestamp.
+    short: HashMap<String, (f64, DateTime<Utc>)>,
+    /// Long-window EWMA, with per-entry last-update timestamp.
+    long: HashMap<String, (f64, DateTime<Utc>)>,
+    /// Last update time (global clock for new entries).
     last_update: DateTime<Utc>,
     /// Counter for periodic cleanup
     obs_count: u64,
@@ -118,41 +162,64 @@ impl BurstDetector {
     }
 
     /// Observe topics from one event and update both EWMA windows.
+    /// Only touches entries for the observed topics — O(|topics|).
     pub(crate) fn observe(&mut self, topics: &HashSet<String>) {
         let now = Utc::now();
         let dt_secs = (now - self.last_update).num_milliseconds().max(1) as f64 / 1000.0;
         self.last_update = now;
 
-        // Decay factors: alpha = 1 - exp(-ln(2) * dt / half_life)
-        let alpha_short = 1.0 - (-0.693 * dt_secs / self.short_half_life_secs).exp();
-        let alpha_long = 1.0 - (-0.693 * dt_secs / self.long_half_life_secs).exp();
+        let short_hl = self.short_half_life_secs;
+        let long_hl = self.long_half_life_secs;
+        let alpha_short = 1.0 - (-0.693 * dt_secs / short_hl).exp();
+        let alpha_long = 1.0 - (-0.693 * dt_secs / long_hl).exp();
 
-        // Decay all existing values
-        for v in self.short.values_mut() {
-            *v *= 1.0 - alpha_short;
-        }
-        for v in self.long.values_mut() {
-            *v *= 1.0 - alpha_long;
-        }
-
-        // Increment observed topics
+        // Only update entries for observed topics (lazy decay on touch)
         for t in topics {
-            *self.short.entry(t.clone()).or_insert(0.0) += alpha_short;
-            *self.long.entry(t.clone()).or_insert(0.0) += alpha_long;
+            let short_entry = self.short.entry(t.clone()).or_insert((0.0, now));
+            let s_dt = (now - short_entry.1).num_milliseconds().max(0) as f64 / 1000.0;
+            short_entry.0 *= ewma_decay(s_dt, short_hl);
+            short_entry.0 += alpha_short;
+            short_entry.1 = now;
+
+            let long_entry = self.long.entry(t.clone()).or_insert((0.0, now));
+            let l_dt = (now - long_entry.1).num_milliseconds().max(0) as f64 / 1000.0;
+            long_entry.0 *= ewma_decay(l_dt, long_hl);
+            long_entry.0 += alpha_long;
+            long_entry.1 = now;
         }
 
         self.obs_count += 1;
         if self.cleanup_interval > 0 && self.obs_count.is_multiple_of(self.cleanup_interval) {
             let thresh = self.cleanup_threshold;
-            self.short.retain(|_, v| *v >= thresh);
-            self.long.retain(|_, v| *v >= thresh);
+            let cleanup_now = now;
+            let short_hl = self.short_half_life_secs;
+            let long_hl = self.long_half_life_secs;
+            self.short.retain(|_, (v, at)| {
+                let dt = (cleanup_now - *at).num_milliseconds().max(0) as f64 / 1000.0;
+                *v *= ewma_decay(dt, short_hl);
+                *at = cleanup_now;
+                *v >= thresh
+            });
+            self.long.retain(|_, (v, at)| {
+                let dt = (cleanup_now - *at).num_milliseconds().max(0) as f64 / 1000.0;
+                *v *= ewma_decay(dt, long_hl);
+                *at = cleanup_now;
+                *v >= thresh
+            });
         }
     }
 
     /// Burst ratio for a topic. > 2.0 means short-term rate is 2x the long-term baseline.
     pub(crate) fn burst_ratio(&self, topic: &str) -> f64 {
-        let s = self.short.get(topic).copied().unwrap_or(0.0);
-        let l = self.long.get(topic).copied().unwrap_or(0.0);
+        let now = self.last_update; // use last observation time as reference
+        let s = self.short.get(topic).map(|&(v, at)| {
+            let dt = (now - at).num_milliseconds().max(0) as f64 / 1000.0;
+            v * ewma_decay(dt, self.short_half_life_secs)
+        }).unwrap_or(0.0);
+        let l = self.long.get(topic).map(|&(v, at)| {
+            let dt = (now - at).num_milliseconds().max(0) as f64 / 1000.0;
+            v * ewma_decay(dt, self.long_half_life_secs)
+        }).unwrap_or(0.0);
         if l < self.cleanup_threshold {
             if s > self.cleanup_threshold { 3.0 } else { 1.0 }
         } else {
@@ -436,16 +503,9 @@ pub(crate) fn normalize_region(code: &str) -> &str {
 
 /// Check if two region code sets overlap, normalizing abbreviations.
 pub(crate) fn regions_overlap(a: &HashSet<String>, b: &HashSet<String>) -> bool {
-    for ra in a {
-        let na = normalize_region(ra);
-        for rb in b {
-            let nb = normalize_region(rb);
-            if na == nb {
-                return true;
-            }
-        }
-    }
-    false
+    let (smaller, larger) = if a.len() <= b.len() { (a, b) } else { (b, a) };
+    let normalized: HashSet<&str> = smaller.iter().map(|r| normalize_region(r)).collect();
+    larger.iter().any(|r| normalized.contains(normalize_region(r)))
 }
 
 /// Topics that indicate active armed conflict -- used for cluster severity escalation.
@@ -489,6 +549,76 @@ pub(crate) const GENERIC_TITLE_WORDS: &[&str] = &[
     "tornado", "tsunami", "volcanic", "eruption", "drought",
     "forest", "bushfire",
 ];
+
+// ---------------------------------------------------------------------------
+// Title Jaccard similarity utilities
+// ---------------------------------------------------------------------------
+
+/// Basic Jaccard similarity between two titles: split to lowercase words > 2 chars,
+/// compute |intersection| / |union|.
+pub(crate) fn title_jaccard(a: &str, b: &str) -> f64 {
+    let words_a: HashSet<String> = a.split_whitespace()
+        .map(|w| w.to_lowercase())
+        .filter(|w| w.len() > 2)
+        .collect();
+    let words_b: HashSet<String> = b.split_whitespace()
+        .map(|w| w.to_lowercase())
+        .filter(|w| w.len() > 2)
+        .collect();
+    if words_a.is_empty() || words_b.is_empty() { return 0.0; }
+    let intersection = words_a.intersection(&words_b).count() as f64;
+    let union = words_a.union(&words_b).count() as f64;
+    intersection / union
+}
+
+/// Jaccard similarity excluding [`GENERIC_TITLE_WORDS`] — prevents false overlap
+/// from generic category words like "wildfires" or "earthquake".
+pub(crate) fn title_jaccard_filtered(a: &str, b: &str) -> f64 {
+    let generic = GENERIC_TITLE_WORDS;
+    let words_a: HashSet<String> = a.split_whitespace()
+        .map(|w| w.to_lowercase())
+        .filter(|w| w.len() > 2)
+        .filter(|w| !generic.contains(&w.as_str()))
+        .collect();
+    let words_b: HashSet<String> = b.split_whitespace()
+        .map(|w| w.to_lowercase())
+        .filter(|w| w.len() > 2)
+        .filter(|w| !generic.contains(&w.as_str()))
+        .collect();
+    if words_a.is_empty() || words_b.is_empty() { return 0.0; }
+    let intersection = words_a.intersection(&words_b).count() as f64;
+    let union = words_a.union(&words_b).count() as f64;
+    intersection / union
+}
+
+/// Stemmed Jaccard for consolidation: splits on non-alphanumeric, filters stopwords,
+/// truncates each word to 4 chars for crude stemming ("iranian"→"iran").
+#[allow(dead_code)]
+pub(crate) fn title_jaccard_stemmed(a: &str, b: &str) -> f64 {
+    fn stem_words(title: &str) -> HashSet<String> {
+        title.to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|w| w.len() >= 3)
+            .filter(|w| !matches!(*w,
+                "the" | "and" | "for" | "with" | "from" | "that" | "this"
+                | "into" | "over" | "has" | "are" | "was" | "were" | "been"
+                | "have" | "will" | "not" | "but" | "its" | "says" | "new"
+                | "after" | "amid" | "near" | "against"
+                | "middle" | "east" | "west" | "north" | "south" | "southeast"
+                | "asia" | "africa" | "europe" | "america" | "americas" | "pacific"
+                | "atlantic" | "eastern" | "western" | "southern" | "northern"
+                | "central" | "region" | "global"
+            ))
+            .map(|w| w.chars().take(4).collect())
+            .collect()
+    }
+    let words_a = stem_words(a);
+    let words_b = stem_words(b);
+    if words_a.is_empty() || words_b.is_empty() { return 0.0; }
+    let intersection = words_a.intersection(&words_b).count() as f64;
+    let union = words_a.union(&words_b).count() as f64;
+    intersection / union
+}
 
 /// Returns true if the title text contains natural-disaster keywords.
 /// Used alongside topic-based detection to catch situations like "Nigeria Forest Fires".

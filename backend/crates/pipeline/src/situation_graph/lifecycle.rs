@@ -478,14 +478,15 @@ impl SituationGraph {
                         metrics_snapshot: serde_json::json!({"age_hours": age_hours}),
                         transitioned_at: now,
                     };
-                    let cluster = self.clusters.get_mut(&cid).unwrap();
-                    cluster.phase = SituationPhase::Declining;
-                    cluster.phase_changed_at = now;
-                    cluster.phase_transitions.push(transition.clone());
-                    if cluster.phase_transitions.len() > 20 {
-                        cluster.phase_transitions.drain(..cluster.phase_transitions.len() - 20);
+                    if let Some(cluster) = self.clusters.get_mut(&cid) {
+                        cluster.phase = SituationPhase::Declining;
+                        cluster.phase_changed_at = now;
+                        cluster.phase_transitions.push(transition.clone());
+                        if cluster.phase_transitions.len() > 20 {
+                            cluster.phase_transitions.drain(..cluster.phase_transitions.len() - 20);
+                        }
+                        transitions.push((cid, transition));
                     }
-                    transitions.push((cid, transition));
                     continue;
             }
 
@@ -494,8 +495,8 @@ impl SituationGraph {
 
             let five_min_ago = now - chrono::Duration::minutes(5);
             let thirty_min_ago = now - chrono::Duration::minutes(30);
-            let velocity_5m = cluster.event_ids.iter().filter(|(t, _)| *t >= five_min_ago).count();
-            let velocity_30m = cluster.event_ids.iter().filter(|(t, _)| *t >= thirty_min_ago).count();
+            let velocity_5m = cluster.event_ids.len() - cluster.event_ids.partition_point(|(t, _)| *t < five_min_ago);
+            let velocity_30m = cluster.event_ids.len() - cluster.event_ids.partition_point(|(t, _)| *t < thirty_min_ago);
 
             let current_rate = velocity_5m as f64;
             let mins_since_peak = (now - cluster.peak_rate_at).num_minutes().max(0) as f64;
@@ -603,19 +604,19 @@ impl SituationGraph {
                         transitioned_at: now,
                     };
 
-                    let cluster = self.clusters.get_mut(&cid).unwrap();
-                    cluster.phase = new_phase;
-                    cluster.phase_changed_at = now;
-                    cluster.peak_event_rate = peak_rate;
-                    if current_rate >= cluster.peak_event_rate * decay {
-                        cluster.peak_rate_at = now;
+                    if let Some(cluster) = self.clusters.get_mut(&cid) {
+                        cluster.phase = new_phase;
+                        cluster.phase_changed_at = now;
+                        cluster.peak_event_rate = peak_rate;
+                        if current_rate >= cluster.peak_event_rate * decay {
+                            cluster.peak_rate_at = now;
+                        }
+                        cluster.phase_transitions.push(transition.clone());
+                        if cluster.phase_transitions.len() > 20 {
+                            cluster.phase_transitions.drain(..cluster.phase_transitions.len() - 20);
+                        }
+                        transitions.push((cid, transition));
                     }
-                    cluster.phase_transitions.push(transition.clone());
-                    if cluster.phase_transitions.len() > 20 {
-                        cluster.phase_transitions.drain(..cluster.phase_transitions.len() - 20);
-                    }
-
-                    transitions.push((cid, transition));
                 }
             } else {
                 if let Some(cluster) = self.clusters.get_mut(&cid) {
@@ -709,7 +710,8 @@ impl SituationGraph {
 
     /// Run periodic sweep passes over all clusters.
     pub fn sweep(&mut self, embedding_cache: Option<&EmbeddingCache>) {
-        let sweep_cfg = &self.config.sweep;
+        let config = self.config.clone(); // clone Arc so sweep_cfg doesn't borrow self
+        let sweep_cfg = &config.sweep;
         let mut pruned_topics = 0usize;
         let mut pruned_entities = 0usize;
         let mut shed_events = 0usize;
@@ -801,30 +803,10 @@ impl SituationGraph {
             }
         }
         // --- Pass 3b: Enforce max_children_per_parent cap ---
-        // Orphan the smallest children from parents that exceed the cap.
-        let max_children = self.config.cluster_caps.max_children_per_parent;
-        let mut children_per_parent: std::collections::HashMap<Uuid, Vec<(Uuid, usize)>> = std::collections::HashMap::new();
-        for c in self.clusters.values() {
-            if let Some(pid) = c.parent_id {
-                children_per_parent.entry(pid).or_default().push((c.id, c.event_count));
-            }
-        }
-        let mut cap_orphaned = 0usize;
-        for (_pid, mut kids) in children_per_parent {
-            if kids.len() <= max_children {
-                continue;
-            }
-            // Keep the largest children, orphan the rest
-            kids.sort_by(|a, b| b.1.cmp(&a.1));
-            for &(kid_id, _) in kids.iter().skip(max_children) {
-                if let Some(kid) = self.clusters.get_mut(&kid_id) {
-                    kid.parent_id = None;
-                    cap_orphaned += 1;
-                }
-            }
-        }
+        let cap_max_children = config.cluster_caps.max_children_per_parent;
+        let cap_orphaned = self.enforce_max_children_cap(cap_max_children);
         if cap_orphaned > 0 {
-            info!(cap_orphaned, max_children, "Sweep: enforced max_children_per_parent cap");
+            info!(cap_orphaned, max_children = cap_max_children, "Sweep: enforced max_children_per_parent cap");
         }
 
         // --- Pass 3c: Orphan children with no topical connection to parent ---
@@ -865,25 +847,7 @@ impl SituationGraph {
                     .collect();
                 let _shared_semantic_topics = semantic_child.intersection(&semantic_parent).count();
 
-                // Title word overlap (Jaccard similarity).
-                // Exclude generic category words (e.g., "wildfires", "earthquake")
-                // that create false overlap between geographically unrelated situations.
-                let generic = &super::scoring::GENERIC_TITLE_WORDS;
-                let words_a: HashSet<String> = parent_title.to_lowercase()
-                    .split_whitespace().filter(|w| w.len() > 2)
-                    .filter(|w| !generic.contains(w))
-                    .map(|w| w.to_string()).collect();
-                let words_b: HashSet<String> = child_title.to_lowercase()
-                    .split_whitespace().filter(|w| w.len() > 2)
-                    .filter(|w| !generic.contains(w))
-                    .map(|w| w.to_string()).collect();
-                let title_overlap = if words_a.is_empty() || words_b.is_empty() {
-                    0.0
-                } else {
-                    let inter = words_a.intersection(&words_b).count();
-                    let union = words_a.union(&words_b).count();
-                    if union == 0 { 0.0 } else { inter as f64 / union as f64 }
-                };
+                let title_overlap = super::scoring::title_jaccard_filtered(&parent_title, &child_title);
 
                 // Orphan if: no meaningful title overlap AND no shared entities.
                 // Generic words like "Wildfires" are excluded so
@@ -963,7 +927,7 @@ impl SituationGraph {
                 }
             }
 
-            let min_group = self.config.sweep.coherence_split_min_group;
+            let min_group = config.sweep.coherence_split_min_group;
             for cid in to_split {
                 if let Some(new_id) = self.split_by_coherence(cid, cache, min_group) {
                     info!(%cid, %new_id, "Split incoherent cluster via k-means");
@@ -977,9 +941,9 @@ impl SituationGraph {
         // Force a coherence split if embeddings are available.
         let mut topic_diversity_splits = 0usize;
         if let Some(cache) = embedding_cache {
-            let topic_threshold = self.config.sweep.topic_diversity_split_threshold;
-            let min_group_td = self.config.sweep.coherence_split_min_group;
-            let coherence_min_events_td = self.config.sweep.coherence_min_events;
+            let topic_threshold = config.sweep.topic_diversity_split_threshold;
+            let min_group_td = config.sweep.coherence_split_min_group;
+            let coherence_min_events_td = config.sweep.coherence_min_events;
             let mut to_split_td: Vec<Uuid> = Vec::new();
 
             for cid in &cluster_ids {

@@ -8,7 +8,7 @@ pub mod percentile;
 pub use dto::{SituationClusterDTO, ClusterGapAnalysis};
 pub use lifecycle::{PhaseTransition, SituationPhase};
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -63,7 +63,7 @@ pub struct SituationGraph {
     /// Noise buffer: events that didn't match any cluster on arrival.
     /// Held for up to `noise_buffer_secs` to see if a matching cluster appears
     /// or if other pending events share enough signal to form a cluster together.
-    pending_buffer: Vec<PendingEvent>,
+    pending_buffer: VecDeque<PendingEvent>,
     /// Override clock for deterministic replay. When set, `self.now()` returns
     /// this value instead of `Utc::now()`. Advanced by replay harness.
     clock_override: Option<DateTime<Utc>>,
@@ -232,7 +232,7 @@ impl SituationGraph {
             burst_detector: BurstDetector::new(&config.burst),
             config,
             merge_rejections: HashMap::new(),
-            pending_buffer: Vec::new(),
+            pending_buffer: VecDeque::new(),
             clock_override: None,
             percentile_tracker: PercentileTracker::new(percentile_window),
         }
@@ -256,6 +256,36 @@ impl SituationGraph {
     /// Diagnostic: number of events buffered in the pending/noise buffer.
     pub fn pending_buffer_len(&self) -> usize {
         self.pending_buffer.len()
+    }
+
+    /// Enforce the `max_children_per_parent` cap by orphaning the smallest excess children.
+    /// Returns the number of children orphaned.
+    pub(crate) fn enforce_max_children_cap(&mut self, max_children: usize) -> usize {
+        let mut children_per_parent: HashMap<Uuid, Vec<(Uuid, usize)>> = HashMap::new();
+        for c in self.clusters.values() {
+            if let Some(pid) = c.parent_id {
+                children_per_parent.entry(pid).or_default().push((c.id, c.event_count));
+            }
+        }
+        let mut orphaned = 0usize;
+        for (pid, mut kids) in children_per_parent {
+            if kids.len() <= max_children {
+                continue;
+            }
+            kids.sort_by(|a, b| b.1.cmp(&a.1));
+            for &(kid_id, _) in kids.iter().skip(max_children) {
+                if let Some(kid) = self.clusters.get_mut(&kid_id) {
+                    kid.parent_id = None;
+                    orphaned += 1;
+                }
+            }
+            info!(
+                parent = %pid,
+                over = kids.len() - max_children,
+                "Orphaned excess children to enforce max_children cap"
+            );
+        }
+        orphaned
     }
 
     /// Score a candidate cluster for an event. Returns None if the cluster
@@ -400,30 +430,11 @@ impl SituationGraph {
 
         // Title similarity scoring (Jaccard word overlap)
         if let Some(ref title) = event.title {
-            let event_words: HashSet<String> = title
-                .to_lowercase()
-                .split_whitespace()
-                .filter(|w| w.len() > 2)
-                .map(|w| w.to_string())
-                .collect();
-            if !event_words.is_empty() {
+            if title.split_whitespace().any(|w| w.len() > 2) {
                 let best_jaccard = cluster
                     .event_titles
                     .iter()
-                    .map(|ct| {
-                        let cluster_words: HashSet<String> = ct
-                            .to_lowercase()
-                            .split_whitespace()
-                            .filter(|w| w.len() > 2)
-                            .map(|w| w.to_string())
-                            .collect();
-                        if cluster_words.is_empty() {
-                            return 0.0;
-                        }
-                        let intersection = event_words.intersection(&cluster_words).count();
-                        let union = event_words.union(&cluster_words).count();
-                        if union == 0 { 0.0 } else { intersection as f64 / union as f64 }
-                    })
+                    .map(|ct| scoring::title_jaccard(title, ct))
                     .fold(0.0_f64, f64::max);
                 // Apply tiered Jaccard bonuses (highest threshold first)
                 for &(threshold, bonus) in &scoring.title_jaccard_tiers {
@@ -564,9 +575,9 @@ impl SituationGraph {
             let max = self.config.sweep.noise_buffer_max;
             if self.pending_buffer.len() >= max {
                 // Evict the oldest entry to make room
-                self.pending_buffer.remove(0);
+                self.pending_buffer.pop_front();
             }
-            self.pending_buffer.push(PendingEvent {
+            self.pending_buffer.push_back(PendingEvent {
                 event: event.clone(),
                 received_at: self.now(),
                 entities,
@@ -741,10 +752,10 @@ impl SituationGraph {
         }
 
         // Keep unconsumed (still unmatched, not expired) events in the buffer
-        let mut remaining = Vec::new();
+        let mut remaining = VecDeque::new();
         for (i, pe) in still_pending.into_iter().enumerate() {
             if !consumed.contains(&i) {
-                remaining.push(pe);
+                remaining.push_back(pe);
             }
         }
         self.pending_buffer = remaining;
@@ -967,13 +978,85 @@ impl SituationGraph {
         }
     }
 
+    /// Word-level Jaccard similarity between two titles (case-insensitive,
+    /// ignoring words <= 2 chars).
+    fn word_jaccard(a: &str, b: &str) -> f64 {
+        let words_a: HashSet<String> = a
+            .to_lowercase()
+            .split_whitespace()
+            .filter(|w| w.len() > 2)
+            .map(|w| w.to_string())
+            .collect();
+        let words_b: HashSet<String> = b
+            .to_lowercase()
+            .split_whitespace()
+            .filter(|w| w.len() > 2)
+            .map(|w| w.to_string())
+            .collect();
+        if words_a.is_empty() || words_b.is_empty() {
+            return 0.0;
+        }
+        let intersection = words_a.intersection(&words_b).count();
+        let union = words_a.union(&words_b).count();
+        if union == 0 { 0.0 } else { intersection as f64 / union as f64 }
+    }
+
+    /// Find an existing top-level cluster whose title exactly matches or is
+    /// very similar (Jaccard > 0.85) to the given title. Returns the cluster
+    /// ID if found.
+    fn find_duplicate_title(&self, title: &str) -> Option<Uuid> {
+        let normalized = title.trim().to_lowercase();
+        // Skip dedup for garbage/formulaic titles — they are placeholders, not
+        // real situation identifiers. Deduplicating on them would incorrectly
+        // merge unrelated situations that happen to share the same template.
+        if Self::is_garbage_title(title) {
+            return None;
+        }
+        let mut best: Option<(Uuid, f64)> = None;
+        for c in self.clusters.values() {
+            if c.parent_id.is_some() {
+                continue; // only check top-level situations
+            }
+            let c_normalized = c.title.trim().to_lowercase();
+            if c_normalized == normalized {
+                return Some(c.id);
+            }
+            let sim = Self::word_jaccard(title, &c.title);
+            if sim >= 0.85 {
+                if best.as_ref().map_or(true, |(_, s)| sim > *s) {
+                    best = Some((c.id, sim));
+                }
+            }
+        }
+        best.map(|(id, _)| id)
+    }
+
     /// Create a brand-new cluster from a single event.
+    /// If an existing top-level cluster has the same (or very similar) title,
+    /// the event is merged into it instead of creating a duplicate.
     fn create_cluster(
         &mut self,
         event: &InsertableEvent,
         entities: HashSet<String>,
-        topics: HashSet<String>,
+        mut topics: HashSet<String>,
     ) -> Uuid {
+        // --- Exact-title dedup gate ---
+        // Generate the title we would use, then check if it already exists.
+        let mut tentative_regions = HashSet::new();
+        if let Some(ref rc) = event.region_code {
+            tentative_regions.insert(normalize_region(rc).to_string());
+        }
+        let tentative_title = Self::generate_title(&entities, &topics, &tentative_regions);
+        if let Some(existing_id) = self.find_duplicate_title(&tentative_title) {
+            info!(
+                existing_id = %existing_id,
+                title = %tentative_title,
+                "Dedup gate: merging into existing cluster instead of creating duplicate"
+            );
+            self.merge_into_cluster(existing_id, event, entities, topics);
+            return existing_id;
+        }
+
         let id = Uuid::new_v4();
         let now = self.now();
 
@@ -1044,6 +1127,45 @@ impl SituationGraph {
                 if fatalities > 0.0 {
                     severity = severity.max(Severity::High);
                 }
+            }
+        }
+
+        // Fallback topic derivation: ensure topics are never empty.
+        // Derive from event_type and source_type so topic-based merging works.
+        if topics.iter().all(|t| t.contains(':')) || topics.is_empty() {
+            let type_topic = match event.event_type {
+                EventType::ThermalAnomaly => Some("thermal-anomaly"),
+                EventType::SeismicEvent => Some("seismic"),
+                EventType::NuclearEvent => Some("nuclear"),
+                EventType::ConflictEvent | EventType::GeoEvent => Some("conflict"),
+                EventType::GpsInterference => Some("gps-interference"),
+                EventType::NotamEvent => Some("airspace"),
+                EventType::FishingEvent | EventType::VesselPosition | EventType::MaritimeSecurity => Some("maritime"),
+                EventType::NewsArticle | EventType::GeoNews => Some("news"),
+                EventType::TelegramMessage | EventType::BlueskyPost => Some("osint"),
+                EventType::InternetOutage | EventType::CensorshipEvent
+                    | EventType::BgpLeak | EventType::BgpAnomaly
+                    | EventType::ThreatIntel | EventType::CertIssued => Some("cyber"),
+                _ => None,
+            };
+            if let Some(t) = type_topic {
+                topics.insert(t.to_string());
+            }
+            let source_topic = match event.source_type {
+                SourceType::Firms => Some("thermal-anomaly"),
+                SourceType::Usgs => Some("seismic"),
+                SourceType::Nuclear => Some("nuclear"),
+                SourceType::Gdelt | SourceType::GdeltGeo | SourceType::Geoconfirmed | SourceType::Acled => Some("conflict"),
+                SourceType::Gpsjam => Some("gps-interference"),
+                SourceType::Cloudflare | SourceType::CloudflareBgp | SourceType::Ioda | SourceType::Bgp
+                    | SourceType::Otx | SourceType::Certstream | SourceType::Ooni => Some("cyber"),
+                SourceType::Gdacs | SourceType::Copernicus => Some("disaster"),
+                SourceType::Ukmto | SourceType::UkmtoWarnings | SourceType::Ais | SourceType::Gfw
+                    | SourceType::ImbPiracy => Some("maritime"),
+                _ => None,
+            };
+            if let Some(t) = source_topic {
+                topics.insert(t.to_string());
             }
         }
 
@@ -1623,33 +1745,8 @@ impl SituationGraph {
             self.clusters.insert(id, cluster);
         }
         // Post-restore: enforce max_children_per_parent cap.
-        // Orphan excess children (smallest first) so parents don't balloon.
         let max_children = self.config.cluster_caps.max_children_per_parent;
-        let mut children_per_parent: HashMap<Uuid, Vec<(Uuid, usize)>> = HashMap::new();
-        for c in self.clusters.values() {
-            if let Some(pid) = c.parent_id {
-                children_per_parent.entry(pid).or_default().push((c.id, c.event_count));
-            }
-        }
-        let mut orphaned = 0usize;
-        for (pid, mut kids) in children_per_parent {
-            if kids.len() <= max_children {
-                continue;
-            }
-            // Sort by event_count descending — keep the biggest children
-            kids.sort_by(|a, b| b.1.cmp(&a.1));
-            for &(kid_id, _) in kids.iter().skip(max_children) {
-                if let Some(kid) = self.clusters.get_mut(&kid_id) {
-                    kid.parent_id = None;
-                    orphaned += 1;
-                }
-            }
-            info!(
-                parent = %pid,
-                over = kids.len() - max_children,
-                "Orphaned excess children to enforce max_children cap"
-            );
-        }
+        let orphaned = self.enforce_max_children_cap(max_children);
         if orphaned > 0 {
             info!(orphaned, "Post-restore child cap enforcement complete");
         }
@@ -1674,23 +1771,7 @@ impl SituationGraph {
                 }
             };
             let shared_entities = child_entities.intersection(&parent_entities).count();
-            // Exclude generic category words from title overlap calculation
-            let generic = &scoring::GENERIC_TITLE_WORDS;
-            let words_a: HashSet<String> = parent_title.to_lowercase()
-                .split_whitespace().filter(|w| w.len() > 2)
-                .filter(|w| !generic.contains(w))
-                .map(|w| w.to_string()).collect();
-            let words_b: HashSet<String> = child_title.to_lowercase()
-                .split_whitespace().filter(|w| w.len() > 2)
-                .filter(|w| !generic.contains(w))
-                .map(|w| w.to_string()).collect();
-            let title_overlap = if words_a.is_empty() || words_b.is_empty() {
-                0.0
-            } else {
-                let inter = words_a.intersection(&words_b).count();
-                let union = words_a.union(&words_b).count();
-                if union == 0 { 0.0 } else { inter as f64 / union as f64 }
-            };
+            let title_overlap = scoring::title_jaccard_filtered(&parent_title, &child_title);
             if shared_entities == 0 && title_overlap < 0.15 {
                 if let Some(c) = self.clusters.get_mut(&child_id) {
                     c.parent_id = None;

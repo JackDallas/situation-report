@@ -12,7 +12,7 @@ use sr_types::SourceType;
 use uuid::Uuid;
 
 use sr_embeddings::EmbeddingCache;
-use tracing::info;
+use tracing::{info, warn};
 
 use super::scoring::regions_overlap;
 use super::{median_centroid, SituationCluster, SituationGraph};
@@ -114,6 +114,94 @@ pub(crate) fn kmeans_2(embeddings: &[Vec<f32>], max_iters: usize) -> Option<(Vec
 }
 
 impl SituationGraph {
+    /// Build a map of parent_id -> count of children.
+    fn child_count_map(&self) -> HashMap<Uuid, usize> {
+        let mut counts: HashMap<Uuid, usize> = HashMap::new();
+        for c in self.clusters.values() {
+            if let Some(pid) = c.parent_id {
+                *counts.entry(pid).or_default() += 1;
+            }
+        }
+        counts
+    }
+
+    /// Build an index of parent_id -> list of child IDs.
+    fn parent_to_children_index(&self) -> HashMap<Uuid, Vec<Uuid>> {
+        let mut index: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+        for c in self.clusters.values() {
+            if let Some(pid) = c.parent_id {
+                index.entry(pid).or_default().push(c.id);
+            }
+        }
+        index
+    }
+
+    /// Merge a child cluster's data into a parent cluster.
+    ///
+    /// Transfers event_ids, source_types, event_titles, severity, first_seen,
+    /// last_updated, coord_buffer, event_count, and signal_event_count from
+    /// child to parent. Returns `false` if either cluster is missing.
+    fn merge_child_into_parent(&mut self, parent_id: Uuid, child_id: Uuid) -> bool {
+        // Collect child data first (immutable borrow)
+        let (child_event_ids, child_source_types, child_event_titles,
+             child_severity, child_first_seen, child_last_updated,
+             child_coord_buffer, child_event_count, child_signal_count) = {
+            let Some(child) = self.clusters.get(&child_id) else {
+                warn!(child = %child_id, "child missing from clusters during merge");
+                return false;
+            };
+            (
+                child.event_ids.clone(),
+                child.source_types.clone(),
+                child.event_titles.clone(),
+                child.severity,
+                child.first_seen,
+                child.last_updated,
+                child.coord_buffer.clone(),
+                child.event_count,
+                child.signal_event_count,
+            )
+        };
+
+        let Some(parent) = self.clusters.get_mut(&parent_id) else {
+            warn!(parent = %parent_id, "parent missing from clusters during merge");
+            return false;
+        };
+
+        parent.event_ids.extend(child_event_ids);
+        let max_eids = self.config.cluster_caps.max_event_ids;
+        if parent.event_ids.len() > max_eids {
+            let drain_count = parent.event_ids.len() - max_eids;
+            parent.event_ids.drain(..drain_count);
+        }
+        parent.event_count += child_event_count;
+        parent.signal_event_count += child_signal_count;
+        parent.source_types.extend(child_source_types);
+        for title in child_event_titles {
+            if parent.event_titles.len() < self.config.cluster_caps.max_event_titles {
+                parent.event_titles.push(title);
+            }
+        }
+        if child_event_count >= self.config.quality.min_events_standalone {
+            parent.severity = parent.severity.max(child_severity);
+        }
+        if child_first_seen < parent.first_seen {
+            parent.first_seen = child_first_seen;
+        }
+        if child_last_updated > parent.last_updated {
+            parent.last_updated = child_last_updated;
+        }
+        if !child_coord_buffer.is_empty() {
+            parent.coord_buffer.extend(child_coord_buffer);
+            if parent.coord_buffer.len() > 30 {
+                parent.coord_buffer.drain(..parent.coord_buffer.len() - 30);
+            }
+            parent.centroid = Some(median_centroid(&parent.coord_buffer));
+        }
+
+        true
+    }
+
     /// Merge overlapping clusters into parent-child hierarchy.
     /// Returns `Vec<(parent_id, child_id, skip_audit)>`.
     /// When `skip_audit` is true, the merge was a forced consolidation (title-identity
@@ -123,12 +211,8 @@ impl SituationGraph {
         let mut merges: Vec<(Uuid, Uuid, bool)> = Vec::new(); // (parent, child, skip_audit)
 
         // Pre-count children per cluster for cap enforcement
-        let mut child_count: HashMap<Uuid, usize> = HashMap::new();
-        for c in self.clusters.values() {
-            if let Some(pid) = c.parent_id {
-                *child_count.entry(pid).or_default() += 1;
-            }
-        }
+        let mut child_count = self.child_count_map();
+        let parent_to_children = self.parent_to_children_index();
 
         let max_children = self.config.cluster_caps.max_children_per_parent;
         let max_events = self.config.cluster_caps.max_events_per_parent;
@@ -180,18 +264,22 @@ impl SituationGraph {
                 if both_are_parents_preview {
                     a_entities_expanded = {
                         let mut ents = a.entities.clone();
-                        for c in self.clusters.values() {
-                            if c.parent_id == Some(a_id) {
-                                ents.extend(c.entities.iter().take(5).cloned());
+                        if let Some(children) = parent_to_children.get(&a_id) {
+                            for &cid in children {
+                                if let Some(c) = self.clusters.get(&cid) {
+                                    ents.extend(c.entities.iter().take(5).cloned());
+                                }
                             }
                         }
                         ents
                     };
                     b_entities_expanded = {
                         let mut ents = b.entities.clone();
-                        for c in self.clusters.values() {
-                            if c.parent_id == Some(b_id) {
-                                ents.extend(c.entities.iter().take(5).cloned());
+                        if let Some(children) = parent_to_children.get(&b_id) {
+                            for &cid in children {
+                                if let Some(c) = self.clusters.get(&cid) {
+                                    ents.extend(c.entities.iter().take(5).cloned());
+                                }
                             }
                         }
                         ents
@@ -203,26 +291,13 @@ impl SituationGraph {
                 let shared_entities = a_entities_expanded.intersection(&b_entities_expanded).count();
                 let shared_region = regions_overlap(&a.region_codes, &b.region_codes);
 
-                // Cluster title similarity
+                // Cluster title similarity (require >= 3 significant words each)
                 let cluster_titles_similar = {
-                    let words_a: HashSet<String> = a.title
-                        .to_lowercase()
-                        .split_whitespace()
-                        .filter(|w| w.len() > 2)
-                        .map(|w| w.to_string())
-                        .collect();
-                    let words_b: HashSet<String> = b.title
-                        .to_lowercase()
-                        .split_whitespace()
-                        .filter(|w| w.len() > 2)
-                        .map(|w| w.to_string())
-                        .collect();
-                    if words_a.len() < 3 || words_b.len() < 3 {
-                        0.0
+                    let enough_words = |t: &str| t.split_whitespace().filter(|w| w.len() > 2).count() >= 3;
+                    if enough_words(&a.title) && enough_words(&b.title) {
+                        super::scoring::title_jaccard(&a.title, &b.title)
                     } else {
-                        let intersection = words_a.intersection(&words_b).count();
-                        let union = words_a.union(&words_b).count();
-                        if union == 0 { 0.0 } else { intersection as f64 / union as f64 }
+                        0.0
                     }
                 };
 
@@ -375,27 +450,12 @@ impl SituationGraph {
                 continue;
             }
             // Grandparent guard
-            let child_own_children = self.clusters.values()
-                .filter(|c| c.parent_id == Some(child_id))
-                .count();
+            let child_own_children = parent_to_children.get(&child_id).map_or(0, |c| c.len());
             if child_own_children >= 3 {
                 let title_override = if let (Some(parent), Some(child)) =
                     (self.clusters.get(&parent_id), self.clusters.get(&child_id))
                 {
-                    let words_a: HashSet<String> = parent.title.to_lowercase()
-                        .split_whitespace().filter(|w| w.len() > 2)
-                        .map(|w| w.to_string()).collect();
-                    let words_b: HashSet<String> = child.title.to_lowercase()
-                        .split_whitespace().filter(|w| w.len() > 2)
-                        .map(|w| w.to_string()).collect();
-                    if words_a.is_empty() || words_b.is_empty() {
-                        false
-                    } else {
-                        let inter = words_a.intersection(&words_b).count();
-                        let union = words_a.union(&words_b).count();
-                        let sim = if union == 0 { 0.0 } else { inter as f64 / union as f64 };
-                        sim >= 0.8
-                    }
+                    super::scoring::title_jaccard(&parent.title, &child.title) >= 0.8
                 } else {
                     false
                 };
@@ -404,7 +464,7 @@ impl SituationGraph {
                 }
             }
             let live_children = child_count.get(&parent_id).copied().unwrap_or(0);
-            let child_has_children = self.clusters.values().any(|c| c.parent_id == Some(child_id));
+            let child_has_children = parent_to_children.get(&child_id).map_or(false, |c| !c.is_empty());
             let effective_cap = if child_has_children { max_children + 1 } else { max_children };
             if live_children >= effective_cap {
                 continue;
@@ -420,10 +480,8 @@ impl SituationGraph {
             *child_count.entry(parent_id).or_default() += 1;
 
             if !child_has_children {
-                let grandchild_ids: Vec<Uuid> = self.clusters.values()
-                    .filter(|c| c.parent_id == Some(child_id))
-                    .map(|c| c.id)
-                    .collect();
+                let grandchild_ids: Vec<Uuid> = parent_to_children.get(&child_id)
+                    .map_or_else(Vec::new, |ids| ids.clone());
                 let current_children = child_count.get(&parent_id).copied().unwrap_or(0);
                 let can_absorb = max_children.saturating_sub(current_children);
                 for gc_id in grandchild_ids.iter().take(can_absorb) {
@@ -441,69 +499,15 @@ impl SituationGraph {
 
             applied_merges.push((parent_id, child_id, skip_audit));
 
-            // Collect child data to merge into parent
-            let (child_event_ids, child_source_types,
-                 child_event_titles, child_severity,
-                 child_first_seen, child_last_updated, child_coord_buffer, child_event_count,
-                 child_signal_count) = {
-                let child = self.clusters.get(&child_id).unwrap();
-                (
-                    child.event_ids.clone(),
-                    child.source_types.clone(),
-                    child.event_titles.clone(),
-                    child.severity,
-                    child.first_seen,
-                    child.last_updated,
-                    child.coord_buffer.clone(),
-                    child.event_count,
-                    child.signal_event_count,
-                )
-            };
+            // Merge child data into parent
+            let source_types_before = self.clusters.get(&parent_id).map_or(0, |p| p.source_types.len());
+            if !self.merge_child_into_parent(parent_id, child_id) {
+                continue;
+            }
 
-            let parent_child_count = self.clusters.values().filter(|c| c.parent_id == Some(parent_id)).count();
+            let parent_child_count = child_count.get(&parent_id).copied().unwrap_or(0);
 
             if let Some(parent) = self.clusters.get_mut(&parent_id) {
-                let source_types_before = parent.source_types.len();
-                // Do NOT inherit child entities into parent — prevents entity
-                // snowball where the parent accumulates all child entities and
-                // matches against every new cluster. Children keep their own
-                // entities; the parent retains only its direct-observation entities.
-                // (Entity index still maps child entities to child_id, not parent_id.)
-                parent.event_ids.extend(child_event_ids);
-                let max_eids = self.config.cluster_caps.max_event_ids;
-                if parent.event_ids.len() > max_eids {
-                    let drain_count = parent.event_ids.len() - max_eids;
-                    parent.event_ids.drain(..drain_count);
-                }
-                parent.event_count += child_event_count;
-                parent.signal_event_count += child_signal_count;
-                parent.source_types.extend(child_source_types);
-                // Do NOT extend parent region_codes — prevents region snowball
-                // where the parent accumulates all child regions and matches
-                // every new cluster globally. Children keep their own regions.
-                for title in child_event_titles {
-                    if parent.event_titles.len() < self.config.cluster_caps.max_event_titles {
-                        parent.event_titles.push(title);
-                    }
-                }
-                if child_event_count >= self.config.quality.min_events_standalone {
-                    parent.severity = parent.severity.max(child_severity);
-                }
-                if child_first_seen < parent.first_seen {
-                    parent.first_seen = child_first_seen;
-                }
-                if child_last_updated > parent.last_updated {
-                    parent.last_updated = child_last_updated;
-                }
-                // Merge coordinate buffers and recompute median centroid
-                if !child_coord_buffer.is_empty() {
-                    parent.coord_buffer.extend(child_coord_buffer);
-                    // Keep only the most recent 30 coordinates
-                    if parent.coord_buffer.len() > 30 {
-                        parent.coord_buffer.drain(..parent.coord_buffer.len() - 30);
-                    }
-                    parent.centroid = Some(median_centroid(&parent.coord_buffer));
-                }
                 let source_types_added = parent.source_types.len().saturating_sub(source_types_before);
                 if source_types_added >= 1 {
                     parent.has_ai_title = false;
@@ -533,29 +537,7 @@ impl SituationGraph {
 
         // Post-merge cap enforcement
         if !applied_merges.is_empty() {
-            let mut children_per_parent: HashMap<Uuid, Vec<(Uuid, usize)>> = HashMap::new();
-            for c in self.clusters.values() {
-                if let Some(pid) = c.parent_id {
-                    children_per_parent.entry(pid).or_default().push((c.id, c.event_count));
-                }
-            }
-            for (pid, mut kids) in children_per_parent {
-                if kids.len() <= max_children {
-                    continue;
-                }
-                kids.sort_by(|a, b| b.1.cmp(&a.1));
-                let orphaned = kids.len() - max_children;
-                for &(kid_id, _) in kids.iter().skip(max_children) {
-                    if let Some(kid) = self.clusters.get_mut(&kid_id) {
-                        kid.parent_id = None;
-                    }
-                }
-                info!(
-                    parent = %pid,
-                    orphaned = orphaned,
-                    "Post-merge cap enforcement: orphaned excess children"
-                );
-            }
+            self.enforce_max_children_cap(max_children);
         }
 
         applied_merges
@@ -671,12 +653,8 @@ impl SituationGraph {
         }
 
         // Pre-count children per cluster for cap enforcement
-        let mut child_count: HashMap<Uuid, usize> = HashMap::new();
-        for c in self.clusters.values() {
-            if let Some(pid) = c.parent_id {
-                *child_count.entry(pid).or_default() += 1;
-            }
-        }
+        let mut child_count = self.child_count_map();
+        let parent_to_children = self.parent_to_children_index();
 
         // 3. Collect candidate merges from topic groups
         let mut merge_candidates: Vec<(Uuid, Uuid)> = Vec::new();
@@ -841,7 +819,7 @@ impl SituationGraph {
 
             // Cap checks
             let live_children = child_count.get(&parent_id).copied().unwrap_or(0);
-            let child_has_children = self.clusters.values().any(|c| c.parent_id == Some(child_id));
+            let child_has_children = parent_to_children.get(&child_id).map_or(false, |c| !c.is_empty());
             let effective_cap = if child_has_children { max_children + 1 } else { max_children };
             if live_children >= effective_cap {
                 continue;
@@ -859,10 +837,8 @@ impl SituationGraph {
 
             // Reparent grandchildren to parent (flatten hierarchy)
             if child_has_children {
-                let grandchild_ids: Vec<Uuid> = self.clusters.values()
-                    .filter(|c| c.parent_id == Some(child_id))
-                    .map(|c| c.id)
-                    .collect();
+                let grandchild_ids: Vec<Uuid> = parent_to_children.get(&child_id)
+                    .map_or_else(Vec::new, |ids| ids.clone());
                 let current_children = child_count.get(&parent_id).copied().unwrap_or(0);
                 let can_absorb = max_children.saturating_sub(current_children);
                 for gc_id in grandchild_ids.iter().take(can_absorb) {
@@ -874,59 +850,15 @@ impl SituationGraph {
                 // Any that can't be absorbed stay as children of the (now child) situation
             }
 
-            // Merge child data into parent (same as merge_overlapping)
-            let (child_event_ids, child_source_types,
-                 child_event_titles, child_severity,
-                 child_first_seen, child_last_updated, child_coord_buffer, child_event_count,
-                 child_signal_count) = {
-                let child = self.clusters.get(&child_id).unwrap();
-                (
-                    child.event_ids.clone(),
-                    child.source_types.clone(),
-                    child.event_titles.clone(),
-                    child.severity,
-                    child.first_seen,
-                    child.last_updated,
-                    child.coord_buffer.clone(),
-                    child.event_count,
-                    child.signal_event_count,
-                )
-            };
+            // Merge child data into parent
+            let source_types_before = self.clusters.get(&parent_id).map_or(0, |p| p.source_types.len());
+            if !self.merge_child_into_parent(parent_id, child_id) {
+                continue;
+            }
 
-            let parent_child_count = self.clusters.values().filter(|c| c.parent_id == Some(parent_id)).count();
+            let parent_child_count = child_count.get(&parent_id).copied().unwrap_or(0);
 
             if let Some(parent) = self.clusters.get_mut(&parent_id) {
-                let source_types_before = parent.source_types.len();
-                parent.event_ids.extend(child_event_ids);
-                let max_eids = self.config.cluster_caps.max_event_ids;
-                if parent.event_ids.len() > max_eids {
-                    let drain_count = parent.event_ids.len() - max_eids;
-                    parent.event_ids.drain(..drain_count);
-                }
-                parent.event_count += child_event_count;
-                parent.signal_event_count += child_signal_count;
-                parent.source_types.extend(child_source_types);
-                for title in child_event_titles {
-                    if parent.event_titles.len() < self.config.cluster_caps.max_event_titles {
-                        parent.event_titles.push(title);
-                    }
-                }
-                if child_event_count >= self.config.quality.min_events_standalone {
-                    parent.severity = parent.severity.max(child_severity);
-                }
-                if child_first_seen < parent.first_seen {
-                    parent.first_seen = child_first_seen;
-                }
-                if child_last_updated > parent.last_updated {
-                    parent.last_updated = child_last_updated;
-                }
-                if !child_coord_buffer.is_empty() {
-                    parent.coord_buffer.extend(child_coord_buffer);
-                    if parent.coord_buffer.len() > 30 {
-                        parent.coord_buffer.drain(..parent.coord_buffer.len() - 30);
-                    }
-                    parent.centroid = Some(median_centroid(&parent.coord_buffer));
-                }
                 let source_types_added = parent.source_types.len().saturating_sub(source_types_before);
                 if source_types_added >= 1 {
                     parent.has_ai_title = false;
@@ -997,12 +929,7 @@ impl SituationGraph {
         let max_children = self.config.cluster_caps.max_children_per_parent;
         let max_events = self.config.cluster_caps.max_events_per_parent;
 
-        let mut child_count: HashMap<Uuid, usize> = HashMap::new();
-        for c in self.clusters.values() {
-            if let Some(pid) = c.parent_id {
-                *child_count.entry(pid).or_default() += 1;
-            }
-        }
+        let mut child_count = self.child_count_map();
 
         let mut applied: Vec<(Uuid, Uuid, bool)> = Vec::new();
 
@@ -1076,55 +1003,11 @@ impl SituationGraph {
                 }
                 *child_count.entry(parent_id).or_default() += 1;
 
-                // Merge child data into parent (abbreviated — same pattern as consolidate_by_topic)
-                let (child_event_ids, child_source_types, child_event_titles,
-                     child_severity, child_first_seen, child_last_updated,
-                     child_coord_buffer, child_event_count, child_signal_count) = {
-                    let child = self.clusters.get(&child_id).unwrap();
-                    (
-                        child.event_ids.clone(),
-                        child.source_types.clone(),
-                        child.event_titles.clone(),
-                        child.severity,
-                        child.first_seen,
-                        child.last_updated,
-                        child.coord_buffer.clone(),
-                        child.event_count,
-                        child.signal_event_count,
-                    )
-                };
-
+                // Merge child data into parent
+                if !self.merge_child_into_parent(parent_id, child_id) {
+                    continue;
+                }
                 if let Some(parent) = self.clusters.get_mut(&parent_id) {
-                    parent.event_ids.extend(child_event_ids);
-                    let max_eids = self.config.cluster_caps.max_event_ids;
-                    if parent.event_ids.len() > max_eids {
-                        let drain_count = parent.event_ids.len() - max_eids;
-                        parent.event_ids.drain(..drain_count);
-                    }
-                    parent.event_count += child_event_count;
-                    parent.signal_event_count += child_signal_count;
-                    parent.source_types.extend(child_source_types);
-                    for title in child_event_titles {
-                        if parent.event_titles.len() < self.config.cluster_caps.max_event_titles {
-                            parent.event_titles.push(title);
-                        }
-                    }
-                    if child_event_count >= self.config.quality.min_events_standalone {
-                        parent.severity = parent.severity.max(child_severity);
-                    }
-                    if child_first_seen < parent.first_seen {
-                        parent.first_seen = child_first_seen;
-                    }
-                    if child_last_updated > parent.last_updated {
-                        parent.last_updated = child_last_updated;
-                    }
-                    if !child_coord_buffer.is_empty() {
-                        parent.coord_buffer.extend(child_coord_buffer);
-                        if parent.coord_buffer.len() > 30 {
-                            parent.coord_buffer.drain(..parent.coord_buffer.len() - 30);
-                        }
-                        parent.centroid = Some(median_centroid(&parent.coord_buffer));
-                    }
                     parent.has_ai_title = false;
                     parent.title_signal_count_at_gen = 0;
                 }
@@ -1161,6 +1044,166 @@ impl SituationGraph {
         if expired > 0 {
             info!(expired, remaining = self.merge_rejections.len(), "Expired stale merge rejections");
         }
+    }
+
+    /// Dynamic country-sweep consolidation: groups top-level situations by
+    /// country/region keywords in titles and force-merges when a region has
+    /// too many fragments.
+    ///
+    /// The threshold adapts to the total top-level count:
+    ///   - >100 top-level → merge when a region has ≥2 situations
+    ///   - 50-100 → merge when ≥3
+    ///   - <50 → merge when ≥4
+    ///
+    /// This catches situations that share a conflict theater (e.g. Iran/Israel/
+    /// Yemen) but have no shared topics, entities, or embeddings to link them.
+    pub fn country_sweep_consolidation(&mut self) -> Vec<(Uuid, Uuid, bool)> {
+        let max_children = self.config.cluster_caps.max_children_per_parent;
+
+        // Collect top-level situations with their titles
+        let top_level: Vec<(Uuid, String, usize)> = self.clusters.iter()
+            .filter(|(_, c)| c.parent_id.is_none())
+            .map(|(&id, c)| (id, c.title.to_lowercase(), c.event_count))
+            .collect();
+
+        let tl_count = top_level.len();
+        if tl_count < 2 {
+            return Vec::new();
+        }
+
+        // Adaptive threshold based on total top-level count
+        let merge_threshold: usize = if tl_count > 100 {
+            2
+        } else if tl_count > 50 {
+            3
+        } else {
+            4
+        };
+
+        // Extract country keywords from each title and group situation IDs
+        // Uses the same country list as LLM consolidation batching.
+        const COUNTRY_KEYWORDS: &[&str] = &[
+            "iran", "iraq", "israel", "ukraine", "russia", "china", "india",
+            "japan", "korea", "yemen", "syria", "turkey", "pakistan", "afghan",
+            "sudan", "somalia", "libya", "egypt", "saudi", "qatar", "bahrain",
+            "france", "germany", "poland", "serbia", "mexico",
+            "venezuela", "peru", "indonesia", "vanuatu",
+            "taiwan", "philippines", "myanmar", "hormuz", "houthi", "hezbollah",
+            "palestine", "palestinian", "gaza", "lebanon", "persian",
+        ];
+
+        // Conflict theaters: countries that should be grouped together
+        // because they're part of the same broader conflict.
+        fn theater_key(keyword: &str) -> &'static str {
+            match keyword {
+                "iran" | "israel" | "yemen" | "houthi" | "hezbollah"
+                | "hormuz" | "persian" | "palestine" | "palestinian"
+                | "gaza" | "lebanon" | "iraq" | "syria" => "mideast-iran-israel",
+                "ukraine" | "russia" => "ukraine-russia",
+                "china" | "taiwan" => "china-taiwan",
+                _ => "other",
+            }
+        }
+
+        let mut theater_groups: HashMap<String, Vec<(Uuid, usize)>> = HashMap::new();
+        for &(id, ref title, event_count) in &top_level {
+            // Check ALL keywords, prefer conflict theater over individual country
+            let mut best_theater: Option<&str> = None;
+            let mut best_keyword: Option<&str> = None;
+            for &kw in COUNTRY_KEYWORDS {
+                if title.contains(kw) {
+                    let theater = theater_key(kw);
+                    if theater != "other" {
+                        // Conflict theater takes priority — stop looking
+                        best_theater = Some(theater);
+                        break;
+                    } else if best_keyword.is_none() {
+                        best_keyword = Some(kw);
+                        best_theater = Some("other");
+                    }
+                }
+            }
+            if let Some(theater) = best_theater {
+                let key = if theater == "other" {
+                    best_keyword.unwrap_or("unknown").to_string()
+                } else {
+                    theater.to_string()
+                };
+                theater_groups.entry(key).or_default().push((id, event_count));
+            }
+        }
+
+        let mut applied = Vec::new();
+        let mut child_count = self.child_count_map();
+
+        for (theater, mut sids) in theater_groups {
+            // Deduplicate (a title might match multiple keywords in same theater)
+            sids.sort_by_key(|(id, _)| *id);
+            sids.dedup_by_key(|(id, _)| *id);
+
+            if sids.len() < merge_threshold {
+                continue;
+            }
+
+            // Pick the situation with most events as parent
+            sids.sort_by(|a, b| b.1.cmp(&a.1));
+            let parent_id = sids[0].0;
+
+            let parent_title = self.clusters.get(&parent_id)
+                .map(|c| c.title.clone()).unwrap_or_default();
+
+            for &(child_id, _) in sids.iter().skip(1) {
+                // Skip if child is already parented (may have been merged this pass)
+                if self.clusters.get(&child_id).is_some_and(|c| c.parent_id.is_some()) {
+                    continue;
+                }
+
+                // Check children cap (no events cap — deliberate consolidation)
+                let live_children = child_count.get(&parent_id).copied().unwrap_or(0);
+                if live_children >= max_children {
+                    break;
+                }
+
+                // Clear any rejection for this pair
+                let rejection_key = if parent_id < child_id {
+                    (parent_id, child_id)
+                } else {
+                    (child_id, parent_id)
+                };
+                self.merge_rejections.remove(&rejection_key);
+
+                // Merge child into parent
+                if let Some(child) = self.clusters.get_mut(&child_id) {
+                    child.parent_id = Some(parent_id);
+                }
+                *child_count.entry(parent_id).or_default() += 1;
+
+                // Transfer data to parent
+                if !self.merge_child_into_parent(parent_id, child_id) {
+                    continue;
+                }
+                if let Some(parent) = self.clusters.get_mut(&parent_id) {
+                    parent.has_ai_title = false;
+                    parent.title_signal_count_at_gen = 0;
+                }
+
+                let child_title = self.clusters.get(&child_id)
+                    .map(|c| c.title.as_str()).unwrap_or("?");
+                info!(
+                    %parent_id, %child_id,
+                    parent = %parent_title, child = %child_title,
+                    theater,
+                    "Country sweep: merged by conflict theater"
+                );
+
+                applied.push((parent_id, child_id, true)); // skip_audit = true
+            }
+        }
+
+        if !applied.is_empty() {
+            info!(count = applied.len(), "Country sweep consolidation produced merges");
+        }
+        applied
     }
 
     /// Split clusters that have grown too large and contain divergent entity subgroups.

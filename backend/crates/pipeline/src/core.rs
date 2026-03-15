@@ -172,6 +172,14 @@ impl PipelineCore {
                 merges.extend(topic_merges);
             }
 
+            // Country-sweep consolidation: force-merge situations sharing a
+            // conflict theater (e.g. Iran/Israel/Yemen) when too many fragments
+            // exist. Threshold adapts to total top-level count.
+            let country_merges = self.graph.country_sweep_consolidation();
+            if !country_merges.is_empty() {
+                merges.extend(country_merges);
+            }
+
             self.graph.split_divergent();
 
             if self.tick_count % 4 == 0 {

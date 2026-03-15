@@ -561,31 +561,19 @@ impl SituationGraph {
         // --- Pass E: Merge near-duplicate top-level titles ---
         // e.g., "Central Israel Rocket Alerts" + "Israel Central Rocket Alerts" → keep higher-event one
         {
-            let generic = &super::scoring::GENERIC_TITLE_WORDS;
-            let top_level: Vec<(usize, HashSet<String>)> = dtos.iter().enumerate()
+            let top_level_indices: Vec<usize> = dtos.iter().enumerate()
                 .filter(|(_, d)| d.parent_id.is_none())
-                .map(|(i, d)| {
-                    let words: HashSet<String> = d.title.to_lowercase()
-                        .split_whitespace()
-                        .filter(|w| w.len() > 2)
-                        .filter(|w| !generic.contains(w))
-                        .map(|w| w.to_string())
-                        .collect();
-                    (i, words)
-                })
+                .map(|(i, _)| i)
                 .collect();
 
             let mut merge_into: HashMap<usize, usize> = HashMap::new(); // victim → winner
-            for i in 0..top_level.len() {
-                if merge_into.contains_key(&top_level[i].0) { continue; }
-                for j in (i + 1)..top_level.len() {
-                    if merge_into.contains_key(&top_level[j].0) { continue; }
-                    let (idx_a, ref wa) = top_level[i];
-                    let (idx_b, ref wb) = top_level[j];
-                    if wa.len() < 2 || wb.len() < 2 { continue; }
-                    let intersection = wa.intersection(wb).count();
-                    let union = wa.union(wb).count();
-                    let jaccard = if union > 0 { intersection as f64 / union as f64 } else { 0.0 };
+            for ii in 0..top_level_indices.len() {
+                let idx_a = top_level_indices[ii];
+                if merge_into.contains_key(&idx_a) { continue; }
+                for jj in (ii + 1)..top_level_indices.len() {
+                    let idx_b = top_level_indices[jj];
+                    if merge_into.contains_key(&idx_b) { continue; }
+                    let jaccard = super::scoring::title_jaccard_filtered(&dtos[idx_a].title, &dtos[idx_b].title);
                     if jaccard >= 0.75 {
                         // Keep the one with more events
                         let (winner, loser) = if dtos[idx_a].event_count >= dtos[idx_b].event_count {
