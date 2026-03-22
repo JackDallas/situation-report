@@ -11,7 +11,7 @@ services:
       - /run/media/system/Storage/pg-backups:/mnt/backups
       - /run/media/system/Storage/pg-wal-archive:/mnt/wal
     ports:
-      - "127.0.0.1:5432:5432"
+      - "5432:5432"
     shm_size: "18g"
     command:
       - "postgres"
