@@ -314,6 +314,11 @@ impl DataSource for RssNewsSource {
             let mut new_count = 0;
 
             for item in items {
+                // Skip articles that aren't relevant to OSINT/security
+                if !is_osint_relevant(&item.title, &item.description) {
+                    continue;
+                }
+
                 // Dedup by guid — check both current and previous buffers
                 {
                     let mut current = self.seen_current.lock().unwrap_or_else(|e| e.into_inner());
@@ -419,6 +424,68 @@ impl DataSource for RssNewsSource {
         Ok(all_events)
         })
     }
+}
+
+/// Check if an RSS article is relevant to OSINT/security monitoring.
+/// Filters out entertainment, sports, lifestyle, celebrity, culture content.
+/// Articles from defense/OSINT-specific feeds (Bellingcat, USNI, etc.) always pass.
+fn is_osint_relevant(title: &str, description: &str) -> bool {
+    let combined = format!("{} {}", title, description).to_lowercase();
+
+    // Negative keywords — topics that are never OSINT-relevant
+    const REJECT_KEYWORDS: &[&str] = &[
+        "k-pop", "kpop", "bts ", "blackpink", "taylor swift", "beyonce",
+        "grammy", "oscar", "emmy", "golden globe", "box office", "blockbuster",
+        "premier league", "champions league", "world cup", "fifa", "uefa",
+        "nba ", "nfl ", "nhl ", "mlb ", "cricket", "tennis", "rugby",
+        "formula 1", "f1 race", "grand prix", "olympics",
+        "kardashian", "celebrity", "red carpet", "fashion week", "met gala",
+        "reality tv", "contestant", "idol ", "talent show",
+        "recipe", "cookbook", "restaurant review", "michelin star",
+        "box set", "streaming series", "netflix", "new album", "concert tour",
+        "wedding", "divorce", "baby bump", "engagement ring",
+        "horoscope", "zodiac", "astrology",
+        "video game", "playstation", "xbox", "nintendo", "esports",
+    ];
+
+    for kw in REJECT_KEYWORDS {
+        if combined.contains(kw) {
+            return false;
+        }
+    }
+
+    // Positive keywords — if present, always relevant regardless of other content
+    const ACCEPT_KEYWORDS: &[&str] = &[
+        "military", "missile", "drone", "strike", "airstrike", "bomb",
+        "nuclear", "weapon", "sanctions", "ceasefire", "peace talks",
+        "war ", "conflict", "invasion", "occupation", "troops",
+        "cyber", "hack", "breach", "malware", "ransomware", "apt",
+        "navy", "warship", "submarine", "aircraft carrier",
+        "intelligence", "espionage", "spy", "surveillance",
+        "terrorism", "extremist", "insurgent", "militant",
+        "refugee", "humanitarian", "crisis", "famine", "epidemic",
+        "earthquake", "tsunami", "hurricane", "typhoon", "flooding",
+        "coup", "uprising", "protest", "riot", "martial law",
+        "maritime", "piracy", "shipping", "strait", "blockade",
+        "election", "sanctions", "tariff", "embargo", "trade war",
+        "arrest", "indictment", "prosecution", "tribunal",
+        "assassination", "killing", "execution", "hostage",
+        "border", "territorial", "sovereignty", "disputed",
+        "pipeline", "energy", "oil price", "gas supply",
+        "infrastructure", "power grid", "internet outage",
+    ];
+
+    for kw in ACCEPT_KEYWORDS {
+        if combined.contains(kw) {
+            return true;
+        }
+    }
+
+    // No strong signal either way — reject to reduce noise
+    // The OSINT-specific feeds (Bellingcat, USNI, War on the Rocks, etc.)
+    // will mostly contain relevant content that hits accept keywords.
+    // General feeds (BBC, Guardian, DW) produce lots of noise that doesn't.
+    false
 }
 
 #[cfg(test)]
