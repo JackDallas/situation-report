@@ -75,6 +75,10 @@
 	}
 
 	function handleIncidentClick(incident: Incident) {
+		situationsStore.selectedSituation = null;
+		eventStore.selectedEvent = null;
+		eventStore.selectedIncident = incident;
+		uiStore.openPanel('incident-detail');
 		if (incident.latitude != null && incident.longitude != null) {
 			mapStore.flyTo(incident.longitude, incident.latitude, 10);
 		}
