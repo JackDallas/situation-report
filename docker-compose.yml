@@ -131,12 +131,12 @@ services:
       INTEL_DAILY_BUDGET_USD: ${INTEL_DAILY_BUDGET_USD:-10}
       INTEL_MONTHLY_BUDGET_USD: ${INTEL_MONTHLY_BUDGET_USD:-30}
       INTEL_ANALYSIS_MODEL: ${INTEL_ANALYSIS_MODEL:-claude-sonnet-4-6}
-      # Local LLM — in-process via llama-cpp-2 (no separate container)
-      LLM_MODEL_PATH: /app/llm-models/qwen3.5-9b-q4_k_m.gguf
-      LLM_GPU_LAYERS: ${LLM_GPU_LAYERS:-99}
-      LLM_CTX_SIZE: ${LLM_CTX_SIZE:-8192}
-      # Fallback: set LLM_URL to use external llama-server instead
-      # LLM_URL: http://llama:8000
+      # Local LLM — use external llama-server (in-process crashes with CUDA conflict)
+      # LLM_MODEL_PATH: /app/llm-models/qwen3.5-9b-q4_k_m.gguf
+      # LLM_GPU_LAYERS: ${LLM_GPU_LAYERS:-99}
+      # LLM_CTX_SIZE: ${LLM_CTX_SIZE:-8192}
+      LLM_URL: http://llama:8000
+      LLM_USE_GBNF: "1"
       # Source API keys
       SHODAN_API_KEY: ${SHODAN_API_KEY:-}
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}

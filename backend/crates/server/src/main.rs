@@ -53,6 +53,13 @@ use state::AppState;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Install rustls CryptoProvider before any TLS connections are made.
+    // Both aws-lc-rs and ring are in the dependency tree, so rustls cannot
+    // auto-detect which to use — we must pick one explicitly.
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .expect("Failed to install rustls CryptoProvider");
+
     // Log spawned-task panics instead of silently swallowing them
     std::panic::set_hook(Box::new(|info| {
         tracing::error!("Task panic: {info}");

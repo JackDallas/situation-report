@@ -32,3 +32,4 @@ futures = "0.3"
 reqwest.workspace = true
 dotenvy = "0.15"
 uuid.workspace = true
+rustls = { version = "0.23", features = ["ring"] }
