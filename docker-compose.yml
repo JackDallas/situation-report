@@ -45,7 +45,7 @@ services:
       - "-c"
       - "archive_mode=on"
       - "-c"
-      - "archive_command=test ! -f /mnt/wal/%f && cp %p /mnt/wal/%f"
+      - "archive_command=test ! -f /mnt/wal/%f && cp %p /mnt/wal/%f && find /mnt/wal -type f -mtime +7 -delete"
       - "-c"
       - "archive_timeout=300"
       # -- Connections --
