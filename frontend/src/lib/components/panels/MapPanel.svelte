@@ -9,11 +9,11 @@
 	import { typeColorMap, formatTimestamp, formatAbsoluteTime } from '$lib/services/event-display';
 	import { uiStore } from '$lib/stores/ui.svelte';
 	import { setMapInstance } from '$lib/services/position-interpolator';
-	import { refetchGeoForViewport } from '$lib/services/ws';
+	import { refetchGeoForViewport, sendViewportToWS } from '$lib/services/ws';
 	import type { SituationEvent } from '$lib/types/events';
 	import { AFFILIATION_COLORS, DEFAULT_MIL_COLOR, CIVILIAN_COLOR, VESSEL_COLOR } from '$lib/config/colors';
 	import { satelliteStore } from '$lib/services/satellites.svelte';
-	import type { Map as MapLibreMap, GeoJSONSource, FilterSpecification } from 'maplibre-gl';
+	import type { Map as MapLibreMap, GeoJSONSource, FilterSpecification, MapLayerMouseEvent, MapMouseEvent, MapGeoJSONFeature } from 'maplibre-gl';
 
 	let container: HTMLDivElement;
 	let map: MapLibreMap;
@@ -274,7 +274,8 @@
 		const canvas = document.createElement('canvas');
 		canvas.width = size;
 		canvas.height = size;
-		const ctx = canvas.getContext('2d')!;
+		const ctx = canvas.getContext('2d');
+		if (!ctx) return;
 		const cx = size / 2;
 		const cy = size / 2;
 		const r = size / 2 - 2;
@@ -1359,6 +1360,8 @@
 			updateViewportBounds();
 			map.on('moveend', () => {
 				updateViewportBounds();
+				// Push viewport to WS so server can filter geo_events
+				sendViewportToWS();
 				// Optimization #6: Re-fetch geo events on significant viewport changes (throttled)
 				refetchGeoForViewport();
 			});

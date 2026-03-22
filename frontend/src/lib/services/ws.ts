@@ -12,7 +12,6 @@ import type {
 	SituationEvent,
 	Incident,
 	AnalysisReport,
-	PublishEvent,
 	SituationCluster,
 	EventType
 } from '$lib/types/events';
@@ -47,6 +46,9 @@ const FEED_EXCLUDE =
 const INTEL_GEO_TYPES =
 	'conflict_event,seismic_event,geo_event,nuclear_event,notam_event,internet_outage,gps_interference,censorship_event,threat_intel,fishing_event,geo_news,thermal_anomaly,bluesky_post,maritime_security,telegram_message,news_article';
 
+/** All channels the client subscribes to */
+const WS_CHANNELS = ['events', 'incidents', 'situations', 'alerts', 'analysis', 'summaries', 'source_health'];
+
 let socket: WebSocket | null = null;
 let summaryPollInterval: ReturnType<typeof setInterval> | null = null;
 let positionPollInterval: ReturnType<typeof setInterval> | null = null;
@@ -76,6 +78,22 @@ function scheduleReconnect() {
 		}
 		openWS();
 	}, delay);
+}
+
+/** Send a JSON message to the WebSocket if connected */
+function sendWS(msg: Record<string, unknown>) {
+	if (socket && socket.readyState === WebSocket.OPEN) {
+		socket.send(JSON.stringify(msg));
+	}
+}
+
+/** Send current viewport bounds to the server for geo_event filtering */
+export function sendViewportToWS() {
+	const bounds = mapStore.viewportBounds;
+	if (bounds) {
+		const [west, south, east, north] = bounds;
+		sendWS({ type: 'viewport', bounds: { north, south, east, west } });
+	}
 }
 
 /** Re-export setMapInstance so MapPanel can pass the map reference to the interpolator */
@@ -172,6 +190,10 @@ function openWS() {
 	socket.onopen = () => {
 		eventStore.connectionStatus = 'connected';
 		reconnectAttempts = 0; // reset backoff on successful connect
+		// Subscribe to all channels
+		sendWS({ type: 'subscribe', channels: WS_CHANNELS });
+		// Send current viewport so server can push geo_events
+		sendViewportToWS();
 	};
 
 	socket.onclose = () => {
@@ -233,6 +255,11 @@ function openWS() {
 				}
 				situationsStore.backendClusters = clusters;
 			}
+			if (type === 'geo_event') {
+				// Real-time geo event pushed by server for current viewport
+				const sitEvent = data as SituationEvent;
+				mapStore.addEventFeature(sitEvent);
+			}
 			// alert: and source_health: types are informational — no frontend handler needed yet
 		} catch (err) {
 			console.error('Failed to parse WebSocket message:', err);
@@ -257,16 +284,17 @@ export async function connectWS() {
 	loadLatestAnalysis();
 
 	// Poll summaries from REST endpoint (dashboard stats, not alert feed)
+	// Slower fallback since WS now pushes updates
 	pollSummaries();
-	summaryPollInterval = setInterval(pollSummaries, 30_000);
+	summaryPollInterval = setInterval(pollSummaries, 60_000);
 
 	// Poll flight/vessel positions for live map tracking (these are absorbed, not on WS)
 	pollPositions();
-	positionPollInterval = setInterval(pollPositions, 30_000);
+	positionPollInterval = setInterval(pollPositions, 60_000);
 
-	// Poll backend situation clusters
+	// Poll backend situation clusters (fallback, WS pushes these too)
 	loadSituations();
-	situationPollInterval = setInterval(loadSituations, 30_000);
+	situationPollInterval = setInterval(loadSituations, 60_000);
 
 	// Load persisted incidents (fires before WS events arrive)
 	loadIncidents();
