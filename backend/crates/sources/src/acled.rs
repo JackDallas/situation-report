@@ -1,7 +1,6 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use chrono::Utc;
 use serde::Deserialize;
 use tracing::{debug, error, info, warn};
@@ -9,6 +8,9 @@ use tracing::{debug, error, info, warn};
 use chrono::DateTime;
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::common::{json_as_f64, region_for_country_name};
 use crate::{DataSource, InsertableEvent, SourceContext};
@@ -190,7 +192,6 @@ impl AcledSource {
     }
 }
 
-#[async_trait]
 impl DataSource for AcledSource {
     fn id(&self) -> &str {
         "acled"
@@ -204,7 +205,8 @@ impl DataSource for AcledSource {
         Duration::from_secs(6 * 60 * 60) // 6 hours
     }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         // Check that credentials are configured
         if std::env::var("ACLED_EMAIL").map_or(true, |v| v.is_empty()) {
             warn!("ACLED_EMAIL not set; skipping ACLED poll");
@@ -413,6 +415,7 @@ impl DataSource for AcledSource {
 
         debug!(count = all_events.len(), "ACLED poll complete");
         Ok(all_events)
+        })
     }
 }
 

@@ -1,11 +1,13 @@
 use std::time::Duration;
 use std::sync::Mutex;
 
-use async_trait::async_trait;
 use chrono::Utc;
 use tracing::{debug, warn};
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::{DataSource, InsertableEvent, SourceContext};
 
@@ -57,13 +59,13 @@ impl GdeltGeoSource {
     }
 }
 
-#[async_trait]
 impl DataSource for GdeltGeoSource {
     fn id(&self) -> &str { "gdelt-geo" }
     fn name(&self) -> &str { "GDELT GEO 2.0" }
     fn default_interval(&self) -> Duration { Duration::from_secs(20 * 60) }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         let query = self.next_query();
         let encoded = url::form_urlencoded::Serializer::new(String::new())
             .append_pair("query", query)
@@ -159,5 +161,6 @@ impl DataSource for GdeltGeoSource {
 
         debug!(count = events.len(), query, "GDELT GEO complete");
         Ok(events)
+        })
     }
 }

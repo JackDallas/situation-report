@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use quick_xml::events::Event as XmlEvent;
 use quick_xml::Reader;
 use regex::Regex;
@@ -12,6 +11,9 @@ use tracing::{debug, info, warn};
 use chrono::Utc;
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::{DataSource, InsertableEvent, SourceContext};
 
@@ -1184,7 +1186,6 @@ impl Default for NotamSource {
     }
 }
 
-#[async_trait]
 impl DataSource for NotamSource {
     fn id(&self) -> &str {
         "notam"
@@ -1198,7 +1199,8 @@ impl DataSource for NotamSource {
         Duration::from_secs(600) // 10 minutes
     }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         // 1. NATS UK XML feed (hourly)
         let events = self.poll_nats_uk(ctx).await?;
 
@@ -1214,6 +1216,7 @@ impl DataSource for NotamSource {
         }
 
         Ok(events)
+        })
     }
 }
 

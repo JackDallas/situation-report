@@ -1,11 +1,13 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use tracing::{debug, warn};
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::{DataSource, InsertableEvent, SourceContext};
 use crate::common;
@@ -241,7 +243,6 @@ struct RssItem {
     region: Option<&'static str>,
 }
 
-#[async_trait]
 impl DataSource for RssNewsSource {
     fn id(&self) -> &str {
         "rss-news"
@@ -255,7 +256,8 @@ impl DataSource for RssNewsSource {
         Duration::from_secs(5 * 60) // 5 minutes
     }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         // Pick the next FEEDS_PER_POLL feeds to poll
         let feeds_to_poll: Vec<usize> = {
             let mut idx = self.feed_index.lock().unwrap_or_else(|e| e.into_inner());
@@ -415,6 +417,7 @@ impl DataSource for RssNewsSource {
         }
 
         Ok(all_events)
+        })
     }
 }
 

@@ -2,12 +2,14 @@ use std::collections::HashSet;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use tracing::{debug, info};
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::common;
 use crate::rate_limit::check_rate_limit;
@@ -343,7 +345,6 @@ impl UkmtoSource {
     }
 }
 
-#[async_trait]
 impl DataSource for UkmtoSource {
     fn id(&self) -> &str {
         "ukmto"
@@ -358,7 +359,8 @@ impl DataSource for UkmtoSource {
         Duration::from_secs(300)
     }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         let watermark = {
             let wm = self.watermark.lock().unwrap_or_else(|e| e.into_inner());
             *wm
@@ -490,6 +492,7 @@ impl DataSource for UkmtoSource {
         }
 
         Ok(events)
+        })
     }
 }
 

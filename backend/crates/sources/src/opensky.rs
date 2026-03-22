@@ -1,7 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
-use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::json;
 use tokio::sync::Mutex;
@@ -10,6 +9,9 @@ use tracing::{debug, warn};
 use chrono::Utc;
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::{DataSource, InsertableEvent, SourceContext};
 
@@ -171,7 +173,6 @@ impl Default for OpenSkySource {
     }
 }
 
-#[async_trait]
 impl DataSource for OpenSkySource {
     fn id(&self) -> &str {
         "opensky"
@@ -187,7 +188,8 @@ impl DataSource for OpenSkySource {
         Duration::from_secs(220)
     }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         // Rotate through bounding boxes
         let idx = self.bbox_index.fetch_add(1, Ordering::Relaxed) % BOUNDING_BOXES.len();
         let (region, lamin, lomin, lamax, lomax) = BOUNDING_BOXES[idx];
@@ -313,6 +315,7 @@ impl DataSource for OpenSkySource {
         }
 
         Ok(events)
+        })
     }
 }
 

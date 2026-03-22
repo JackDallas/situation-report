@@ -1,11 +1,13 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use async_trait::async_trait;
 use chrono::{Utc, Duration as ChronoDuration};
 use tracing::{debug, warn};
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::{DataSource, InsertableEvent, SourceContext};
 
@@ -124,13 +126,13 @@ impl GfwSource {
     }
 }
 
-#[async_trait]
 impl DataSource for GfwSource {
     fn id(&self) -> &str { "gfw" }
     fn name(&self) -> &str { "Global Fishing Watch" }
     fn default_interval(&self) -> Duration { Duration::from_secs(30 * 60) }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         let token = match std::env::var("GFW_API_TOKEN") {
             Ok(t) if !t.is_empty() => t,
             _ => {
@@ -225,6 +227,7 @@ impl DataSource for GfwSource {
 
         debug!(count = all_events.len(), dataset, "GFW poll complete");
         Ok(all_events)
+        })
     }
 }
 

@@ -2,13 +2,15 @@ use std::collections::HashSet;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use serde_json::json;
 use tracing::debug;
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::common::region_from_coords;
 use crate::{DataSource, InsertableEvent, SourceContext};
@@ -128,7 +130,6 @@ impl Default for GdacsSource {
     }
 }
 
-#[async_trait]
 impl DataSource for GdacsSource {
     fn id(&self) -> &str {
         "gdacs"
@@ -142,7 +143,8 @@ impl DataSource for GdacsSource {
         Duration::from_secs(600) // 10 minutes
     }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         debug!("Polling GDACS disaster alerts");
 
         // Query for events in the last 7 days
@@ -326,6 +328,7 @@ impl DataSource for GdacsSource {
         }
 
         Ok(events)
+        })
     }
 }
 

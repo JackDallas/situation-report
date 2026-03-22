@@ -1,6 +1,5 @@
 use std::time::Duration;
 
-use async_trait::async_trait;
 use futures_util::{SinkExt, StreamExt};
 use rand::Rng;
 use tokio::sync::broadcast;
@@ -25,6 +24,9 @@ const INITIAL_BACKOFF: Duration = Duration::from_secs(30);
 const MAX_BACKOFF: Duration = Duration::from_secs(1800);
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::common::mmsi_country;
 use crate::rate_limit::AuthError;
@@ -370,7 +372,6 @@ impl Default for AisSource {
     }
 }
 
-#[async_trait]
 impl DataSource for AisSource {
     fn id(&self) -> &str {
         "ais"
@@ -388,16 +389,19 @@ impl DataSource for AisSource {
         true
     }
 
-    async fn poll(&self, _ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, _ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         // Streaming source; poll is unused.
         Ok(vec![])
+        })
     }
 
-    async fn start_stream(
-        &self,
-        _ctx: &SourceContext,
+    fn start_stream<'a>(
+        &'a self,
+        _ctx: &'a SourceContext,
         tx: broadcast::Sender<InsertableEvent>,
-    ) -> anyhow::Result<()> {
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
         let api_key = std::env::var("AISSTREAM_API_KEY").map_err(|_| {
             warn!("AISSTREAM_API_KEY not set — AIS source will not start");
             anyhow::anyhow!("AISSTREAM_API_KEY environment variable not set")
@@ -635,6 +639,7 @@ impl DataSource for AisSource {
             tokio::time::sleep(total).await;
             backoff = (backoff * 2).min(MAX_BACKOFF);
         }
+        })
     }
 }
 

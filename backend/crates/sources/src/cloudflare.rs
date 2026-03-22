@@ -1,13 +1,15 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use serde::Deserialize;
 use tracing::{debug, warn};
 
 use chrono::Utc;
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::common::region_for_country;
 use crate::{DataSource, InsertableEvent, SourceContext};
@@ -254,7 +256,6 @@ impl CloudflareSource {
     }
 }
 
-#[async_trait]
 impl DataSource for CloudflareSource {
     fn id(&self) -> &str {
         "cloudflare"
@@ -268,7 +269,8 @@ impl DataSource for CloudflareSource {
         Duration::from_secs(15 * 60) // 15 minutes
     }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         let token = match std::env::var("CLOUDFLARE_API_TOKEN") {
             Ok(t) if !t.is_empty() => t,
             _ => {
@@ -303,6 +305,7 @@ impl DataSource for CloudflareSource {
 
         debug!(count = all_events.len(), "Cloudflare poll complete");
         Ok(all_events)
+        })
     }
 }
 
@@ -319,13 +322,13 @@ impl CloudflareBgpSource {
     pub fn new() -> Self { Self }
 }
 
-#[async_trait]
 impl DataSource for CloudflareBgpSource {
     fn id(&self) -> &str { "cloudflare-bgp" }
     fn name(&self) -> &str { "Cloudflare BGP Leak Monitor" }
     fn default_interval(&self) -> Duration { Duration::from_secs(30 * 60) }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         let token = match std::env::var("CLOUDFLARE_API_TOKEN") {
             Ok(t) if !t.is_empty() => t,
             _ => {
@@ -388,5 +391,6 @@ impl DataSource for CloudflareBgpSource {
 
         tracing::debug!(count = events.len(), "Cloudflare BGP leak poll complete");
         Ok(events)
+        })
     }
 }

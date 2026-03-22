@@ -3,7 +3,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use serde::Deserialize;
 use serde_json::json;
 use tracing::{debug, warn};
@@ -11,6 +10,9 @@ use tracing::{debug, warn};
 use chrono::{NaiveDate, NaiveTime, Utc};
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::{DataSource, InsertableEvent, SourceContext};
 
@@ -94,7 +96,6 @@ impl Default for FirmsSource {
     }
 }
 
-#[async_trait]
 impl DataSource for FirmsSource {
     fn id(&self) -> &str {
         "firms"
@@ -108,7 +109,8 @@ impl DataSource for FirmsSource {
         Duration::from_secs(30 * 60) // 30 minutes
     }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         let map_key = match std::env::var("FIRMS_MAP_KEY") {
             Ok(key) if !key.is_empty() => key,
             _ => {
@@ -290,6 +292,7 @@ impl DataSource for FirmsSource {
         }
 
         Ok(events)
+        })
     }
 }
 

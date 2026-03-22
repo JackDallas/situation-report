@@ -1,7 +1,6 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use grammers_client::client::UpdatesConfiguration;
 use grammers_client::update::Update;
@@ -12,6 +11,9 @@ use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::{DataSource, InsertableEvent, SourceContext};
 
@@ -234,7 +236,6 @@ fn message_to_event(
 // DataSource implementation
 // ---------------------------------------------------------------------------
 
-#[async_trait]
 impl DataSource for TelegramSource {
     fn id(&self) -> &str {
         "telegram"
@@ -252,16 +253,19 @@ impl DataSource for TelegramSource {
         true
     }
 
-    async fn poll(&self, _ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, _ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         // Streaming source; poll is unused.
         Ok(vec![])
+        })
     }
 
-    async fn start_stream(
-        &self,
-        ctx: &SourceContext,
+    fn start_stream<'a>(
+        &'a self,
+        ctx: &'a SourceContext,
         tx: broadcast::Sender<InsertableEvent>,
-    ) -> anyhow::Result<()> {
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
         // ---- 1. Read auth from env ----
         let api_id: i32 = match std::env::var("TELEGRAM_API_ID") {
             Ok(v) if !v.is_empty() => match v.parse() {
@@ -608,6 +612,7 @@ impl DataSource for TelegramSource {
             tokio::time::sleep(Duration::from_secs(backoff_secs)).await;
             backoff_secs = (backoff_secs * 2).min(120);
         }
+        })
     }
 }
 

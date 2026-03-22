@@ -1,12 +1,14 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use chrono::Utc;
 use serde::Deserialize;
 use tracing::{debug, warn};
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::common::region_for_country;
 use crate::{DataSource, InsertableEvent, SourceContext};
@@ -189,7 +191,6 @@ impl IodaSource {
     }
 }
 
-#[async_trait]
 impl DataSource for IodaSource {
     fn id(&self) -> &str {
         "ioda"
@@ -203,7 +204,8 @@ impl DataSource for IodaSource {
         Duration::from_secs(10 * 60) // 10 minutes
     }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         let cc = self.next_country();
         let now = Utc::now().timestamp();
         // Look back 20 minutes to capture recent alerts.
@@ -244,6 +246,7 @@ impl DataSource for IodaSource {
 
         debug!(count = events.len(), country = cc, "IODA poll complete");
         Ok(events)
+        })
     }
 }
 

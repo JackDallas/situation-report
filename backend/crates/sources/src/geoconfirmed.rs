@@ -1,11 +1,13 @@
 use std::time::Duration;
 
-use async_trait::async_trait;
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::Deserialize;
 use tracing::{debug, warn};
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::{DataSource, InsertableEvent, SourceContext};
 
@@ -120,7 +122,6 @@ impl GeoConfirmedSource {
     }
 }
 
-#[async_trait]
 impl DataSource for GeoConfirmedSource {
     fn id(&self) -> &str {
         "geoconfirmed"
@@ -134,7 +135,8 @@ impl DataSource for GeoConfirmedSource {
         Duration::from_secs(60 * 60) // 60 minutes
     }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         let mut all_events: Vec<InsertableEvent> = Vec::new();
 
         for (conflict, region) in CONFLICTS {
@@ -227,6 +229,7 @@ impl DataSource for GeoConfirmedSource {
 
         debug!(count = all_events.len(), "GeoConfirmed poll complete");
         Ok(all_events)
+        })
     }
 }
 

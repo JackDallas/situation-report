@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use chrono::{Datelike, NaiveDate, Utc};
 use regex::Regex;
 use serde::Deserialize;
@@ -10,6 +9,9 @@ use serde_json::json;
 use tracing::{debug, info, warn};
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::common::region_from_coords;
 use crate::rate_limit::check_rate_limit;
@@ -278,7 +280,6 @@ impl Default for ImbPiracySource {
     }
 }
 
-#[async_trait]
 impl DataSource for ImbPiracySource {
     fn id(&self) -> &str {
         "imb-piracy"
@@ -292,7 +293,8 @@ impl DataSource for ImbPiracySource {
         Duration::from_secs(3600) // 1 hour — data updates infrequently
     }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         debug!("Polling ICC-CCS IMB piracy map");
 
         let cutoff = Utc::now() - chrono::Duration::days(LOOKBACK_DAYS);
@@ -538,6 +540,7 @@ impl DataSource for ImbPiracySource {
         }
 
         Ok(all_events)
+        })
     }
 }
 

@@ -2,7 +2,6 @@ use std::collections::HashSet;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde::Deserialize;
@@ -10,6 +9,9 @@ use serde_json::json;
 use tracing::debug;
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::{DataSource, InsertableEvent, SourceContext};
 
@@ -134,7 +136,6 @@ impl Default for CopernicusSource {
     }
 }
 
-#[async_trait]
 impl DataSource for CopernicusSource {
     fn id(&self) -> &str {
         "copernicus"
@@ -148,7 +149,8 @@ impl DataSource for CopernicusSource {
         Duration::from_secs(1800) // 30 minutes
     }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         debug!("Polling Copernicus EMS activations");
 
         let resp = ctx.http.get(API_URL).send().await?;
@@ -294,6 +296,7 @@ impl DataSource for CopernicusSource {
         }
 
         Ok(events)
+        })
     }
 }
 

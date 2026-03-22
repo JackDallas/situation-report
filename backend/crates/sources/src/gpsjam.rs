@@ -1,10 +1,12 @@
 use std::time::Duration;
 
-use async_trait::async_trait;
 use chrono::Utc;
 use tracing::debug;
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::{DataSource, InsertableEvent, SourceContext};
 
@@ -20,13 +22,13 @@ impl GpsJamSource {
     pub fn new() -> Self { Self }
 }
 
-#[async_trait]
 impl DataSource for GpsJamSource {
     fn id(&self) -> &str { "gpsjam" }
     fn name(&self) -> &str { "GPSJam Interference Monitor" }
     fn default_interval(&self) -> Duration { Duration::from_secs(6 * 60 * 60) } // 6 hours
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         let date = (Utc::now() - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
 
         // GPSJam uses a tile-based data endpoint. Try known patterns.
@@ -61,6 +63,7 @@ impl DataSource for GpsJamSource {
         // If no API endpoint works, log and return empty
         debug!("GPSJam: no accessible data endpoint found");
         Ok(Vec::new())
+        })
     }
 }
 

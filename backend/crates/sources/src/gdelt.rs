@@ -1,13 +1,15 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use serde::Deserialize;
 use tracing::{debug, warn};
 
 use chrono::Utc;
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::{DataSource, InsertableEvent, SourceContext};
 use crate::common::{country_center, region_for_country};
@@ -94,7 +96,6 @@ impl GdeltSource {
     }
 }
 
-#[async_trait]
 impl DataSource for GdeltSource {
     fn id(&self) -> &str {
         "gdelt"
@@ -108,7 +109,8 @@ impl DataSource for GdeltSource {
         Duration::from_secs(15 * 60) // 15 minutes
     }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         let query = self.next_query();
         let encoded_query = url::form_urlencoded::Serializer::new(String::new())
             .append_pair("query", query)
@@ -257,5 +259,6 @@ impl DataSource for GdeltSource {
 
         debug!(count = events.len(), query, "GDELT poll complete");
         Ok(events)
+        })
     }
 }

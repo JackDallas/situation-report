@@ -2,13 +2,15 @@ use std::collections::HashSet;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use chrono::{NaiveDate, Utc};
 use regex::Regex;
 use serde_json::json;
 use tracing::{debug, info, warn};
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::common::region_from_coords;
 use crate::rate_limit::check_rate_limit;
@@ -711,7 +713,6 @@ impl Default for UkmtoWarningsSource {
     }
 }
 
-#[async_trait]
 impl DataSource for UkmtoWarningsSource {
     fn id(&self) -> &str {
         "ukmto-warnings"
@@ -725,7 +726,8 @@ impl DataSource for UkmtoWarningsSource {
         Duration::from_secs(300) // 5 minutes
     }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         debug!("Polling MSCIO for UKMTO maritime security warnings");
 
         let resp = ctx.http
@@ -815,6 +817,7 @@ impl DataSource for UkmtoWarningsSource {
         }
 
         Ok(events)
+        })
     }
 }
 

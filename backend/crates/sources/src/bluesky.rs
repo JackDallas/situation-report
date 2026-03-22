@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use futures_util::StreamExt;
 use rand::Rng;
@@ -10,6 +9,9 @@ use tokio_tungstenite::connect_async;
 use tracing::{debug, error, info, warn};
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::{DataSource, InsertableEvent, SourceContext};
 
@@ -726,7 +728,6 @@ impl Default for BlueskySource {
     }
 }
 
-#[async_trait]
 impl DataSource for BlueskySource {
     fn id(&self) -> &str {
         "bluesky"
@@ -744,16 +745,19 @@ impl DataSource for BlueskySource {
         true
     }
 
-    async fn poll(&self, _ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, _ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         // Streaming source; poll is unused.
         Ok(vec![])
+        })
     }
 
-    async fn start_stream(
-        &self,
-        ctx: &SourceContext,
+    fn start_stream<'a>(
+        &'a self,
+        ctx: &'a SourceContext,
         tx: broadcast::Sender<InsertableEvent>,
-    ) -> anyhow::Result<()> {
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async move {
         let list_uri = std::env::var("BLUESKY_LIST_URI")
             .unwrap_or_else(|_| DEFAULT_LIST_URI.to_string());
 
@@ -920,6 +924,7 @@ impl DataSource for BlueskySource {
             tokio::time::sleep(total).await;
             backoff_secs = (backoff_secs * 2).min(120);
         }
+        })
     }
 }
 

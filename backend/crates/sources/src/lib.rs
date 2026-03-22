@@ -34,9 +34,10 @@ pub mod copernicus;
 pub mod bluesky;
 pub mod imb;
 
+use std::future::Future;
+use std::pin::Pin;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
@@ -104,7 +105,6 @@ impl Default for InsertableEvent {
 }
 
 /// Trait for all data source implementations.
-#[async_trait]
 pub trait DataSource: Send + Sync {
     /// Unique identifier for this source.
     fn id(&self) -> &str;
@@ -116,7 +116,7 @@ pub trait DataSource: Send + Sync {
     fn default_interval(&self) -> Duration;
 
     /// Fetch new data, returning events to broadcast.
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>>;
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>>;
 
     /// Whether this source uses streaming instead of polling.
     fn is_streaming(&self) -> bool {
@@ -124,11 +124,11 @@ pub trait DataSource: Send + Sync {
     }
 
     /// Start a persistent stream (called once instead of poll).
-    async fn start_stream(
-        &self,
-        _ctx: &SourceContext,
+    fn start_stream<'a>(
+        &'a self,
+        _ctx: &'a SourceContext,
         _tx: broadcast::Sender<InsertableEvent>,
-    ) -> anyhow::Result<()> {
-        Ok(())
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'a>> {
+        Box::pin(async { Ok(()) })
     }
 }

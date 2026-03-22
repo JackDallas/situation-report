@@ -8,10 +8,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use serde_json::json;
 use tokio::sync::Mutex;
 use tracing::{debug, info, warn};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::rate_limit::RateLimited;
 
@@ -475,7 +477,6 @@ impl AdsbAggregator {
     }
 }
 
-#[async_trait]
 impl DataSource for AdsbAggregator {
     fn id(&self) -> &str {
         self.source_id
@@ -489,7 +490,8 @@ impl DataSource for AdsbAggregator {
         self.poll_interval
     }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         // ---- 0. Rate-limit cooldown check ----
         if self.in_rate_limit_cooldown() {
             debug!(source = self.source_id, "Rate-limit cooldown active, skipping poll");
@@ -624,6 +626,7 @@ impl DataSource for AdsbAggregator {
         }
 
         Ok(events)
+        })
     }
 }
 

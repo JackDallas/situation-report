@@ -1,12 +1,14 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use chrono::Utc;
 use serde::Deserialize;
 use tracing::{debug, warn};
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::{DataSource, InsertableEvent, SourceContext};
 use crate::common::region_for_country;
@@ -71,7 +73,6 @@ impl OoniSource {
     }
 }
 
-#[async_trait]
 impl DataSource for OoniSource {
     fn id(&self) -> &str {
         "ooni"
@@ -85,7 +86,8 @@ impl DataSource for OoniSource {
         Duration::from_secs(30 * 60) // 30 minutes
     }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         let cc = self.next_country();
 
         // Look back 2 hours to capture recent measurements.
@@ -182,5 +184,6 @@ impl DataSource for OoniSource {
 
         debug!(count = events.len(), country = cc, "OONI poll complete");
         Ok(events)
+        })
     }
 }

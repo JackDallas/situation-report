@@ -1,12 +1,14 @@
 use std::sync::Mutex;
 use std::time::Duration;
 
-use async_trait::async_trait;
 use chrono::Utc;
 use serde::Deserialize;
 use tracing::{debug, warn};
 
 use sr_types::{EventType, Severity, SourceType};
+
+use std::future::Future;
+use std::pin::Pin;
 
 use crate::{DataSource, InsertableEvent, SourceContext};
 
@@ -200,7 +202,6 @@ impl OtxSource {
     }
 }
 
-#[async_trait]
 impl DataSource for OtxSource {
     fn id(&self) -> &str {
         "otx"
@@ -214,7 +215,8 @@ impl DataSource for OtxSource {
         Duration::from_secs(60 * 60) // 1 hour
     }
 
-    async fn poll(&self, ctx: &SourceContext) -> anyhow::Result<Vec<InsertableEvent>> {
+    fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
+        Box::pin(async move {
         let api_key = match std::env::var("OTX_API_KEY") {
             Ok(k) if !k.is_empty() => k,
             _ => {
@@ -246,5 +248,6 @@ impl DataSource for OtxSource {
 
         debug!(count = all_events.len(), "OTX poll complete");
         Ok(all_events)
+        })
     }
 }
