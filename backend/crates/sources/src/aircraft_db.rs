@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn test_load_real_file() {
         // Only run if the modes.csv is available (CI might not have it)
-        let path = "/Users/dallas/git/osint/adsb-history/backend-data-loading/modes.csv";
+        let path = "test-data/modes.csv";
         if !Path::new(path).exists() {
             return;
         }

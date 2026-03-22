@@ -44,3 +44,14 @@ backend/replay-data/*.json
 # Logs
 monitor-log.txt
 *.log
+
+# Operational docs (contain IPs, deployment details)
+DRY_REVIEW.md
+PERFORMANCE_REVIEW.md
+docs/MONITORING_*.md
+docs/PLAN_BIG_PUSH_*.md
+docs/COMPREHENSIVE_REVIEW_*.md
+docs/CONSOLIDATION_ANALYSIS_*.md
+
+# Cargo local config
+backend/.cargo/
