@@ -192,7 +192,7 @@ mod inner {
                     break;
                 }
 
-                let piece = model.token_to_piece(&token, &mut decoder, true, None)
+                let piece = model.token_to_piece(token, &mut decoder, true, None)
                     .map_err(|e| anyhow::anyhow!("Token to piece failed: {e}"))?;
                 output.push_str(&piece);
 
