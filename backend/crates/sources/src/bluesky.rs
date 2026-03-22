@@ -64,9 +64,63 @@ const MIN_TEXT_LENGTH: usize = 80;
 const MIN_TEXT_LENGTH_IMAGE: usize = 20;
 
 /// Case-insensitive negative keywords. Matched on word boundaries.
+/// These are strong signals of non-OSINT content that should always be filtered.
 const NEGATIVE_KEYWORDS: &[&str] = &[
     "lol", "lmao", "rofl", "happy birthday", "recipe",
     "good morning", "mornin", "it's friday", "its friday",
+    // Personal/lifestyle content
+    "podcast", "subscribe", "newsletter",
+    "rant", "imo", "imho",
+    "sale", "discount", "promo", "giveaway", "merch",
+];
+
+/// First-person prefixes that indicate personal content rather than reporting.
+const FIRST_PERSON_PREFIXES: &[&str] = &[
+    "i ", "my ", "i'm ", "i've ", "i'd ", "i am ", "i was ",
+];
+
+/// Media-consumption phrases indicating someone talking about personal media,
+/// not reporting events. Matched as substrings (case-insensitive).
+const MEDIA_CONSUMPTION_PHRASES: &[&str] = &[
+    "just finished reading",
+    "just finished watching",
+    "currently reading",
+    "listening to",
+    "watched",
+    "just read",
+    "highly recommend",
+    "recommended",
+    "book review",
+    "movie review",
+    "great read",
+    "page turner",
+    "binge",
+];
+
+/// Meta-commentary phrases that indicate opinion rather than reporting.
+/// Matched as substrings (case-insensitive).
+const META_COMMENTARY_PHRASES: &[&str] = &[
+    "people don't realize",
+    "people dont realize",
+    "everyone should know",
+    "unpopular opinion",
+    "am i the only",
+    "does anyone else",
+    "hot take:",
+    "controversial take",
+    "here's my take",
+    "here is my take",
+    "heres my take",
+];
+
+/// High-confidence OSINT verbs that indicate genuine intelligence reporting.
+/// Used to elevate severity from Low to Medium when combined with place context.
+const OSINT_ACTION_VERBS: &[&str] = &[
+    "struck", "launched", "deployed", "intercepted", "fired",
+    "shelled", "bombed", "targeted", "invaded", "advancing",
+    "retreating", "captured", "seized", "sank", "shot down",
+    "breached", "detected", "confirmed", "reported",
+    "detonated", "exploded", "collapsed",
 ];
 
 /// OSINT signal keywords — posts matching any of these bypass the 80-char
@@ -88,6 +142,10 @@ enum FilterReason {
     NegativeKeyword,
     Repost,
     ImageMeme,
+    PersonalContent,
+    MediaConsumption,
+    MetaCommentary,
+    UrlOnlyLowText,
 }
 
 impl FilterReason {
@@ -97,6 +155,10 @@ impl FilterReason {
             Self::NegativeKeyword => "negative_keyword",
             Self::Repost => "repost",
             Self::ImageMeme => "image_meme",
+            Self::PersonalContent => "personal_content",
+            Self::MediaConsumption => "media_consumption",
+            Self::MetaCommentary => "meta_commentary",
+            Self::UrlOnlyLowText => "url_only_low_text",
         }
     }
 }
@@ -121,6 +183,77 @@ fn contains_word(haystack: &str, keyword: &str) -> bool {
         start = abs_pos + 1;
     }
     false
+}
+
+/// Strip URLs from text and return the remaining non-URL content, trimmed.
+fn strip_urls(text: &str) -> String {
+    // Remove http/https URLs
+    let mut result = String::with_capacity(text.len());
+    let mut i = 0;
+    let chars: Vec<char> = text.chars().collect();
+    while i < chars.len() {
+        // Detect start of URL
+        let remaining: String = chars[i..].iter().collect();
+        if remaining.starts_with("http://") || remaining.starts_with("https://") {
+            // Skip until whitespace or end
+            while i < chars.len() && !chars[i].is_whitespace() {
+                i += 1;
+            }
+        } else {
+            result.push(chars[i]);
+            i += 1;
+        }
+    }
+    // Collapse multiple spaces and trim
+    let mut collapsed = String::with_capacity(result.len());
+    let mut prev_space = true;
+    for ch in result.chars() {
+        if ch.is_whitespace() {
+            if !prev_space {
+                collapsed.push(' ');
+            }
+            prev_space = true;
+        } else {
+            collapsed.push(ch);
+            prev_space = false;
+        }
+    }
+    collapsed.trim().to_string()
+}
+
+/// Check whether the post text starts with a first-person prefix (case-insensitive)
+/// AND does not contain a high-confidence OSINT keyword, indicating personal content
+/// rather than intelligence reporting.
+fn is_first_person_personal(lower: &str) -> bool {
+    let trimmed = lower.trim_start();
+    let starts_first_person = FIRST_PERSON_PREFIXES
+        .iter()
+        .any(|prefix| trimmed.starts_with(prefix));
+    if !starts_first_person {
+        return false;
+    }
+    // Don't filter if it contains a strong OSINT keyword — could be "I confirmed
+    // missile launch" etc.
+    let has_osint = OSINT_KEYWORDS.iter().any(|kw| lower.contains(kw));
+    !has_osint
+}
+
+/// Check whether the post is about media consumption (books, movies, podcasts).
+fn is_media_consumption(lower: &str) -> bool {
+    MEDIA_CONSUMPTION_PHRASES.iter().any(|phrase| lower.contains(phrase))
+}
+
+/// Check whether the post is meta-commentary rather than reporting.
+fn is_meta_commentary(lower: &str) -> bool {
+    META_COMMENTARY_PHRASES.iter().any(|phrase| lower.contains(phrase))
+}
+
+/// Check whether a post has high-confidence OSINT indicators: an action verb
+/// combined with OSINT keyword context, suggesting genuine intelligence.
+fn has_high_confidence_osint(lower: &str) -> bool {
+    let has_action = OSINT_ACTION_VERBS.iter().any(|verb| lower.contains(verb));
+    let has_keyword = OSINT_KEYWORDS.iter().any(|kw| lower.contains(kw));
+    has_action && has_keyword
 }
 
 /// Determine whether a Jetstream commit message represents a repost.
@@ -154,6 +287,11 @@ fn is_repost(msg: &serde_json::Value) -> bool {
 
 /// Returns `Some(reason)` if the post should be filtered, `None` if it should
 /// be ingested.
+/// Minimum non-URL text length for posts that contain URLs.
+/// Posts with less than this much non-URL text are likely just link shares
+/// without meaningful commentary.
+const MIN_NON_URL_TEXT: usize = 40;
+
 fn should_filter(
     text: &str,
     msg: &serde_json::Value,
@@ -179,7 +317,40 @@ fn should_filter(
         return Some(FilterReason::ImageMeme);
     }
 
-    // 4. Text length gate (with OSINT keyword boost bypass)
+    // 4. Media consumption filter — "just finished reading", "watched", etc.
+    //    These phrases are almost never used in genuine intelligence reporting.
+    if is_media_consumption(&lower) {
+        return Some(FilterReason::MediaConsumption);
+    }
+
+    // 5. Meta-commentary filter — opinion/commentary framing rather than reporting
+    if is_meta_commentary(&lower) {
+        return Some(FilterReason::MetaCommentary);
+    }
+
+    // 6. First-person personal content — "I ", "My ", "I'm " etc.
+    //    Only filters if the post does NOT contain OSINT keywords, so
+    //    "I confirmed missile launch" still passes.
+    if is_first_person_personal(&lower) {
+        return Some(FilterReason::PersonalContent);
+    }
+
+    // 7. URL-only quality gate — if the text is mostly just a URL with
+    //    minimal surrounding commentary, filter it. Link-share posts with
+    //    < 40 chars of non-URL text are low-signal.
+    if has_external_link {
+        let non_url = strip_urls(text);
+        if non_url.len() < MIN_NON_URL_TEXT {
+            // Bypass if the short remaining text has an OSINT keyword
+            let non_url_lower = non_url.to_lowercase();
+            let has_osint = OSINT_KEYWORDS.iter().any(|kw| non_url_lower.contains(kw));
+            if !has_osint {
+                return Some(FilterReason::UrlOnlyLowText);
+            }
+        }
+    }
+
+    // 8. Text length gate (with OSINT keyword boost bypass)
     if text.len() < MIN_TEXT_LENGTH && !has_external_link {
         // Check for OSINT keyword boost — substring match is fine here
         // since these are domain-specific stems (e.g. "casualt", "escalat").
@@ -214,19 +385,23 @@ impl BlueskySource {
     }
 
     /// Classify severity based on post text using keyword matching.
+    ///
+    /// Bluesky posts default to Low severity. Posts are elevated to Medium only
+    /// when they contain high-confidence OSINT indicators (action verbs combined
+    /// with OSINT domain keywords), signalling genuine intelligence rather than
+    /// commentary that happens to use OSINT vocabulary.
     fn classify_severity(text: &str) -> Severity {
-        let upper = text.to_uppercase();
-        for kw in CRITICAL_KEYWORDS {
-            if upper.contains(&kw.to_uppercase()) {
-                return Severity::Critical;
-            }
+        let lower = text.to_lowercase();
+
+        // Only elevate to Medium if the post has both an OSINT action verb
+        // and an OSINT domain keyword — this prevents personality content
+        // that casually mentions "military" or "conflict" from getting
+        // elevated severity.
+        if has_high_confidence_osint(&lower) {
+            return Severity::Medium;
         }
-        for kw in HIGH_KEYWORDS {
-            if upper.contains(&kw.to_uppercase()) {
-                return Severity::High;
-            }
-        }
-        Severity::Medium
+
+        Severity::Low
     }
 
     /// Extract tags from post text based on keyword matching.
@@ -934,20 +1109,28 @@ mod tests {
 
     #[test]
     fn test_severity_classification() {
+        // High-confidence OSINT: action verb + domain keyword -> Medium
         assert_eq!(
-            BlueskySource::classify_severity("missile strike on target"),
-            Severity::Critical
+            BlueskySource::classify_severity("missile strike confirmed on target"),
+            Severity::Medium
         );
         assert_eq!(
-            BlueskySource::classify_severity("BREAKING: explosion reported"),
-            Severity::Critical
+            BlueskySource::classify_severity("drone deployed near the border"),
+            Severity::Medium
         );
+        // Has OSINT keyword but no action verb -> Low
         assert_eq!(
             BlueskySource::classify_severity("military convoy spotted"),
-            Severity::High
+            Severity::Low
         );
+        // No OSINT indicators at all -> Low
         assert_eq!(
             BlueskySource::classify_severity("regular update about weather"),
+            Severity::Low
+        );
+        // Action verb + keyword -> Medium
+        assert_eq!(
+            BlueskySource::classify_severity("BREAKING: explosion reported near nuclear facility"),
             Severity::Medium
         );
     }
@@ -1103,7 +1286,7 @@ mod tests {
         let event = BlueskySource::process_commit(&msg, &did_map).unwrap();
         assert_eq!(event.source_type, SourceType::Bluesky);
         assert_eq!(event.event_type, EventType::BlueskyPost);
-        assert_eq!(event.severity, Severity::Critical); // "missile" + "strike" + "BREAKING"
+        assert_eq!(event.severity, Severity::Medium); // "missile" (OSINT kw) + "reported" (action verb)
         assert_eq!(
             event.source_id,
             Some("bsky:did:plc:testuser:abc123".to_string())
@@ -1259,10 +1442,30 @@ mod tests {
     }
 
     #[test]
-    fn test_filter_short_text_with_link_bypass() {
+    fn test_filter_short_text_with_link_url_only_gate() {
         let msg = dummy_msg();
-        // Short text with external link should pass
-        assert_eq!(should_filter("short", &msg, true, false), None);
+        // Very short text with external link but no OSINT keyword -> filtered
+        // (URL-only quality gate: < 40 chars of non-URL text)
+        assert_eq!(
+            should_filter("short", &msg, true, false),
+            Some(FilterReason::UrlOnlyLowText),
+        );
+    }
+
+    #[test]
+    fn test_filter_link_with_sufficient_text_passes() {
+        let msg = dummy_msg();
+        // Link with enough non-URL text to pass the URL-only gate
+        let text = "Analysis of the latest border developments and troop movements";
+        assert!(text.len() >= 40);
+        assert_eq!(should_filter(text, &msg, true, false), None);
+    }
+
+    #[test]
+    fn test_filter_link_short_text_osint_keyword_bypass() {
+        let msg = dummy_msg();
+        // Short text with link but has OSINT keyword -> passes URL-only gate
+        assert_eq!(should_filter("drone strike", &msg, true, false), None);
     }
 
     #[test]
@@ -1771,5 +1974,169 @@ mod tests {
         });
         let urls = BlueskySource::extract_image_urls(&record, "did:plc:test");
         assert!(urls.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // Personal content / media consumption / meta-commentary filter tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn test_filter_first_person_personal() {
+        let msg = dummy_msg();
+        // First-person without OSINT keywords -> filtered
+        let text = "I just went to the store and bought some groceries for dinner tonight with the family at home.";
+        assert_eq!(
+            should_filter(text, &msg, false, false),
+            Some(FilterReason::PersonalContent),
+        );
+    }
+
+    #[test]
+    fn test_filter_first_person_with_osint_keyword_passes() {
+        let msg = dummy_msg();
+        // First-person WITH OSINT keyword -> passes (legitimate OSINT reporting)
+        let text = "I confirmed the missile launch happened at 0300 local time based on satellite imagery analysis from the region.";
+        assert_eq!(should_filter(text, &msg, false, false), None);
+    }
+
+    #[test]
+    fn test_filter_my_prefix_personal() {
+        let msg = dummy_msg();
+        let text = "My favorite vacation spot is the beach, where the sunsets are absolutely gorgeous every single evening.";
+        assert_eq!(
+            should_filter(text, &msg, false, false),
+            Some(FilterReason::PersonalContent),
+        );
+    }
+
+    #[test]
+    fn test_filter_im_prefix_personal() {
+        let msg = dummy_msg();
+        let text = "I'm really enjoying this new coffee blend that I picked up from the local market last weekend, it is great.";
+        assert_eq!(
+            should_filter(text, &msg, false, false),
+            Some(FilterReason::PersonalContent),
+        );
+    }
+
+    #[test]
+    fn test_filter_media_consumption_book() {
+        let msg = dummy_msg();
+        let text = "Just finished reading the new biography about Roman emperors, fascinating account of the late republic era.";
+        assert_eq!(
+            should_filter(text, &msg, false, false),
+            Some(FilterReason::MediaConsumption),
+        );
+    }
+
+    #[test]
+    fn test_filter_media_consumption_watched() {
+        let msg = dummy_msg();
+        let text = "Watched an incredible documentary about deep sea creatures last night, the cinematography was absolutely stunning.";
+        assert_eq!(
+            should_filter(text, &msg, false, false),
+            Some(FilterReason::MediaConsumption),
+        );
+    }
+
+    #[test]
+    fn test_filter_media_consumption_recommended() {
+        let msg = dummy_msg();
+        let text = "Highly recommend this new show on streaming, the writing is superb and the acting is phenomenal throughout each episode.";
+        assert_eq!(
+            should_filter(text, &msg, false, false),
+            Some(FilterReason::MediaConsumption),
+        );
+    }
+
+    #[test]
+    fn test_filter_meta_commentary() {
+        let msg = dummy_msg();
+        let text = "People don't realize how much the world has changed in the last decade, everything is completely different now.";
+        assert_eq!(
+            should_filter(text, &msg, false, false),
+            Some(FilterReason::MetaCommentary),
+        );
+    }
+
+    #[test]
+    fn test_filter_meta_commentary_unpopular_opinion() {
+        let msg = dummy_msg();
+        let text = "Unpopular opinion but the new policy changes are actually going to be beneficial for the country in the long term.";
+        assert_eq!(
+            should_filter(text, &msg, false, false),
+            Some(FilterReason::MetaCommentary),
+        );
+    }
+
+    #[test]
+    fn test_filter_url_only_low_text() {
+        let msg = dummy_msg();
+        // Just a URL with very little context
+        let text = "Check it https://example.com/some-blog-post";
+        assert_eq!(
+            should_filter(text, &msg, true, false),
+            Some(FilterReason::UrlOnlyLowText),
+        );
+    }
+
+    #[test]
+    fn test_filter_url_with_osint_text_passes() {
+        let msg = dummy_msg();
+        // URL with OSINT keyword in surrounding text -> passes
+        let text = "drone strike https://example.com/article";
+        assert_eq!(should_filter(text, &msg, true, false), None);
+    }
+
+    #[test]
+    fn test_genuine_osint_passes_all_filters() {
+        let msg = dummy_msg();
+        // Genuine OSINT reporting should always pass
+        let text = "BREAKING: Houthis launch missiles at US warship in Red Sea, multiple intercept attempts reported by CENTCOM.";
+        assert_eq!(should_filter(text, &msg, false, false), None);
+    }
+
+    #[test]
+    fn test_negative_keyword_podcast() {
+        let msg = dummy_msg();
+        let text = "New podcast episode dropping tomorrow about geopolitics in the Middle East, make sure to tune in for the discussion.";
+        assert_eq!(
+            should_filter(text, &msg, false, false),
+            Some(FilterReason::NegativeKeyword),
+        );
+    }
+
+    #[test]
+    fn test_negative_keyword_sale() {
+        let msg = dummy_msg();
+        let text = "Big sale happening right now, everything is twenty percent off until the end of the week, do not miss out on these deals.";
+        assert_eq!(
+            should_filter(text, &msg, false, false),
+            Some(FilterReason::NegativeKeyword),
+        );
+    }
+
+    #[test]
+    fn test_strip_urls_basic() {
+        assert_eq!(strip_urls("hello world"), "hello world");
+        assert_eq!(strip_urls("check https://example.com out"), "check out");
+        assert_eq!(strip_urls("https://example.com"), "");
+        assert_eq!(
+            strip_urls("see http://foo.bar and https://baz.qux here"),
+            "see and here"
+        );
+    }
+
+    #[test]
+    fn test_has_high_confidence_osint() {
+        // Action verb + OSINT keyword -> true
+        assert!(has_high_confidence_osint("missile strike confirmed in the area"));
+        assert!(has_high_confidence_osint("drone deployed near the border"));
+        // Only OSINT keyword, no action verb -> false
+        assert!(!has_high_confidence_osint("military convoy spotted"));
+        // Only action verb, no OSINT keyword -> false
+        assert!(!has_high_confidence_osint("the bridge collapsed yesterday"));
+        // Neither -> false
+        assert!(!has_high_confidence_osint("sunny weather today"));
     }
 }
