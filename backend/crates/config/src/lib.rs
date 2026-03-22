@@ -342,6 +342,10 @@ pub struct PhaseConfig {
 
     // Declining → Resolved
     pub declining_resolve_gap_factor: f64,
+    /// Hard cap: force Declining → Resolved after this many hours in Declining,
+    /// regardless of gap tolerance math. Prevents situations from lingering
+    /// indefinitely in Declining when they keep receiving trickle events.
+    pub declining_max_hours: f64,
 
     // Resolved → Historical
     pub resolved_historical_gap_factor: f64,
@@ -379,6 +383,7 @@ impl Default for PhaseConfig {
             critical_dwell_hours: 24.0,
             high_dwell_hours: 12.0,
             declining_resolve_gap_factor: 1.5,
+            declining_max_hours: 48.0,
             resolved_historical_gap_factor: 3.0,
             gap_tolerance_critical_hours: 12.0,
             gap_tolerance_high_hours: 8.0,

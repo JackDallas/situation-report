@@ -24,7 +24,7 @@ use crate::airspace::SharedAirspaceIndex;
 use crate::alerts::{AlertRule, AlertTracker, FiredAlert, evaluate_rules};
 use crate::core::{PipelineCore, NarrativeState};
 use crate::rules;
-use crate::situation_graph::{SituationCluster, SituationGraph, SituationPhase, is_region_center_fallback, is_null_island};
+use crate::situation_graph::{SituationCluster, SituationGraph, SituationPhase, is_region_center_fallback, is_null_island, is_known_default_coord};
 use crate::types::{Incident, PublishEvent, Summary, SharedEntityResolver, SharedEntityGraph};
 use crate::window::CorrelationWindow;
 
@@ -467,7 +467,14 @@ fn cluster_from_db_row(row: &SituationDbRow) -> Option<SituationCluster> {
                             if a.len() >= 2 {
                                 let lat = a[0].as_f64()?;
                                 let lon = a[1].as_f64()?;
-                                if is_region_center_fallback(lat, lon) || is_null_island(lat, lon) { None } else { Some((lat, lon)) }
+                                if is_region_center_fallback(lat, lon)
+                                    || is_null_island(lat, lon)
+                                    || is_known_default_coord(lat, lon)
+                                {
+                                    None
+                                } else {
+                                    Some((lat, lon))
+                                }
                             } else { None }
                         })
                         .collect();
@@ -490,7 +497,10 @@ fn cluster_from_db_row(row: &SituationDbRow) -> Option<SituationCluster> {
                         if a.len() >= 2 {
                             let lat = a[0].as_f64()?;
                             let lon = a[1].as_f64()?;
-                            if is_region_center_fallback(lat, lon) || is_null_island(lat, lon) {
+                            if is_region_center_fallback(lat, lon)
+                                || is_null_island(lat, lon)
+                                || is_known_default_coord(lat, lon)
+                            {
                                 None
                             } else {
                                 Some((lat, lon))
@@ -667,9 +677,9 @@ async fn upsert_situation(
         "direct_source_types": &cluster.direct_source_types,
     });
 
-    // Build PostGIS point from centroid if available (skip Null Island)
+    // Build PostGIS point from centroid if available (skip Null Island and known defaults)
     let location_wkt: Option<String> = cluster.centroid
-        .filter(|(lat, lon)| !is_null_island(*lat, *lon))
+        .filter(|(lat, lon)| !is_null_island(*lat, *lon) && !is_known_default_coord(*lat, *lon))
         .map(|(lat, lon)| {
             format!("SRID=4326;POINT({lon} {lat})")
         });
@@ -2253,6 +2263,35 @@ fn tick_situations(
     // ── Phase transitions + severity escalations ──────────────────────────
     for (cid, transition) in &output.phase_transitions {
         info!(cluster_id = %cid, from = ?transition.from_phase, to = ?transition.to_phase, reason = %transition.trigger_reason, "Situation phase transition");
+
+        // Persist to situation_phase_transitions table
+        let pool = pool.clone();
+        let cid = *cid;
+        let from_phase = transition.from_phase.as_str().to_string();
+        let to_phase = transition.to_phase.as_str().to_string();
+        let reason = transition.trigger_reason.clone();
+        let metrics_snapshot = transition.metrics_snapshot.clone();
+        let transitioned_at = transition.transitioned_at;
+        let sem = bg_semaphore.clone();
+        tokio::spawn(async move {
+            let _permit = sem.acquire().await;
+            let result = sqlx::query(
+                "INSERT INTO situation_phase_transitions \
+                    (situation_id, from_phase, to_phase, trigger_reason, metrics_snapshot, transitioned_at) \
+                 VALUES ($1, $2::situation_phase, $3::situation_phase, $4, $5, $6)",
+            )
+            .bind(cid)
+            .bind(&from_phase)
+            .bind(&to_phase)
+            .bind(&reason)
+            .bind(&metrics_snapshot)
+            .bind(transitioned_at)
+            .execute(&pool)
+            .await;
+            if let Err(e) = result {
+                tracing::warn!(situation_id = %cid, "Failed to persist phase transition: {e}");
+            }
+        });
     }
 
     for cid in &output.severity_escalations {
