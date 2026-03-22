@@ -92,7 +92,7 @@ services:
         max-size: "50m"
         max-file: "3"
 
-  # Model download (runs once, exits). Model is loaded in-process by the app.
+  # Model download (runs once, exits)
   llama-model-download:
     image: alpine:3.20
     container_name: llama-model-download
@@ -111,6 +111,50 @@ services:
       - llama-models:/models
     restart: "no"
 
+  # llama-server: external LLM inference server (CUDA GPU)
+  # Separate container avoids CUDA conflicts with ONNX Runtime (BGE-M3 embeddings).
+  # GPU toggle (pause/resume) stops/starts this container via Docker socket.
+  llama:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    container_name: llama
+    depends_on:
+      llama-model-download:
+        condition: service_completed_successfully
+    command:
+      - "-m"
+      - "/models/qwen3.5-9b-q4_k_m.gguf"
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8000"
+      - "-ngl"
+      - "99"
+      - "-c"
+      - "8192"
+      - "--reasoning-budget"
+      - "0"
+    volumes:
+      - llama-models:/models:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8000/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+
   app:
     build: .
     image: situationreport:latest
@@ -118,8 +162,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      llama-model-download:
-        condition: service_completed_successfully
+      llama:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgres://sitrep:${DB_PASSWORD}@postgres/situationroom
       BIND_ADDR: 0.0.0.0:3000

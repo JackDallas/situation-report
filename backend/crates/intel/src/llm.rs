@@ -370,6 +370,15 @@ impl LlmClient {
         matches!(&self.backend, LlmBackend::InProcess(_))
     }
 
+    /// Get the base URL for the HTTP backend (used by GPU toggle to poll health).
+    /// Returns None for in-process backend.
+    pub fn base_url(&self) -> Option<String> {
+        match &self.backend {
+            LlmBackend::Http { base_url, .. } => Some(base_url.clone()),
+            LlmBackend::InProcess(_) => None,
+        }
+    }
+
     /// Enrich a news article using local LLM inference.
     /// Acquires GPU semaphore to serialize requests.
     pub async fn enrich_article(&self, article: &ArticleInput) -> Result<EnrichedArticleV2> {

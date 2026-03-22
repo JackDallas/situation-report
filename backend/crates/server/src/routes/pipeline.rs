@@ -112,17 +112,20 @@ pub async fn pause_gpu(
             match docker_post("/containers/llama/stop?t=5").await {
                 Ok(status) if status == 204 || status == 304 => {
                     info!(status, "llama container stopped successfully");
-                    metrics.set_gpu_state(GpuState::Off);
+                }
+                Ok(404) => {
+                    warn!("llama container not found (404) — marking Off anyway");
                 }
                 Ok(status) => {
                     warn!(status, "Unexpected status stopping llama container");
-                    metrics.set_gpu_state(GpuState::Off);
                 }
                 Err(e) => {
                     warn!(error = %e, "Failed to stop llama container");
-                    metrics.set_gpu_state(GpuState::Off);
                 }
             }
+            // Always transition to Off — if the container doesn't exist or
+            // the stop failed, GPU work will skip anyway via health checks.
+            metrics.set_gpu_state(GpuState::Off);
         });
     }
 
@@ -170,13 +173,23 @@ pub async fn resume_gpu(
     } else {
         info!("GPU starting — sending docker start to llama container");
         let metrics = state.metrics.clone();
+        let llm_url = state.llm_client.as_ref()
+            .and_then(|llm| llm.base_url())
+            .unwrap_or_else(|| "http://llama:8000".to_string());
         tokio::spawn(async move {
             match docker_post("/containers/llama/start").await {
                 Ok(status) if status == 204 || status == 304 => {
                     info!(status, "llama container start command accepted");
                 }
+                Ok(404) => {
+                    warn!("llama container not found (404) — cannot start GPU");
+                    metrics.set_gpu_state(GpuState::Off);
+                    return;
+                }
                 Ok(status) => {
-                    warn!(status, "Unexpected status starting llama container");
+                    warn!(status, "Unexpected status starting llama container — marking Off");
+                    metrics.set_gpu_state(GpuState::Off);
+                    return;
                 }
                 Err(e) => {
                     warn!(error = %e, "Failed to start llama container");
@@ -185,17 +198,19 @@ pub async fn resume_gpu(
                 }
             }
 
-            // Poll llama health endpoint until it reports healthy (up to 3 minutes)
+            // Poll llama health endpoint until it reports healthy (up to 90s).
+            // Also check if the container crashed during startup every few polls.
             let client = reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(5))
                 .build()
                 .unwrap_or_default();
             let deadline =
-                tokio::time::Instant::now() + std::time::Duration::from_secs(180);
+                tokio::time::Instant::now() + std::time::Duration::from_secs(90);
+            let mut polls = 0u32;
 
             loop {
                 if tokio::time::Instant::now() > deadline {
-                    warn!("Timed out waiting for llama container health");
+                    warn!("Timed out waiting for llama container health (90s)");
                     if docker_container_running("llama").await {
                         info!("llama container is running despite health timeout — marking On");
                         metrics.set_gpu_state(GpuState::On);
@@ -207,8 +222,17 @@ pub async fn resume_gpu(
                 }
 
                 tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                polls += 1;
 
-                match client.get("http://llama:8000/health").send().await {
+                // Every 5 polls (~15s), verify the container hasn't crashed
+                if polls % 5 == 0 && !docker_container_running("llama").await {
+                    warn!("llama container exited during startup — marking Off");
+                    metrics.set_gpu_state(GpuState::Off);
+                    return;
+                }
+
+                let health_url = format!("{llm_url}/health");
+                match client.get(&health_url).send().await {
                     Ok(resp) if resp.status().is_success() => {
                         info!("llama container healthy — GPU is On");
                         metrics.set_gpu_state(GpuState::On);
