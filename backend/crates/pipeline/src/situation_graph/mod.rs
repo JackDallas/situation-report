@@ -202,6 +202,47 @@ pub(crate) fn is_null_island(lat: f64, lon: f64) -> bool {
     lat.abs() < 0.01 && lon.abs() < 0.01
 }
 
+/// Known default/bogus coordinates that data sources emit when they have no real
+/// location data.  These are typically capital-city or region-center coordinates
+/// used as placeholders.  Any event whose (lat, lon) falls within 0.15° of one
+/// of these points is rejected from coord_buffer and centroid seeding.
+///
+/// Note: this is distinct from `is_region_center_fallback` which covers our own
+/// region_center() values.  This list covers *upstream* defaults.
+const KNOWN_DEFAULT_COORDS: &[(f64, f64)] = &[
+    (33.3128, 44.3615),   // Baghdad, Iraq — GDELT default for Middle-East articles
+    (33.5138, 36.2765),   // Damascus, Syria
+    (35.6892, 51.3890),   // Tehran, Iran — common default for Iran-related articles
+    (31.9454, 35.9284),   // Amman, Jordan
+    (33.8886, 35.4955),   // Beirut, Lebanon
+    (38.7223, -9.1393),   // Lisbon, Portugal (Reuters default)
+    (51.5074, -0.1278),   // London, UK (news agency default)
+    (48.8566, 2.3522),    // Paris, France
+    (40.4168, -3.7038),   // Madrid, Spain
+    (38.9072, -77.0369),  // Washington DC, USA
+    (39.9042, 116.4074),  // Beijing, China
+    (55.7558, 37.6173),   // Moscow, Russia
+    (28.6139, 77.2090),   // New Delhi, India
+    ( 0.3476, 32.5825),   // Kampala, Uganda (GDELT Africa default)
+    ( 9.0579, 7.4951),    // Abuja, Nigeria
+    (-1.2921, 36.8219),   // Nairobi, Kenya
+    (30.0444, 31.2357),   // Cairo, Egypt
+    (15.3694, 44.1910),   // Sana'a, Yemen
+    (24.7136, 46.6753),   // Riyadh, Saudi Arabia
+    (25.2048, 55.2708),   // Dubai, UAE
+];
+
+/// Check whether (lat, lon) is within `threshold` degrees of any known default
+/// coordinate.  The threshold of 0.15° ≈ 17 km at the equator, which catches
+/// minor geocoding jitter around capital-city defaults without rejecting
+/// legitimate events in those cities (rare for geo-reliable event types).
+pub(crate) fn is_known_default_coord(lat: f64, lon: f64) -> bool {
+    const THRESHOLD: f64 = 0.15;
+    KNOWN_DEFAULT_COORDS
+        .iter()
+        .any(|(dlat, dlon)| (lat - dlat).abs() < THRESHOLD && (lon - dlon).abs() < THRESHOLD)
+}
+
 /// Maximum distance (km) an event can be from the cluster centroid to contribute
 /// to the coord_buffer. Prevents worldwide GDACS events from averaging to Africa.
 const CENTROID_COHERENCE_RADIUS_KM: f64 = 2000.0;
@@ -867,16 +908,21 @@ impl SituationGraph {
         // Update centroid via coordinate buffer (median-based, outlier-resistant)
         // Prefer geo-reliable event types; fall back to any coords if cluster has none
         if let (Some(lat), Some(lon)) = (event.latitude, event.longitude) {
-            if !is_region_center_fallback(lat, lon) && !is_null_island(lat, lon) {
+            if !is_region_center_fallback(lat, lon)
+                && !is_null_island(lat, lon)
+                && !is_known_default_coord(lat, lon)
+            {
                 if has_reliable_coordinates(event.event_type) {
                     // Geo-reliable: add to buffer, but only if geographically coherent
                     // with existing centroid (prevents worldwide GDACS events from
-                    // averaging to a meaningless central point)
+                    // averaging to a meaningless central point).
+                    // When the cluster has fewer than 5 coords, always accept —
+                    // the centroid is still establishing.
                     let close_enough = match cluster.centroid {
-                        Some((clat, clon)) => {
+                        Some((clat, clon)) if cluster.coord_buffer.len() >= 5 => {
                             distance_km(lat, lon, clat, clon) < CENTROID_COHERENCE_RADIUS_KM
                         }
-                        None => true, // no centroid yet, always accept
+                        _ => true, // no centroid yet or still establishing, always accept
                     };
                     if close_enough {
                         cluster.coord_buffer.push((lat, lon));
@@ -1121,7 +1167,9 @@ impl SituationGraph {
         }
 
         let (centroid, coord_buffer) = match (event.latitude, event.longitude) {
-            (Some(lat), Some(lon)) if !is_region_center_fallback(lat, lon) && !is_null_island(lat, lon) => {
+            (Some(lat), Some(lon)) if !is_region_center_fallback(lat, lon)
+                && !is_null_island(lat, lon)
+                && !is_known_default_coord(lat, lon) => {
                 if has_reliable_coordinates(event.event_type) {
                     // Geo-reliable: seed both centroid and buffer
                     (Some((lat, lon)), vec![(lat, lon)])
@@ -1800,12 +1848,16 @@ impl SituationGraph {
 
             // Update centroid if event has reliable coordinates and is geographically coherent
             if let (Some(lat), Some(lon)) = (event.latitude, event.longitude) {
-                if !is_region_center_fallback(lat, lon) && !is_null_island(lat, lon) && has_reliable_coordinates(event.event_type) {
+                if !is_region_center_fallback(lat, lon)
+                    && !is_null_island(lat, lon)
+                    && !is_known_default_coord(lat, lon)
+                    && has_reliable_coordinates(event.event_type)
+                {
                     let close_enough = match cluster.centroid {
-                        Some((clat, clon)) => {
+                        Some((clat, clon)) if cluster.coord_buffer.len() >= 5 => {
                             distance_km(lat, lon, clat, clon) < CENTROID_COHERENCE_RADIUS_KM
                         }
-                        None => true,
+                        _ => true,
                     };
                     if close_enough {
                         cluster.coord_buffer.push((lat, lon));
@@ -2401,12 +2453,12 @@ mod tests {
     fn test_region_center_fallback_filtered_from_centroid() {
         let mut g = SituationGraph::default();
 
-        // First event with real coordinates
+        // First event with real coordinates (Mosul, Iraq — far from the Baghdad default)
         let e1 = make_event(json!({
             "entity_name": "Site",
             "tags": ["topic:conflict"],
-            "latitude": 33.3,
-            "longitude": 44.4,
+            "latitude": 36.34,
+            "longitude": 43.13,
             "region_code": "IQ",
         }));
         g.ingest(&e1, None);
@@ -2425,7 +2477,7 @@ mod tests {
         let cluster = g.clusters.values().next().unwrap();
         // Centroid should remain at the real coordinate, not averaged with the region center
         let (clat, _clon) = cluster.centroid.unwrap();
-        assert!((clat - 33.3).abs() < 0.1, "centroid lat={clat} should be ~33.3, not pulled to 27.0");
+        assert!((clat - 36.34).abs() < 0.1, "centroid lat={clat} should be ~36.34, not pulled to 27.0");
         assert_eq!(cluster.coord_buffer.len(), 1, "region center should not be in coord_buffer");
     }
 
@@ -2433,43 +2485,57 @@ mod tests {
     fn test_centroid_coherence_rejects_distant_events() {
         let mut g = SituationGraph::default();
 
-        // First event: seismic event in Turkey
-        let e1 = make_event(json!({
-            "entity_name": "Quake",
-            "tags": ["topic:earthquake"],
-            "latitude": 39.0,
-            "longitude": 35.0,
-            "region_code": "TR",
-            "event_type": "seismic_event",
-        }));
-        g.ingest(&e1, None);
+        // Seed cluster with 5+ geo_events near Turkey so the coherence
+        // radius check kicks in (clusters with <5 coords always accept).
+        // Using geo_event because seismic_event <M6.5 is suppressed from
+        // creating new situations.
+        let turkey_coords = [
+            (39.0, 35.0),
+            (38.5, 34.5),
+            (39.5, 35.5),
+            (38.8, 34.8),
+            (39.2, 35.2),
+            (39.1, 34.9),
+        ];
+        for (lat, lon) in &turkey_coords {
+            let e = make_event(json!({
+                "entity_name": "Incident",
+                "tags": ["topic:conflict"],
+                "latitude": lat,
+                "longitude": lon,
+                "region_code": "TR",
+                "event_type": "geo_event",
+            }));
+            g.ingest(&e, None);
+        }
 
         assert_eq!(g.clusters.len(), 1);
         let cid = *g.clusters.keys().next().unwrap();
         let cluster = g.clusters.get(&cid).unwrap();
         assert!(cluster.centroid.is_some());
+        assert_eq!(cluster.coord_buffer.len(), 6);
         let (clat, clon) = cluster.centroid.unwrap();
-        assert!((clat - 39.0).abs() < 0.1);
-        assert!((clon - 35.0).abs() < 0.1);
+        assert!((clat - 39.0).abs() < 1.0);
+        assert!((clon - 35.0).abs() < 1.0);
 
-        // Second event: seismic event >8000km away in Drake Passage (Antarctica)
+        // Distant event: geo_event >8000km away in Drake Passage (Antarctica)
         // This should NOT update the centroid due to geographic coherence check
-        let e2 = make_event(json!({
-            "entity_name": "Quake",
-            "tags": ["topic:earthquake"],
+        let e_far = make_event(json!({
+            "entity_name": "Incident",
+            "tags": ["topic:conflict"],
             "latitude": -58.0,
             "longitude": -25.0,
             "region_code": "global",
-            "event_type": "seismic_event",
+            "event_type": "geo_event",
         }));
-        g.ingest(&e2, None);
+        g.ingest(&e_far, None);
 
         let cluster = g.clusters.get(&cid).unwrap();
-        let (clat2, clon2) = cluster.centroid.unwrap();
+        let (clat2, _clon2) = cluster.centroid.unwrap();
         // Centroid should stay near Turkey, not dragged toward Antarctica
         assert!((clat2 - 39.0).abs() < 1.0,
             "centroid lat={clat2} should still be ~39.0 (Turkey), not pulled toward -58");
-        assert_eq!(cluster.coord_buffer.len(), 1,
+        assert_eq!(cluster.coord_buffer.len(), 6,
             "distant event should not be added to coord_buffer");
     }
 
