@@ -130,7 +130,7 @@ impl DataSource for CertstreamSource {
                     ws
                 }
                 Err(e) => {
-                    let jitter_ms = rand::thread_rng().gen_range(0..=backoff_secs * 1000 / 4);
+                    let jitter_ms = rand::rng().random_range(0..=backoff_secs * 1000 / 4);
                     let total = Duration::from_millis(backoff_secs * 1000 + jitter_ms);
                     error!(error = %e, "Failed to connect to CertStream");
                     tokio::time::sleep(total).await;
@@ -260,7 +260,7 @@ impl DataSource for CertstreamSource {
             }
 
             // Exponential backoff before reconnect
-            let jitter_ms = rand::thread_rng().gen_range(0..=backoff_secs * 1000 / 4);
+            let jitter_ms = rand::rng().random_range(0..=backoff_secs * 1000 / 4);
             let total = Duration::from_millis(backoff_secs * 1000 + jitter_ms);
             tokio::time::sleep(total).await;
             backoff_secs = (backoff_secs * 2).min(60);

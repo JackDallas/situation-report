@@ -661,7 +661,7 @@ impl DataSource for ShodanStream {
             }
 
             // Exponential backoff: 1s -> 2s -> 4s -> ... -> 60s max, with jitter
-            let jitter_ms = rand::thread_rng().gen_range(0..=backoff_secs * 1000 / 4);
+            let jitter_ms = rand::rng().random_range(0..=backoff_secs * 1000 / 4);
             let total = Duration::from_millis(backoff_secs * 1000 + jitter_ms);
             info!(backoff_ms = total.as_millis() as u64, "Reconnecting after backoff");
             tokio::time::sleep(total).await;

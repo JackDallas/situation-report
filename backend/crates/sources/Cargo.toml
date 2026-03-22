@@ -24,7 +24,7 @@ quick-xml = "0.37"
 regex = "1"
 bytes = "1"
 http = "1"
-rand = "0.8"
+rand = "0.9"
 pdf-extract = "0.10"
 grammers-client = { version = "0.9", default-features = false }
 grammers-session = { version = "0.9", features = ["sqlite-storage"] }

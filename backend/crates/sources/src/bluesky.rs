@@ -988,7 +988,7 @@ impl DataSource for BlueskySource {
                     conn
                 }
                 Err(e) => {
-                    let jitter_ms = rand::thread_rng().gen_range(0..=backoff_secs * 1000 / 4);
+                    let jitter_ms = rand::rng().random_range(0..=backoff_secs * 1000 / 4);
                     let total = Duration::from_millis(backoff_secs * 1000 + jitter_ms);
                     error!(error = %e, backoff_ms = total.as_millis() as u64, "Failed to connect to Jetstream");
                     tokio::time::sleep(total).await;
@@ -1089,7 +1089,7 @@ impl DataSource for BlueskySource {
                 }
             };
 
-            let jitter_ms = rand::thread_rng().gen_range(0..=backoff_secs * 1000 / 4);
+            let jitter_ms = rand::rng().random_range(0..=backoff_secs * 1000 / 4);
             let total = Duration::from_millis(backoff_secs * 1000 + jitter_ms);
             warn!(
                 reason = %disconnect_reason,

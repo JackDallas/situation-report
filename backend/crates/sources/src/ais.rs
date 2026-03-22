@@ -455,7 +455,7 @@ impl DataSource for AisSource {
                     stream
                 }
                 Err(e) => {
-                    let jitter_ms = rand::thread_rng().gen_range(0..=backoff.as_millis() as u64 / 4);
+                    let jitter_ms = rand::rng().random_range(0..=backoff.as_millis() as u64 / 4);
                     let total = backoff + Duration::from_millis(jitter_ms);
                     error!(
                         error = %e,
@@ -477,7 +477,7 @@ impl DataSource for AisSource {
                 ))
                 .await
             {
-                let jitter_ms = rand::thread_rng().gen_range(0..=backoff.as_millis() as u64 / 4);
+                let jitter_ms = rand::rng().random_range(0..=backoff.as_millis() as u64 / 4);
                 let total = backoff + Duration::from_millis(jitter_ms);
                 error!(
                     error = %e,
@@ -629,7 +629,7 @@ impl DataSource for AisSource {
             }
 
             // Transient disconnect — reconnect after backoff.
-            let jitter_ms = rand::thread_rng().gen_range(0..=backoff.as_millis() as u64 / 4);
+            let jitter_ms = rand::rng().random_range(0..=backoff.as_millis() as u64 / 4);
             let total = backoff + Duration::from_millis(jitter_ms);
             warn!(
                 backoff_ms = total.as_millis() as u64,

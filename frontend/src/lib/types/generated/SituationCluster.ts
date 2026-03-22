@@ -22,4 +22,4 @@ event_titles: Array<string>,
 /**
  * Latest narrative text for this situation.
  */
-narrative_text: string | null, };
+narrative_text?: string | null, };

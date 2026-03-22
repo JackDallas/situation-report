@@ -89,7 +89,7 @@ impl SourceRegistry {
         }
 
         // No health record — first run, stagger 0-5s to avoid cold-start thundering herd
-        Duration::from_millis(rand::thread_rng().gen_range(0..5000))
+        Duration::from_millis(rand::rng().random_range(0..5000))
     }
 
     /// Spawn tokio tasks for all registered sources.
@@ -181,7 +181,7 @@ impl SourceRegistry {
                                     }
 
                                     let backoff_ms = ((10u64 * 2u64.pow(consecutive_failures.min(8))).min(1800)) * 1000;
-                                    let jitter = rand::thread_rng().gen_range(0..=backoff_ms / 4);
+                                    let jitter = rand::rng().random_range(0..=backoff_ms / 4);
                                     let backoff = std::time::Duration::from_millis(backoff_ms + jitter);
                                     error!(
                                         source_id = source.id(),
@@ -346,7 +346,7 @@ impl SourceRegistry {
                                     // Avoids exponential death spiral (10s * 2^4 = 160s) while still
                                     // increasing backoff on repeated failures.
                                     let effective_ms = ((retry_delay.as_secs() + 30 * (consecutive_failures as u64)).min(600)) * 1000;
-                                    let jitter = rand::thread_rng().gen_range(0..=effective_ms / 4);
+                                    let jitter = rand::rng().random_range(0..=effective_ms / 4);
                                     let effective = std::time::Duration::from_millis(effective_ms + jitter);
 
                                     warn!(
@@ -377,7 +377,7 @@ impl SourceRegistry {
                                         Some(&e.to_string()), &health_tx, &pushover_token, &pushover_user,
                                     ).await;
                                     let backoff_ms = ((30u64 * 2u64.pow(consecutive_failures.min(4))).min(300)) * 1000;
-                                    let jitter = rand::thread_rng().gen_range(0..=backoff_ms / 4);
+                                    let jitter = rand::rng().random_range(0..=backoff_ms / 4);
                                     std::time::Duration::from_millis(backoff_ms + jitter)
                                 };
 
