@@ -188,6 +188,9 @@ services:
       # NVIDIA GPU (CUDA EP for ONNX Runtime)
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    # Add docker group so sitrep user can control llama container via socket
+    group_add:
+      - ${DOCKER_GID:-999}
     volumes:
       - embeddings-cache:/app/models
       - ./data:/app/data
