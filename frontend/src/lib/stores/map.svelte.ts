@@ -74,6 +74,8 @@ class MapStore {
 		conflict_event: 720,     // 12h
 		news_article: 720,       // 12h
 		geo_news: 720,           // 12h
+		telegram_message: 480,   // 8h — OSINT posts
+		bluesky_post: 480,       // 8h — OSINT posts
 		seismic_event: 1440,     // 24h
 		nuclear_event: 2880,     // 48h
 		gps_interference: 360,   // 6h
@@ -160,7 +162,7 @@ class MapStore {
 	}
 
 	/** Event types hidden from the map */
-	hiddenEventTypes = $state<Set<string>>(new Set(['news_article', 'geo_news']));
+	hiddenEventTypes = $state<Set<string>>(new Set(['geo_news']));
 
 	toggleEventType(type: string) {
 		const next = new Set(this.hiddenEventTypes);

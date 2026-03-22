@@ -96,7 +96,7 @@ pub async fn events_geo(
     // Zoom-aware severity filter and adaptive limit
     let zoom = params.zoom.map(validate::clamp_zoom);
     let (severity_filter, zoom_limit) = zoom_to_severity_filter(zoom);
-    let limit = validate::clamp_limit(params.limit.unwrap_or(zoom_limit), 1000);
+    let limit = validate::clamp_limit(params.limit.unwrap_or(zoom_limit), 2000);
 
     // Build optional bbox from query parameters, with 20% padding for smooth panning
     let bbox = match (params.min_lon, params.min_lat, params.max_lon, params.max_lat) {

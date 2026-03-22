@@ -54,7 +54,7 @@ const INCIDENT_RULES = [
 const FEED_EXCLUDE =
 	'bgp_anomaly,flight_position,vessel_position,cert_issued,shodan_banner,geo_news,shodan_count';
 const INTEL_GEO_TYPES =
-	'conflict_event,seismic_event,geo_event,nuclear_event,notam_event,internet_outage,gps_interference,censorship_event,threat_intel,fishing_event,geo_news,thermal_anomaly,bluesky_post,maritime_security';
+	'conflict_event,seismic_event,geo_event,nuclear_event,notam_event,internet_outage,gps_interference,censorship_event,threat_intel,fishing_event,geo_news,thermal_anomaly,bluesky_post,maritime_security,telegram_message,news_article';
 
 let source: EventSource | null = null;
 let summaryPollInterval: ReturnType<typeof setInterval> | null = null;
@@ -102,7 +102,7 @@ async function loadInitialData() {
 			api.getEvents({ limit: 200, exclude: FEED_EXCLUDE }),
 			// Don't pass zoom — the backend severity filter hides low-severity events
 			// (e.g. FIRMS thermal_anomaly) at low zoom, causing them to vanish on pan/zoom.
-			api.getEventsGeo(geoSince, 500, INTEL_GEO_TYPES, undefined, bounds)
+			api.getEventsGeo(geoSince, 1500, INTEL_GEO_TYPES, undefined, bounds)
 		]);
 		if (events && events.length > 0) {
 			const mapped = events.map((e) => ({
@@ -130,7 +130,7 @@ async function loadInitialData() {
 		if (intelGeo?.features?.length) {
 			mapStore.updateGeoData({
 				type: 'FeatureCollection',
-				features: intelGeo.features.slice(0, 500)
+				features: intelGeo.features.slice(0, 1500)
 			});
 		}
 		eventStore.connectionStatus = 'connected';
@@ -161,11 +161,11 @@ export async function refetchGeoForViewport() {
 	try {
 		const geoSince = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
 		const bounds = mapStore.viewportBounds;
-		const intelGeo = await api.getEventsGeo(geoSince, 500, INTEL_GEO_TYPES, undefined, bounds);
+		const intelGeo = await api.getEventsGeo(geoSince, 1500, INTEL_GEO_TYPES, undefined, bounds);
 		if (intelGeo?.features?.length) {
 			mapStore.updateGeoData({
 				type: 'FeatureCollection',
-				features: intelGeo.features.slice(0, 500)
+				features: intelGeo.features.slice(0, 1500)
 			});
 		}
 	} catch {

@@ -2,6 +2,7 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { mapStore } from '$lib/stores/map.svelte';
 	import { eventStore } from '$lib/stores/events.svelte';
+	import { situationsStore } from '$lib/stores/situations.svelte';
 	import { clockStore } from '$lib/stores/clock.svelte';
 	import TimelineSlider from '$lib/components/shared/TimelineSlider.svelte';
 	import { getOutlink, getEventDetails, escapeHtml } from '$lib/services/outlinks';
@@ -375,6 +376,14 @@
 			eventStore.selectedEvent = pseudoEvent;
 		};
 
+		// Register global bridge for situation popup -> drawer navigation
+		(window as any).__srOpenSituation = (situationId: string) => {
+			const sit = situationsStore.situationById.get(situationId);
+			if (sit) {
+				situationsStore.selectedSituation = sit;
+			}
+		};
+
 		map = new maplibre.Map({
 			container,
 			style: 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json',
@@ -623,7 +632,7 @@
 				}
 			});
 
-			// --- Conflict heatmap layer — uses UNCLUSTERED source for accurate heat distribution ---
+			// --- Intel heatmap layer — uses UNCLUSTERED source for accurate heat distribution ---
 			// thermal_anomaly excluded: FIRMS fire detections have their own thermal-dots layer
 			// and would otherwise create misleading large blobs at medium zoom.
 			map.addLayer({
@@ -633,7 +642,10 @@
 				maxzoom: 7,
 				filter: [
 					'in', ['get', 'event_type'],
-					['literal', ['conflict_event', 'nuclear_event', 'gps_interference']]
+					['literal', ['conflict_event', 'nuclear_event', 'gps_interference',
+						'seismic_event', 'telegram_message', 'bluesky_post',
+						'maritime_security', 'geo_event', 'news_article',
+						'internet_outage', 'censorship_event', 'threat_intel']]
 				],
 				paint: {
 					'heatmap-weight': [
@@ -991,7 +1003,132 @@
 				}
 			});
 
+			// --- Situation cluster markers ---
+			map.addSource('situations', {
+				type: 'geojson',
+				data: { type: 'FeatureCollection', features: [] }
+			});
+
+			// Outer glow ring for situations
+			map.addLayer({
+				id: 'situation-glow',
+				type: 'circle',
+				source: 'situations',
+				paint: {
+					'circle-radius': [
+						'interpolate', ['linear'], ['zoom'],
+						2, ['match', ['get', 'severity'], 'critical', 16, 'high', 14, 12],
+						6, ['match', ['get', 'severity'], 'critical', 22, 'high', 18, 15],
+						10, ['match', ['get', 'severity'], 'critical', 28, 'high', 24, 20]
+					],
+					'circle-color': [
+						'match', ['get', 'severity'],
+						'critical', 'rgba(239, 68, 68, 0.15)',
+						'high', 'rgba(249, 115, 22, 0.12)',
+						'medium', 'rgba(234, 179, 8, 0.10)',
+						'rgba(107, 114, 128, 0.08)'
+					],
+					'circle-stroke-width': 0
+				}
+			});
+
+			// Inner dot for situation centroid
+			map.addLayer({
+				id: 'situation-dots',
+				type: 'circle',
+				source: 'situations',
+				paint: {
+					'circle-radius': [
+						'interpolate', ['linear'], ['zoom'],
+						2, 5,
+						6, 7,
+						10, 9
+					],
+					'circle-color': [
+						'match', ['get', 'severity'],
+						'critical', '#ef4444',
+						'high', '#f97316',
+						'medium', '#eab308',
+						'#6b7280'
+					],
+					'circle-opacity': 0.9,
+					'circle-stroke-width': 2,
+					'circle-stroke-color': 'rgba(255, 255, 255, 0.6)'
+				}
+			});
+
+			// Situation labels — show at medium zoom
+			map.addLayer({
+				id: 'situation-labels',
+				type: 'symbol',
+				source: 'situations',
+				minzoom: 4,
+				layout: {
+					'text-field': ['get', 'title'],
+					'text-size': [
+						'interpolate', ['linear'], ['zoom'],
+						4, 10,
+						8, 12
+					],
+					'text-offset': [0, 1.6],
+					'text-anchor': 'top',
+					'text-allow-overlap': false,
+					'text-max-width': 14
+				},
+				paint: {
+					'text-color': [
+						'match', ['get', 'severity'],
+						'critical', '#fca5a5',
+						'high', '#fdba74',
+						'medium', '#fde047',
+						'#d1d5db'
+					],
+					'text-halo-color': '#1a1a2e',
+					'text-halo-width': 1.5,
+					'text-opacity': [
+						'interpolate', ['linear'], ['zoom'],
+						4, 0.7,
+						7, 0.9
+					]
+				}
+			});
+
 			// --- Click handlers ---
+
+			// Click handler for situation markers
+			map.on('click', 'situation-dots', (e: any) => {
+				if (!e.features?.length) return;
+				const f = e.features[0];
+				const p = f.properties;
+				const coords = f.geometry.coordinates.slice();
+
+				const sevColor = p.severity === 'critical' ? '#f87171'
+					: p.severity === 'high' ? '#fb923c'
+					: p.severity === 'medium' ? '#facc15'
+					: '#9ca3af';
+				const phaseLabel = p.phase ? p.phase.charAt(0).toUpperCase() + p.phase.slice(1) : '';
+
+				const html = `<div style="font-family:monospace;font-size:12px;color:#e5e7eb;max-width:280px;">
+					<div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+						<span style="font-weight:bold;color:${sevColor};">${escapeHtml(p.title || 'Situation')}</span>
+					</div>
+					<div style="display:flex;flex-direction:column;gap:2px;">
+						<div style="display:flex;gap:8px;font-size:11px;"><span style="color:#6b7280;min-width:70px;">Severity</span><span style="color:${sevColor};">${escapeHtml((p.severity || '').toUpperCase())}</span></div>
+						${phaseLabel ? `<div style="display:flex;gap:8px;font-size:11px;"><span style="color:#6b7280;min-width:70px;">Phase</span><span style="color:#d1d5db;">${escapeHtml(phaseLabel)}</span></div>` : ''}
+						<div style="display:flex;gap:8px;font-size:11px;"><span style="color:#6b7280;min-width:70px;">Events</span><span style="color:#d1d5db;">${p.event_count ?? 0}</span></div>
+						<div style="display:flex;gap:8px;font-size:11px;"><span style="color:#6b7280;min-width:70px;">Sources</span><span style="color:#d1d5db;">${p.source_count ?? 0}</span></div>
+					</div>
+					<button onclick="window.__srOpenSituation('${escapeHtml(p.situation_id || '')}')" style="margin-top:6px;padding:3px 8px;background:rgba(59,130,246,0.15);color:#60a5fa;border:none;border-radius:4px;font-size:11px;cursor:pointer;font-family:monospace;">View Situation</button>
+				</div>`;
+
+				new maplibre.Popup({ className: 'sr-popup', maxWidth: '300px' })
+					.setLngLat(coords)
+					.setHTML(html)
+					.addTo(map);
+			});
+
+			map.on('mouseenter', 'situation-dots', () => { map.getCanvas().style.cursor = 'pointer'; });
+			map.on('mouseleave', 'situation-dots', () => { map.getCanvas().style.cursor = ''; });
 
 			// Click handler for event popups
 			map.on('click', 'events-circle', (e: any) => {
@@ -1159,7 +1296,7 @@
 			// so find the closest event from the unclustered source when no interactive
 			// layer handles the click.
 			const interactiveLayers = [
-				'events-circle', 'impact-sites',
+				'events-circle', 'impact-sites', 'situation-dots',
 				'notam-area-fill', 'thermal-dots', 'position-arrows', 'bases-symbols',
 				'restricted-airspace-fill', 'satellite-dots'
 			];
@@ -1207,6 +1344,10 @@
 			map.moveLayer('notam-area-line', 'events-circle');
 			map.moveLayer('events-circle');
 			map.moveLayer('impact-sites');
+			// Situation markers on top of everything
+			map.moveLayer('situation-glow');
+			map.moveLayer('situation-dots');
+			map.moveLayer('situation-labels');
 
 			// Track viewport bounds for position filtering
 			updateViewportBounds();
@@ -1274,6 +1415,35 @@
 			'visibility',
 			mapStore.heatmapVisible ? 'visible' : 'none'
 		);
+	});
+
+	// Update situation markers when situations change
+	$effect(() => {
+		if (!mapLoaded || !map?.getSource('situations')) return;
+		const situations = situationsStore.situations;
+		const features = situations
+			.filter((s) => s.latitude != null && s.longitude != null && s.latitude !== 0 && s.longitude !== 0 && !s.parentId)
+			.map((s) => ({
+				type: 'Feature' as const,
+				geometry: {
+					type: 'Point' as const,
+					coordinates: [s.longitude!, s.latitude!]
+				},
+				properties: {
+					situation_id: s.id,
+					title: s.displayTitle ?? s.title,
+					severity: s.severity,
+					category: s.category,
+					phase: s.phase ?? null,
+					event_count: s.eventCount,
+					source_count: s.sourceCount,
+					region: s.region
+				}
+			}));
+		(map.getSource('situations') as any).setData({
+			type: 'FeatureCollection',
+			features
+		});
 	});
 
 	// Toggle military bases reference layer
@@ -1637,6 +1807,7 @@
 		if (eventUpdateTimer) clearInterval(eventUpdateTimer);
 		satelliteStore.stop();
 		delete (window as any).__srOpenDetail;
+		delete (window as any).__srOpenSituation;
 		delete (window as any).__srDetailProps;
 		map?.remove();
 	});
