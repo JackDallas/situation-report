@@ -76,7 +76,7 @@
 				{@const rate = rates[stage.id] ?? 0}
 				<div
 					class="flex-1 rounded border border-border-default bg-bg-secondary p-2 text-center"
-					title={stage.id === 'ingest' ? 'Total events received from all sources' : stage.id === 'correlate' ? 'Events processed by correlation rules' : stage.id === 'enrich' ? 'Events enriched by AI (Haiku/Ollama)' : 'Events published to SSE for frontend display'}
+					title={stage.id === 'ingest' ? 'Total events received from all sources' : stage.id === 'correlate' ? 'Events processed by correlation rules' : stage.id === 'enrich' ? 'Events enriched by AI (Haiku/Ollama)' : 'Events published to WebSocket for frontend display'}
 				>
 					<div
 						class="text-[9px] font-semibold uppercase tracking-wider"

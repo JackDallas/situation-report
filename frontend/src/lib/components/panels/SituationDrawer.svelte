@@ -37,16 +37,17 @@
 		source_id: string | null;
 		latitude: number | null;
 		longitude: number | null;
+		entity_id: string | null;
 		entity_name: string | null;
 		event_type: string | null;
 		severity: string | null;
 		title: string | null;
 		description: string | null;
-		payload: Record<string, any>;
+		payload: Record<string, unknown>;
 	}
 
 	let expandedGroups = $state<Set<string>>(new Set());
-	let cameras = $state<any[]>([]);
+	let cameras = $state<Record<string, unknown>[]>([]);
 	let narratives = $state<NarrativeEntry[]>([]);
 	let narrativesExpanded = $state(false);
 	let situationEvents = $state<SituationEventRow[]>([]);
@@ -90,7 +91,7 @@
 			// Group key: first topic > region > severity
 			let groupKey: string;
 			if (child.topics && child.topics.length > 0) {
-				groupKey = child.topics[0];
+				groupKey = child.topics[0]!;
 			} else if (child.region && child.region !== 'global') {
 				groupKey = REGION_LABELS[child.region] ?? child.region;
 			} else {
@@ -537,6 +538,7 @@
 
 			<!-- Narratives (intelligence analysis for this situation) -->
 			{#if narratives.length > 0}
+				{@const latest = narratives[0]!}
 				<div class="mt-3">
 					<span class="text-[10px] font-semibold uppercase tracking-wider text-text-muted">
 						Analysis
@@ -544,13 +546,13 @@
 					<!-- Latest narrative -->
 					<div class="mt-1.5 rounded border border-border-default bg-bg-card p-3">
 						<div class="narrative-content space-y-2 text-[11px] leading-relaxed text-text-secondary">
-							{@html renderMarkdown(narratives[0].narrative_text)}
+							{@html renderMarkdown(latest.narrative_text)}
 						</div>
 						<div class="mt-2 flex items-center gap-2 text-[9px] text-text-muted/60">
-							<span>{narratives[0].model}</span>
-							<span>{narratives[0].tokens_used.toLocaleString()} tokens</span>
-							<span class="ml-auto" title={formatFullTimestamp(narratives[0].generated_at)}>
-								{formatAbsoluteTime(narratives[0].generated_at, clockStore.now)}
+							<span>{latest.model}</span>
+							<span>{latest.tokens_used.toLocaleString()} tokens</span>
+							<span class="ml-auto" title={formatFullTimestamp(latest.generated_at)}>
+								{formatAbsoluteTime(latest.generated_at, clockStore.now)}
 							</span>
 						</div>
 					</div>
@@ -656,7 +658,7 @@
 					{:else if situationEvents.length > 0}
 						<div class="mt-2 space-y-1">
 							{#each situationEvents as evt}
-								{@const outlink = getOutlink(evt as any)}
+								{@const outlink = getOutlink(evt)}
 								<div class="rounded px-2 py-1.5 text-[11px] text-text-secondary hover:bg-bg-card-hover">
 									<div class="flex items-start gap-2">
 										<span class="mt-0.5 shrink-0 rounded bg-bg-surface px-1 py-0.5 text-[9px] font-medium text-text-muted">
@@ -713,7 +715,8 @@
 									// Count how many items we've already used from earlier groups
 									let usedBefore = 0;
 									for (let i = 0; i < groupIdx; i++) {
-										usedBefore += subSituationTree[i].children.length;
+										const g = subSituationTree[i];
+										if (g !== undefined) usedBefore += g.children.length;
 									}
 									const remaining = Math.max(0, cap - usedBefore);
 									if (remaining <= 0) return [];

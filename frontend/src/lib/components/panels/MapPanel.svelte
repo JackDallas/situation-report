@@ -6,16 +6,17 @@
 	import { clockStore } from '$lib/stores/clock.svelte';
 	import TimelineSlider from '$lib/components/shared/TimelineSlider.svelte';
 	import { getOutlink, getEventDetails, escapeHtml } from '$lib/services/outlinks';
-	import { typeColorMap, defaultColor, formatTimestamp, formatAbsoluteTime } from '$lib/services/event-display';
+	import { typeColorMap, formatTimestamp, formatAbsoluteTime } from '$lib/services/event-display';
 	import { uiStore } from '$lib/stores/ui.svelte';
 	import { setMapInstance } from '$lib/services/position-interpolator';
-	import { refetchGeoForViewport } from '$lib/services/sse';
+	import { refetchGeoForViewport } from '$lib/services/ws';
 	import type { SituationEvent } from '$lib/types/events';
 	import { AFFILIATION_COLORS, DEFAULT_MIL_COLOR, CIVILIAN_COLOR, VESSEL_COLOR } from '$lib/config/colors';
 	import { satelliteStore } from '$lib/services/satellites.svelte';
+	import type { Map as MapLibreMap, GeoJSONSource } from 'maplibre-gl';
 
 	let container: HTMLDivElement;
-	let map: any;
+	let map: MapLibreMap;
 	let mapLoaded = $state(false);
 
 	/**
@@ -70,8 +71,8 @@
 		const raw = mapStore.geoData;
 		const cursorMs = mapStore.timeCursor.getTime();
 
-		const features: any[] = [];
-		const notamAreaFeatures: any[] = [];
+		const features: import('$lib/types/events').GeoJSONFeature[] = [];
+		const notamAreaFeatures: GeoJSON.Feature<GeoJSON.Polygon>[] = [];
 
 		for (const f of raw.features) {
 			// Time cursor filter: only show events that occurred before the cursor.
@@ -146,25 +147,25 @@
 
 		}
 
-		const allFeatures = { type: 'FeatureCollection', features };
+		const allFeatures = { type: 'FeatureCollection' as const, features };
 
 		// Update both sources with all features (no clustering)
-		(map.getSource('events') as any).setData(allFeatures);
-		(map.getSource('events-unclustered') as any).setData(allFeatures);
+		// MapLibre getSource() returns Source | undefined; cast to GeoJSONSource for setData()
+		(map.getSource('events') as GeoJSONSource | undefined)?.setData(allFeatures);
+		(map.getSource('events-unclustered') as GeoJSONSource | undefined)?.setData(allFeatures);
 
 		// Update NOTAM area polygons
-		if (map.getSource('notam-areas')) {
-			(map.getSource('notam-areas') as any).setData({
-				type: 'FeatureCollection', features: notamAreaFeatures
-			});
-		}
+		// MapLibre getSource() returns Source | undefined; cast to GeoJSONSource for setData()
+		(map.getSource('notam-areas') as GeoJSONSource | undefined)?.setData({
+			type: 'FeatureCollection' as const, features: notamAreaFeatures
+		});
 	}
 
 	/** Build popup HTML from feature properties. */
-	function buildPopupHtml(props: Record<string, any>): string {
+	function buildPopupHtml(props: Record<string, unknown>): string {
 		// Look up payload from the separate cache (stripped from GeoJSON for performance)
 		let payload: Record<string, unknown> = {};
-		const sourceId = props.source_id;
+		const sourceId = props.source_id as string | null;
 		if (sourceId) {
 			payload = mapStore.payloadCache.get(sourceId) ?? {};
 		}
@@ -174,26 +175,26 @@
 				payload =
 					typeof props.payload === 'string'
 						? JSON.parse(props.payload)
-						: (props.payload ?? {});
+						: (props.payload as Record<string, unknown> ?? {});
 			} catch {
 				payload = {};
 			}
 		}
 
 		const pseudoEvent: SituationEvent = {
-			event_time: props.event_time ?? '',
-			source_type: props.source_type ?? '',
-			source_id: props.source_id ?? null,
+			event_time: (props.event_time as string) ?? '',
+			source_type: (props.source_type as string) ?? '',
+			source_id: (props.source_id as string | null) ?? null,
 			latitude: null,
 			longitude: null,
-			region_code: props.region_code ?? null,
-			entity_id: props.entity_id ?? null,
-			entity_name: props.entity_name ?? null,
-			event_type: props.event_type ?? '',
-			severity: props.severity ?? 'low',
-			confidence: props.confidence ?? null,
+			region_code: (props.region_code as string | null) ?? null,
+			entity_id: (props.entity_id as string | null) ?? null,
+			entity_name: (props.entity_name as string | null) ?? null,
+			event_type: (props.event_type as string) ?? '',
+			severity: (props.severity as string) ?? 'low',
+			confidence: (props.confidence as number | null) ?? null,
 			tags: [],
-			title: props.title ?? null,
+			title: (props.title as string | null) ?? null,
 			description: null,
 			payload,
 			heading: null,
@@ -226,8 +227,8 @@
 			? `<a href="${escapeHtml(outlink.url)}" target="_blank" rel="noopener noreferrer" style="display:inline-flex;align-items:center;gap:4px;margin-top:6px;padding:3px 8px;background:rgba(59,130,246,0.15);color:#60a5fa;border-radius:4px;font-size:11px;text-decoration:none;font-weight:500;">${escapeHtml(outlink.label)} <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"/></svg></a>`
 			: '';
 
-		const detailIdx = ((window as any).__srDetailProps ??= []).length;
-		(window as any).__srDetailProps.push(props);
+		const detailIdx = (window.__srDetailProps ??= []).length;
+		window.__srDetailProps.push(props);
 		const detailsBtn = `<button onclick="window.__srOpenDetail(${detailIdx})" style="margin-top:6px;margin-left:${outlink ? '6px' : '0'};padding:3px 8px;background:rgba(255,255,255,0.08);color:#9ca3af;border:1px solid rgba(255,255,255,0.1);border-radius:4px;font-size:11px;cursor:pointer;font-family:monospace;">Details</button>`;
 
 		const severityBadge =
@@ -265,7 +266,7 @@
 
 	/** Create a rotated arrow/triangle icon for directional markers */
 	function createArrowImage(
-		mapInstance: any,
+		mapInstance: MapLibreMap,
 		id: string,
 		color: string,
 		size: number
@@ -310,9 +311,9 @@
 		await import('maplibre-gl/dist/maplibre-gl.css');
 
 		// Register global bridge for popup -> drawer communication
-		(window as any).__srDetailProps = [];
-		(window as any).__srOpenDetail = (idx: number) => {
-			const props = (window as any).__srDetailProps?.[idx];
+		window.__srDetailProps = [];
+		window.__srOpenDetail = (idx: number) => {
+			const props = window.__srDetailProps?.[idx];
 			if (!props) return;
 
 			// Check if this is an incident feature (event_type starts with "incident:")
@@ -377,7 +378,7 @@
 		};
 
 		// Register global bridge for situation popup -> drawer navigation
-		(window as any).__srOpenSituation = (situationId: string) => {
+		window.__srOpenSituation = (situationId: string) => {
 			const sit = situationsStore.situationById.get(situationId);
 			if (sit) {
 				situationsStore.selectedSituation = sit;
@@ -1307,7 +1308,8 @@
 				if (hitLayers.length > 0) return;
 
 				// Find closest feature from the unclustered source within 30px
-				const source = map.getSource('events-unclustered') as any;
+				// MapLibre getSource() returns Source | undefined; cast to GeoJSONSource for setData()
+				const source = map.getSource('events-unclustered') as GeoJSONSource | undefined;
 				if (!source?._data?.features) return;
 				const clickLng = e.lngLat.lng;
 				const clickLat = e.lngLat.lat;
@@ -1440,7 +1442,8 @@
 					region: s.region
 				}
 			}));
-		(map.getSource('situations') as any).setData({
+		// MapLibre getSource() returns Source | undefined; cast to GeoJSONSource for setData()
+		(map.getSource('situations') as GeoJSONSource | undefined)?.setData({
 			type: 'FeatureCollection',
 			features
 		});
@@ -1690,7 +1693,8 @@
 				altitude_km: Math.round(sat.altitude_km)
 			}
 		}));
-		(map.getSource('satellite-positions') as any).setData({
+		// MapLibre getSource() returns Source | undefined; cast to GeoJSONSource for setData()
+		(map.getSource('satellite-positions') as GeoJSONSource | undefined)?.setData({
 			type: 'FeatureCollection',
 			features
 		});
@@ -1712,10 +1716,11 @@
 		const toSegments = (points: typeof trail) => {
 			if (points.length < 2) return [];
 			const segments: [number, number][][] = [];
-			let current: [number, number][] = [[points[0].lon, points[0].lat]];
+			const first = points[0]!;
+			let current: [number, number][] = [[first.lon, first.lat]];
 			for (let i = 1; i < points.length; i++) {
-				const prev = points[i - 1];
-				const cur = points[i];
+				const prev = points[i - 1]!;
+				const cur = points[i]!;
 				// If longitude jumps > 180°, start a new segment (antimeridian crossing)
 				if (Math.abs(cur.lon - prev.lon) > 180) {
 					if (current.length >= 2) segments.push(current);
@@ -1729,7 +1734,8 @@
 
 		if (map?.getSource('satellite-trail')) {
 			const segments = toSegments(trail);
-			(map.getSource('satellite-trail') as any).setData({
+			// MapLibre getSource() returns Source | undefined; cast to GeoJSONSource for setData()
+			(map.getSource('satellite-trail') as GeoJSONSource | undefined)?.setData({
 				type: 'FeatureCollection',
 				features: segments.map((coords) => ({
 					type: 'Feature' as const,
@@ -1741,7 +1747,8 @@
 
 		if (map?.getSource('satellite-future')) {
 			const segments = toSegments(future);
-			(map.getSource('satellite-future') as any).setData({
+			// MapLibre getSource() returns Source | undefined; cast to GeoJSONSource for setData()
+			(map.getSource('satellite-future') as GeoJSONSource | undefined)?.setData({
 				type: 'FeatureCollection',
 				features: segments.map((coords) => ({
 					type: 'Feature' as const,
@@ -1806,9 +1813,9 @@
 	onDestroy(() => {
 		if (eventUpdateTimer) clearInterval(eventUpdateTimer);
 		satelliteStore.stop();
-		delete (window as any).__srOpenDetail;
-		delete (window as any).__srOpenSituation;
-		delete (window as any).__srDetailProps;
+		delete window.__srOpenDetail;
+		delete window.__srOpenSituation;
+		delete window.__srDetailProps;
 		map?.remove();
 	});
 </script>

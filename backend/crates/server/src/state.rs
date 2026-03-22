@@ -1,9 +1,8 @@
 use std::collections::HashMap;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 
 use sqlx::PgPool;
-use sr_intel::{BudgetManager, SharedAnalysis};
+use sr_intel::{BudgetManager, LlmClient, SharedAnalysis};
 use sr_pipeline::{PipelineMetrics, PublishEvent, SharedSummaries, SituationClusterDTO};
 use sr_sources::registry::SourceRegistry;
 use sr_sources::shodan::CameraResult;
@@ -22,12 +21,13 @@ pub struct AppState {
     pub publish_tx: broadcast::Sender<PublishEvent>,
     pub summaries: SharedSummaries,
     pub source_registry: Arc<SourceRegistry>,
-    pub sse_event_counter: Arc<AtomicU64>,
+
     pub analysis: SharedAnalysis,
     pub budget: Arc<BudgetManager>,
     pub situations: SharedSituations,
     pub cameras: SharedCameras,
     pub metrics: Arc<PipelineMetrics>,
+    pub llm_client: Option<Arc<LlmClient>>,
     pub api_key: Option<String>,
     pub satellite_tles: SharedSatelliteTles,
 }

@@ -5,7 +5,15 @@ export interface Outlink {
 	label: string;
 }
 
-export function getOutlink(event: SituationEvent): Outlink | null {
+/** Minimal event shape needed for outlink extraction */
+interface OutlinkEvent {
+	source_type: string;
+	source_id: string | null;
+	entity_id: string | null;
+	payload: Record<string, unknown>;
+}
+
+export function getOutlink(event: OutlinkEvent): Outlink | null {
 	const p = event.payload ?? {};
 	const eid = event.entity_id ?? '';
 	const sid = event.source_id ?? '';

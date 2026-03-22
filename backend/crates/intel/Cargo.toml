@@ -3,6 +3,14 @@ name = "sr-intel"
 edition.workspace = true
 version.workspace = true
 
+[features]
+default = []
+# Enable in-process LLM inference via llama-cpp-2.
+# Without this feature, only HTTP backend (external llama-server) is available.
+llm-inprocess = ["dep:llama-cpp-2", "dep:encoding_rs"]
+# Enable CUDA GPU acceleration for in-process LLM. Requires CUDA toolkit.
+llm-cuda = ["llm-inprocess", "llama-cpp-2/cuda"]
+
 [dependencies]
 sr-config = { path = "../config" }
 sr-sources = { path = "../sources" }
@@ -19,3 +27,5 @@ anyhow.workspace = true
 ts-rs.workspace = true
 rand = "0.8"
 base64 = "0.22"
+llama-cpp-2 = { version = "0.1", features = ["sampler"], optional = true }
+encoding_rs = { version = "0.8", optional = true }

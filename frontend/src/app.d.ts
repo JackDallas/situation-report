@@ -8,6 +8,13 @@ declare global {
 		// interface PageState {}
 		// interface Platform {}
 	}
+
+	// Bridge functions for MapPanel popup -> drawer communication
+	interface Window {
+		__srDetailProps?: Record<string, unknown>[];
+		__srOpenDetail?: (idx: number) => void;
+		__srOpenSituation?: (situationId: string) => void;
+	}
 }
 
 export {};

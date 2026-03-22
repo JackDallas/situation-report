@@ -94,7 +94,7 @@ pub async fn create_rule(
     let now = Utc::now();
     let delivery = input
         .delivery
-        .unwrap_or_else(|| serde_json::json!(["sse"]));
+        .unwrap_or_else(|| serde_json::json!(["ws"]));
     let cooldown = input.cooldown_minutes.unwrap_or(30);
     let max_per_hour = input.max_per_hour.unwrap_or(10);
     let min_severity = input

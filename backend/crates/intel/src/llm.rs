@@ -1,3 +1,4 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -6,29 +7,51 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Semaphore;
 use tracing::{debug, info, warn};
 
+use crate::llm_backend::{ChatMsg, InProcessLlm, InferenceParams};
 use crate::prompts;
 use crate::types::{ArticleInput, EnrichedArticleV2};
 
-/// Client for local LLM inference via OpenAI-compatible API (llama-server).
-/// Uses a semaphore to serialize requests — a single GPU can only run one
+/// Backend for LLM inference — either in-process via llama-cpp-2 or HTTP
+/// to an external llama-server.
+enum LlmBackend {
+    /// Direct in-process inference using llama-cpp-2 (no container needed).
+    InProcess(Arc<InProcessLlm>),
+    /// HTTP client talking to an OpenAI-compatible server (llama-server, etc).
+    Http {
+        http: reqwest::Client,
+        base_url: String,
+    },
+}
+
+/// Client for local LLM inference.
+///
+/// Supports two backends:
+///   - **In-process** (`LLM_MODEL_PATH`): loads GGUF model directly via llama-cpp-2.
+///     No separate container needed. GPU toggle = unload/reload model.
+///   - **HTTP** (`LLM_URL`): calls an external llama-server via OpenAI-compatible API.
+///     Original architecture — llama container manages the model.
+///
+/// If both are set, in-process is preferred.
+///
+/// Uses a semaphore to serialize GPU requests — a single GPU can only run one
 /// inference at a time efficiently.
 ///
 /// Supports two structured output modes (controlled by `LLM_USE_GBNF` env var):
-///   - **JSON Schema** (default): sends `response_format` with `json_schema` type.
-///     llama-server internally converts this to a GBNF grammar via its built-in
-///     `json_schema_to_grammar` converter. This is the OpenAI-compatible path.
-///   - **GBNF Grammar** (`LLM_USE_GBNF=1`): sends hand-written GBNF grammar strings
-///     directly via the `grammar` field. Bypasses the server's schema-to-grammar
-///     converter for tighter control. llama-server's `/v1/chat/completions` endpoint
-///     passes through `/completion`-specific fields including `grammar`.
+///   - **GBNF Grammar** (default for in-process, or when `LLM_USE_GBNF=1`):
+///     sends hand-written GBNF grammar strings for constrained decoding.
+///   - **JSON Schema** (HTTP mode default): sends `response_format` with `json_schema`
+///     type. llama-server internally converts this to a GBNF grammar.
 pub struct LlmClient {
-    http: reqwest::Client,
-    base_url: String,
+    backend: LlmBackend,
     /// Limits concurrent GPU inference requests. Default: 1 (serial).
     gpu_semaphore: Semaphore,
     /// When true, send GBNF grammar directly instead of response_format json_schema.
+    /// Always true for in-process mode (GBNF is native). For HTTP mode, controlled
+    /// by LLM_USE_GBNF env var.
     use_gbnf: bool,
 }
+
+// ── HTTP mode types (kept for backward compat) ──────────────────────────
 
 #[derive(Serialize)]
 struct ChatRequest {
@@ -39,14 +62,8 @@ struct ChatRequest {
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     response_format: Option<ResponseFormat>,
-    /// GBNF grammar string for constrained decoding.
-    /// Mutually exclusive with response_format — llama-server rejects requests
-    /// that contain both `grammar` and `json_schema`.
     #[serde(skip_serializing_if = "Option::is_none")]
     grammar: Option<String>,
-    /// Controls Qwen 3.5 thinking mode. Set to false for direct output
-    /// (titles, enrichment, analysis). True for narratives that benefit
-    /// from chain-of-thought reasoning.
     #[serde(skip_serializing_if = "Option::is_none")]
     thinking: Option<bool>,
     stream: bool,
@@ -61,7 +78,7 @@ struct ChatMessage {
 #[derive(Serialize)]
 struct ResponseFormat {
     #[serde(rename = "type")]
-    type_: String, // "json_schema"
+    type_: String,
     json_schema: JsonSchemaWrapper,
 }
 
@@ -162,53 +179,141 @@ fn enrichment_schema() -> serde_json::Value {
 }
 
 impl LlmClient {
-    /// Send a ChatRequest and extract (content, completion_tokens).
-    async fn send_chat(&self, request: &ChatRequest) -> Result<(String, u32)> {
-        let url = format!("{}/v1/chat/completions", self.base_url);
-        let resp = self.http
-            .post(&url)
-            .json(request)
-            .send()
-            .await
-            .context("LLM request failed")?;
+    /// Internal: dispatch a chat request to whichever backend is configured.
+    /// Returns (content, completion_tokens).
+    async fn send_chat(
+        &self,
+        messages: Vec<ChatMessage>,
+        temperature: Option<f32>,
+        max_tokens: Option<u32>,
+        grammar: Option<String>,
+        response_format: Option<ResponseFormat>,
+        _thinking: Option<bool>,
+    ) -> Result<(String, u32)> {
+        match &self.backend {
+            LlmBackend::InProcess(engine) => {
+                let chat_msgs: Vec<ChatMsg> = messages.into_iter()
+                    .map(|m| ChatMsg { role: m.role, content: m.content })
+                    .collect();
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            bail!("LLM API error {status}: {body}");
+                let params = InferenceParams {
+                    messages: chat_msgs,
+                    temperature: temperature.unwrap_or(0.0),
+                    max_tokens: max_tokens.unwrap_or(4096),
+                    grammar,
+                };
+
+                let engine = engine.clone();
+                tokio::task::spawn_blocking(move || engine.infer_sync(&params))
+                    .await
+                    .context("In-process inference task panicked")?
+            }
+            LlmBackend::Http { http, base_url } => {
+                let request = ChatRequest {
+                    messages,
+                    temperature,
+                    max_tokens,
+                    response_format,
+                    grammar,
+                    thinking: _thinking,
+                    stream: false,
+                };
+
+                let url = format!("{base_url}/v1/chat/completions");
+                let resp = http
+                    .post(&url)
+                    .json(&request)
+                    .send()
+                    .await
+                    .context("LLM request failed")?;
+
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let body = resp.text().await.unwrap_or_default();
+                    bail!("LLM API error {status}: {body}");
+                }
+
+                let chat_resp: ChatResponse = resp.json().await
+                    .context("Failed to parse LLM response")?;
+
+                let content = chat_resp.choices.first()
+                    .and_then(|c| c.message.content.clone())
+                    .unwrap_or_default();
+
+                let tokens = chat_resp.usage
+                    .as_ref()
+                    .and_then(|u| u.completion_tokens)
+                    .unwrap_or(0);
+
+                Ok((content, tokens))
+            }
         }
-
-        let chat_resp: ChatResponse = resp.json().await
-            .context("Failed to parse LLM response")?;
-
-        let content = chat_resp.choices.first()
-            .and_then(|c| c.message.content.clone())
-            .unwrap_or_default();
-
-        let tokens = chat_resp.usage
-            .as_ref()
-            .and_then(|u| u.completion_tokens)
-            .unwrap_or(0);
-
-        Ok((content, tokens))
     }
 
     /// Create from environment variables.
-    /// Reads LLM_URL (required), falls back to OLLAMA_URL for backwards compat.
+    ///
+    /// Priority:
+    ///   1. `LLM_MODEL_PATH` — in-process inference via llama-cpp-2 (no container).
+    ///      Also reads `LLM_GPU_LAYERS` (default: 99) and `LLM_CTX_SIZE` (default: 8192).
+    ///   2. `LLM_URL` / `OLLAMA_URL` — HTTP to external llama-server.
+    ///
     /// Returns None if neither is set.
     ///
-    /// Set `LLM_USE_GBNF=1` to send hand-written GBNF grammars instead of
-    /// JSON Schema `response_format`. Both paths produce grammar-constrained
-    /// output — the difference is whether the grammar is generated server-side
-    /// (from JSON schema) or client-side (pre-written GBNF constants).
+    /// `LLM_USE_GBNF=1` controls structured output mode for HTTP backend.
+    /// In-process mode always uses GBNF (native support).
     pub fn from_env() -> Option<Arc<Self>> {
-        let base_url = std::env::var("LLM_URL")
-            .or_else(|_| std::env::var("OLLAMA_URL"))
-            .ok()?;
-
         let use_gbnf = std::env::var("LLM_USE_GBNF")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false);
+
+        // Try in-process first
+        if let Ok(model_path) = std::env::var("LLM_MODEL_PATH") {
+            let path = PathBuf::from(&model_path);
+            if !path.exists() {
+                warn!(path = %model_path, "LLM_MODEL_PATH set but file not found — falling back to HTTP");
+            } else {
+                let n_gpu_layers: u32 = std::env::var("LLM_GPU_LAYERS")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(99);
+
+                let ctx_size: u32 = std::env::var("LLM_CTX_SIZE")
+                    .ok()
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(8192);
+
+                let engine = Arc::new(InProcessLlm::new(path, n_gpu_layers, ctx_size));
+
+                // Load the model synchronously at startup (blocking is OK during init)
+                let engine_clone = engine.clone();
+                match std::thread::spawn(move || engine_clone.load_sync()).join() {
+                    Ok(Ok(())) => {
+                        info!(
+                            model = %model_path,
+                            gpu_layers = n_gpu_layers,
+                            ctx_size = ctx_size,
+                            "In-process LLM initialized (llama-cpp-2, GBNF grammar)"
+                        );
+                        return Some(Arc::new(Self {
+                            backend: LlmBackend::InProcess(engine),
+                            gpu_semaphore: Semaphore::new(1),
+                            use_gbnf: true, // In-process always uses GBNF
+                        }));
+                    }
+                    Ok(Err(e)) => {
+                        warn!(error = %e, "Failed to load in-process model — falling back to HTTP");
+                    }
+                    Err(_) => {
+                        warn!("Model loading thread panicked — falling back to HTTP");
+                    }
+                }
+            }
+        }
+
+        // Fall back to HTTP
+        let base_url = std::env::var("LLM_URL")
+            .or_else(|_| std::env::var("OLLAMA_URL"))
+            .ok()?;
 
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(120))
@@ -216,30 +321,53 @@ impl LlmClient {
             .expect("Failed to build HTTP client");
 
         let mode = if use_gbnf { "GBNF grammar" } else { "JSON schema" };
-        info!(url = %base_url, structured_output = mode, "LLM client initialized (serial GPU queue)");
+        info!(url = %base_url, structured_output = mode, "LLM client initialized (HTTP, serial GPU queue)");
 
-        Some(Arc::new(Self { http, base_url, gpu_semaphore: Semaphore::new(1), use_gbnf }))
+        Some(Arc::new(Self {
+            backend: LlmBackend::Http { http, base_url },
+            gpu_semaphore: Semaphore::new(1),
+            use_gbnf,
+        }))
     }
 
-    /// Check if llama-server is ready. GET {base_url}/health returns 200 when ready.
+    /// Check if the LLM is ready for inference.
+    ///
+    /// - In-process: checks if model is loaded.
+    /// - HTTP: GET /health with 15s timeout.
     pub async fn is_ready(&self) -> bool {
-        self.health_check().await
+        match &self.backend {
+            LlmBackend::InProcess(engine) => engine.is_loaded().await,
+            LlmBackend::Http { http, base_url } => {
+                let url = format!("{base_url}/health");
+                let result = tokio::time::timeout(
+                    Duration::from_secs(15),
+                    http.get(&url).send(),
+                ).await;
+                match result {
+                    Ok(Ok(resp)) => resp.status().is_success(),
+                    _ => false,
+                }
+            }
+        }
     }
 
-    /// Lightweight health check: GET /health with 15s timeout.
+    /// Lightweight health check (alias for is_ready).
     pub async fn health_check(&self) -> bool {
-        let url = format!("{}/health", self.base_url);
-        let result = tokio::time::timeout(
-            Duration::from_secs(15),
-            self.http.get(&url).send(),
-        )
-        .await;
+        self.is_ready().await
+    }
 
-        match result {
-            Ok(Ok(resp)) => resp.status().is_success(),
-            Ok(Err(_)) => false,
-            Err(_) => false,
+    /// Get a reference to the in-process engine, if using that backend.
+    /// Used by GPU toggle routes to unload/reload the model.
+    pub fn in_process_engine(&self) -> Option<&Arc<InProcessLlm>> {
+        match &self.backend {
+            LlmBackend::InProcess(engine) => Some(engine),
+            LlmBackend::Http { .. } => None,
         }
+    }
+
+    /// Check if this client is using in-process inference.
+    pub fn is_in_process(&self) -> bool {
+        matches!(&self.backend, LlmBackend::InProcess(_))
     }
 
     /// Enrich a news article using local LLM inference.
@@ -269,33 +397,28 @@ impl LlmClient {
             }), None)
         };
 
-        let request = ChatRequest {
-            messages: vec![
-                ChatMessage {
-                    role: "system".to_string(),
-                    content: prompts::ENRICHMENT_SYSTEM.to_string(),
-                },
-                ChatMessage {
-                    role: "user".to_string(),
-                    content: user_msg,
-                },
-            ],
-            temperature: Some(0.0),
-            max_tokens: Some(2048),
-            response_format,
-            grammar,
-            thinking: Some(false),
-            stream: false,
-        };
+        let messages = vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: prompts::ENRICHMENT_SYSTEM.to_string(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: user_msg,
+            },
+        ];
 
-        let (content, tokens_used) = self.send_chat(&request).await?;
+        let (content, tokens_used) = self.send_chat(
+            messages, Some(0.0), Some(2048), grammar, response_format, Some(false),
+        ).await?;
 
         debug!(tokens = tokens_used, "LLM enrichment complete");
 
         let mut enriched: EnrichedArticleV2 = serde_json::from_str(&content)
             .context("Failed to parse enrichment JSON from LLM")?;
 
-        enriched.model = "llama-server".to_string();
+        let model_name = if self.is_in_process() { "llama-cpp-2" } else { "llama-server" };
+        enriched.model = model_name.to_string();
         enriched.tokens_used = tokens_used;
 
         Ok(enriched)
@@ -306,30 +429,22 @@ impl LlmClient {
         let _permit = self.gpu_semaphore.acquire().await
             .map_err(|_| anyhow::anyhow!("GPU semaphore closed"))?;
 
-        // Append /no_think to suppress Qwen 3.5 chain-of-thought reasoning,
-        // which consumes all output tokens leaving no room for actual content.
         let user_content = format!("{user}\n/no_think");
 
-        let request = ChatRequest {
-            messages: vec![
-                ChatMessage {
-                    role: "system".to_string(),
-                    content: system.to_string(),
-                },
-                ChatMessage {
-                    role: "user".to_string(),
-                    content: user_content,
-                },
-            ],
-            temperature: Some(0.0),
-            max_tokens: Some(max_tokens),
-            response_format: None,
-            grammar: None,
-            thinking: Some(false),
-            stream: false,
-        };
+        let messages = vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: system.to_string(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: user_content,
+            },
+        ];
 
-        let (content, _tokens) = self.send_chat(&request).await?;
+        let (content, _tokens) = self.send_chat(
+            messages, Some(0.0), Some(max_tokens), None, None, Some(false),
+        ).await?;
 
         Ok(strip_think_tags(&content))
     }
@@ -340,26 +455,20 @@ impl LlmClient {
         let _permit = self.gpu_semaphore.acquire().await
             .map_err(|_| anyhow::anyhow!("GPU semaphore closed"))?;
 
-        let request = ChatRequest {
-            messages: vec![
-                ChatMessage {
-                    role: "system".to_string(),
-                    content: system.to_string(),
-                },
-                ChatMessage {
-                    role: "user".to_string(),
-                    content: user.to_string(),
-                },
-            ],
-            temperature: Some(0.1),
-            max_tokens: None,
-            response_format: None,
-            grammar: None,
-            thinking: Some(true),
-            stream: false,
-        };
+        let messages = vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: system.to_string(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: user.to_string(),
+            },
+        ];
 
-        let (content, tokens) = self.send_chat(&request).await?;
+        let (content, tokens) = self.send_chat(
+            messages, Some(0.1), None, None, None, Some(true),
+        ).await?;
 
         debug!(tokens, "LLM narrative complete");
         Ok((strip_think_tags(&content), tokens))
@@ -386,26 +495,20 @@ impl LlmClient {
             }), None)
         };
 
-        let request = ChatRequest {
-            messages: vec![
-                ChatMessage {
-                    role: "system".to_string(),
-                    content: system.to_string(),
-                },
-                ChatMessage {
-                    role: "user".to_string(),
-                    content: user_content,
-                },
-            ],
-            temperature: Some(0.1),
-            max_tokens: Some(4096),
-            response_format,
-            grammar,
-            thinking: Some(false),
-            stream: false,
-        };
+        let messages = vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: system.to_string(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: user_content,
+            },
+        ];
 
-        let (content, tokens) = self.send_chat(&request).await?;
+        let (content, tokens) = self.send_chat(
+            messages, Some(0.1), Some(4096), grammar, response_format, Some(false),
+        ).await?;
 
         debug!(tokens, "LLM analysis complete");
         Ok((content, tokens))
@@ -452,34 +555,26 @@ impl LlmClient {
             None
         };
 
-        let request = ChatRequest {
-            messages: vec![
-                ChatMessage {
-                    role: "system".to_string(),
-                    content: "You are an intelligence analyst. You group related situation reports \
-                              that describe the same underlying conflict, crisis, or event. \
-                              Output ONLY valid JSON.".to_string(),
-                },
-                ChatMessage {
-                    role: "user".to_string(),
-                    content: user_msg,
-                },
-            ],
-            temperature: Some(0.0),
-            max_tokens: Some(1024),
-            response_format: None,
-            grammar,
-            thinking: Some(false),
-            stream: false,
-        };
+        let messages = vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: "You are an intelligence analyst. You group related situation reports \
+                          that describe the same underlying conflict, crisis, or event. \
+                          Output ONLY valid JSON.".to_string(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: user_msg,
+            },
+        ];
 
-        let (raw_content, _tokens) = self.send_chat(&request).await?;
+        let (raw_content, _tokens) = self.send_chat(
+            messages, Some(0.0), Some(1024), grammar, None, Some(false),
+        ).await?;
 
         let content = strip_think_tags(&raw_content);
 
         // Parse JSON — extract the "groups" object.
-        // LLM may wrap in code fences or append extra text with braces,
-        // so we use streaming deserializer to parse just the first JSON value.
         #[derive(Deserialize)]
         struct ConsolidationResponse {
             groups: Vec<Vec<usize>>,
@@ -502,7 +597,6 @@ impl LlmClient {
         let mut de = serde_json::Deserializer::from_str(json_slice).into_iter::<ConsolidationResponse>();
         match de.next() {
             Some(Ok(parsed)) => {
-                // Filter out single-element groups and validate indices
                 let valid_groups: Vec<Vec<usize>> = parsed.groups.into_iter()
                     .filter(|g| g.len() >= 2)
                     .collect();
@@ -546,26 +640,20 @@ impl LlmClient {
             child_topics.join(", "),
         );
 
-        let request = ChatRequest {
-            messages: vec![
-                ChatMessage {
-                    role: "system".to_string(),
-                    content: "You decide whether two intelligence situations belong together. Answer 'yes' or 'no'. When in doubt, answer 'yes'.".to_string(),
-                },
-                ChatMessage {
-                    role: "user".to_string(),
-                    content: user_msg,
-                },
-            ],
-            temperature: Some(0.0),
-            max_tokens: Some(16),
-            response_format: None,
-            grammar: None,
-            thinking: Some(false),
-            stream: false,
-        };
+        let messages = vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: "You decide whether two intelligence situations belong together. Answer 'yes' or 'no'. When in doubt, answer 'yes'.".to_string(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: user_msg,
+            },
+        ];
 
-        let (content, _tokens) = match self.send_chat(&request).await {
+        let (content, _tokens) = match self.send_chat(
+            messages, Some(0.0), Some(16), None, None, Some(false),
+        ).await {
             Ok(result) => result,
             Err(_) => {
                 // On error, assume merge is valid (don't undo)
@@ -574,9 +662,6 @@ impl LlmClient {
         };
 
         let answer = strip_think_tags(&content).trim().to_lowercase();
-        // Default to accept — only explicit "no" rejects the merge.
-        // This prevents empty responses, thinking artifacts, or ambiguous
-        // output from causing fragmentation.
         let rejected = answer.starts_with("no") || answer.starts_with("**no");
         debug!(parent = parent_title, child = child_title, raw = content, accepted = !rejected, "Merge audit result");
         Ok(!rejected)
@@ -599,18 +684,8 @@ fn strip_think_tags(content: &str) -> String {
 // ---------------------------------------------------------------------------
 // GBNF Grammars
 // ---------------------------------------------------------------------------
-// Hand-written GBNF grammars that mirror enrichment_schema() and
-// analysis_schema(). Used when LLM_USE_GBNF=1 to bypass llama-server's
-// internal json_schema_to_grammar converter for tighter control.
-//
-// These grammars enforce the same required/optional field structure as the
-// JSON schemas above. Primitives are defined once at the bottom and reused.
-// ---------------------------------------------------------------------------
 
 /// GBNF grammar for enrichment structured output.
-/// Required fields: translated_title, summary, original_language, entities, topics,
-///                  relevance_score, sentiment
-/// Optional fields: relationships, state_changes, inferred_location
 const ENRICHMENT_GBNF: &str = r#"
 root ::= "{" ws enrichment-body ws "}"
 
@@ -651,8 +726,6 @@ ws ::= [ \t\n\r]*
 "#;
 
 /// GBNF grammar for analysis structured output.
-/// Required fields: narrative, escalation_assessment, escalate
-/// Optional fields: suggested_merges, topic_clusters, key_entities
 const ANALYSIS_GBNF: &str = r#"
 root ::= "{" ws analysis-body ws "}"
 
@@ -687,7 +760,6 @@ ws ::= [ \t\n\r]*
 "#;
 
 /// GBNF grammar for consolidation structured output.
-/// Produces: {"groups": [[1,3,5], [2,4]]}
 const CONSOLIDATION_GBNF: &str = r#"
 root ::= "{" ws "\"groups\"" ws ":" ws groups ws "}"
 groups ::= "[" ws "]" | "[" ws group (ws "," ws group)* ws "]"

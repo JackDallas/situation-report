@@ -113,7 +113,7 @@ function pickPrimaryRegion(codes: string[], title?: string): string {
 	if (!codes.length) return 'global';
 	// If only one region, use it
 	const descriptive = codes.filter((c) => c.length > 2);
-	if (descriptive.length === 1) return descriptive[0];
+	if (descriptive.length === 1) return descriptive[0]!;
 	// Try to match region from title
 	if (title) {
 		for (const [re, region] of TITLE_REGION_HINTS) {
@@ -127,8 +127,8 @@ function pickPrimaryRegion(codes: string[], title?: string): string {
 	// 4+ diverse regions with no title match = global
 	if (codes.length >= 4) return 'global';
 	// Return first descriptive region
-	if (descriptive.length) return descriptive[0];
-	if (codes.length) return codes[0];
+	if (descriptive.length > 0) return descriptive[0]!;
+	if (codes.length > 0) return codes[0]!;
 	return 'global';
 }
 

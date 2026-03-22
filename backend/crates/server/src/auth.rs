@@ -32,7 +32,7 @@ pub async fn require_api_key(
         return Ok(next.run(req).await);
     }
 
-    // Check ?api_key=<key> query parameter (useful for EventSource/SSE)
+    // Check ?api_key=<key> query parameter (useful for WebSocket upgrade)
     let query_match = req
         .uri()
         .query()

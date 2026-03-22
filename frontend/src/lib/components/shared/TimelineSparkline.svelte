@@ -24,10 +24,10 @@
 					Math.floor((ts - windowStart) / BUCKET_MS),
 					BUCKET_COUNT - 1
 				);
-				result[idx].count++;
+				result[idx]!.count++;
 				const sev = SEVERITY_RANK[event.severity] ?? 0;
-				if (sev > result[idx].maxSeverity) {
-					result[idx].maxSeverity = sev;
+				if (sev > result[idx]!.maxSeverity) {
+					result[idx]!.maxSeverity = sev;
 				}
 			} catch {
 				// skip

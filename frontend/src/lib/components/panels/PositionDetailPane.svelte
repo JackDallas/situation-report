@@ -14,7 +14,7 @@
 	);
 	const isAircraft = $derived(!isVessel);
 
-	const payload = $derived((position?.payload ?? {}) as Record<string, any>);
+	const payload = $derived(position?.payload ?? {} as Record<string, unknown>);
 	const isMilitary = $derived(payload.military === true);
 	const affiliation = $derived(payload.affiliation as string | undefined);
 
@@ -70,12 +70,14 @@
 	}
 
 	/** Format ETA object to readable string. */
-	function formatEta(eta: any): string | null {
+	function formatEta(eta: unknown): string | null {
 		if (!eta) return null;
 		if (typeof eta === 'string') return eta;
+		if (typeof eta !== 'object') return null;
+		const e = eta as Record<string, unknown>;
 		const parts: string[] = [];
-		if (eta.Month != null && eta.Day != null) parts.push(`${eta.Month}/${eta.Day}`);
-		if (eta.Hour != null && eta.Minute != null) parts.push(`${String(eta.Hour).padStart(2, '0')}:${String(eta.Minute).padStart(2, '0')}`);
+		if (e.Month != null && e.Day != null) parts.push(`${e.Month}/${e.Day}`);
+		if (e.Hour != null && e.Minute != null) parts.push(`${String(e.Hour).padStart(2, '0')}:${String(e.Minute).padStart(2, '0')}`);
 		return parts.length > 0 ? parts.join(' ') : null;
 	}
 </script>

@@ -92,7 +92,7 @@ services:
         max-size: "50m"
         max-file: "3"
 
-  # Download the model on first start (runs once, then exits)
+  # Model download (runs once, exits). Model is loaded in-process by the app.
   llama-model-download:
     image: alpine:3.20
     container_name: llama-model-download
@@ -111,38 +111,6 @@ services:
       - llama-models:/models
     restart: "no"
 
-  llama:
-    image: ghcr.io/ggml-org/llama.cpp:server-cuda
-    container_name: llama
-    depends_on:
-      llama-model-download:
-        condition: service_completed_successfully
-    command: >
-      --model /models/qwen3.5-9b-q4_k_m.gguf
-      --n-gpu-layers 99
-      --host 0.0.0.0
-      --port 8000
-      --parallel 1
-      --ctx-size 8192
-      --flash-attn on
-      --reasoning-budget 0
-    volumes:
-      - llama-models:/models
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: 1
-              capabilities: [gpu]
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 60
-      start_period: 120s
-    restart: unless-stopped
-
   app:
     build: .
     image: situationreport:latest
@@ -150,8 +118,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      llama:
-        condition: service_healthy
+      llama-model-download:
+        condition: service_completed_successfully
     environment:
       DATABASE_URL: postgres://sitrep:${DB_PASSWORD}@postgres/situationroom
       BIND_ADDR: 0.0.0.0:3000
@@ -163,8 +131,12 @@ services:
       INTEL_DAILY_BUDGET_USD: ${INTEL_DAILY_BUDGET_USD:-10}
       INTEL_MONTHLY_BUDGET_USD: ${INTEL_MONTHLY_BUDGET_USD:-30}
       INTEL_ANALYSIS_MODEL: ${INTEL_ANALYSIS_MODEL:-claude-sonnet-4-6}
-      # Local LLM for enrichment (llama.cpp)
-      LLM_URL: http://llama:8000
+      # Local LLM — in-process via llama-cpp-2 (no separate container)
+      LLM_MODEL_PATH: /app/llm-models/qwen3.5-9b-q4_k_m.gguf
+      LLM_GPU_LAYERS: ${LLM_GPU_LAYERS:-99}
+      LLM_CTX_SIZE: ${LLM_CTX_SIZE:-8192}
+      # Fallback: set LLM_URL to use external llama-server instead
+      # LLM_URL: http://llama:8000
       # Source API keys
       SHODAN_API_KEY: ${SHODAN_API_KEY:-}
       CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:-}
@@ -188,14 +160,11 @@ services:
       # NVIDIA GPU (CUDA EP for ONNX Runtime)
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
-    # Add docker group so sitrep user can control llama container via socket
-    group_add:
-      - ${DOCKER_GID:-999}
     volumes:
       - embeddings-cache:/app/models
+      - llama-models:/app/llm-models:ro
       - ./data:/app/data
       - ${AIRCRAFT_DB_DIR:-./modes-db}:/app/modes-db:ro
-      - /var/run/docker.sock:/var/run/docker.sock:rw
     ports:
       - "3001:3000"
     deploy:

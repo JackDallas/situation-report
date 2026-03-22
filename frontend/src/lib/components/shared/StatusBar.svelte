@@ -146,7 +146,7 @@
 >
 	<!-- Left: connection status -->
 	<div class="flex items-center gap-4">
-		<div class="flex items-center gap-1.5" title="SSE connection: {statusLabels[eventStore.connectionStatus]}">
+		<div class="flex items-center gap-1.5" title="WebSocket connection: {statusLabels[eventStore.connectionStatus]}">
 			<span class="relative flex h-2 w-2">
 				{#if eventStore.connectionStatus === 'connected'}
 					<span

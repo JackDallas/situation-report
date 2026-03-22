@@ -310,7 +310,7 @@
 		// Iterate in reverse so top-drawn nodes are hit first
 		for (let i = nodes.length - 1; i >= 0; i--) {
 			const n = nodes[i];
-			if (n.x == null || n.y == null) continue;
+			if (n === undefined || n.x == null || n.y == null) continue;
 			const dx = wx - n.x;
 			const dy = wy - n.y;
 			if (dx * dx + dy * dy <= (n.radius + 4) * (n.radius + 4)) {

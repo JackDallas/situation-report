@@ -8,10 +8,17 @@ import {
 	setBasePositions,
 	setMapInstance
 } from '$lib/services/position-interpolator';
-import type { SituationEvent, Incident, AnalysisReport, PublishEvent, SituationCluster, EventType } from '$lib/types/events';
+import type {
+	SituationEvent,
+	Incident,
+	AnalysisReport,
+	PublishEvent,
+	SituationCluster,
+	EventType
+} from '$lib/types/events';
 
 /**
- * Event types that pass through the pipeline as individual SSE events.
+ * Event types that pass through the pipeline as individual events.
  * These are the editorially important / low-volume types that aren't absorbed.
  */
 const PASSTHROUGH_EVENT_TYPES: readonly EventType[] = [
@@ -35,28 +42,12 @@ const PASSTHROUGH_EVENT_TYPES: readonly EventType[] = [
 	'maritime_security'
 ];
 
-/**
- * Incident SSE event names (incident:<rule_id>).
- * These are cross-source correlated patterns — the pipeline's core value.
- */
-const INCIDENT_RULES = [
-	'infra_attack',
-	'military_strike',
-	'confirmed_strike',
-	'coordinated_shutdown',
-	'maritime_enforcement',
-	'apt_staging',
-	'conflict_thermal_cluster',
-	'gps_military',
-	'osint_strike'
-] as const;
-
 const FEED_EXCLUDE =
 	'bgp_anomaly,flight_position,vessel_position,cert_issued,shodan_banner,geo_news,shodan_count';
 const INTEL_GEO_TYPES =
 	'conflict_event,seismic_event,geo_event,nuclear_event,notam_event,internet_outage,gps_interference,censorship_event,threat_intel,fishing_event,geo_news,thermal_anomaly,bluesky_post,maritime_security,telegram_message,news_article';
 
-let source: EventSource | null = null;
+let socket: WebSocket | null = null;
 let summaryPollInterval: ReturnType<typeof setInterval> | null = null;
 let positionPollInterval: ReturnType<typeof setInterval> | null = null;
 let situationPollInterval: ReturnType<typeof setInterval> | null = null;
@@ -65,30 +56,32 @@ let reconnectAttempts = 0;
 const MAX_RECONNECT_DELAY = 16_000; // 16s max
 
 function getReconnectDelay(): number {
-	const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
+	const base = Math.min(1000 * Math.pow(2, reconnectAttempts), MAX_RECONNECT_DELAY);
+	// Add 0-25% jitter to avoid thundering herd
+	const jitter = base * Math.random() * 0.25;
 	reconnectAttempts++;
-	return delay;
+	return base + jitter;
 }
 
 function scheduleReconnect() {
 	if (reconnectTimer) return; // already scheduled
 	const delay = getReconnectDelay();
-	console.log(`SSE reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
+	console.log(`WebSocket reconnecting in ${Math.round(delay)}ms (attempt ${reconnectAttempts})`);
 	eventStore.connectionStatus = 'reconnecting';
 	reconnectTimer = setTimeout(() => {
 		reconnectTimer = null;
-		if (source) {
-			source.close();
-			source = null;
+		if (socket) {
+			socket.close();
+			socket = null;
 		}
-		openSSE();
+		openWS();
 	}, delay);
 }
 
 /** Re-export setMapInstance so MapPanel can pass the map reference to the interpolator */
 export { setMapInstance };
 
-/** Throttle for viewport-based event re-fetch — max once per 10 seconds */
+/** Throttle for viewport-based event re-fetch -- max once per 10 seconds */
 let lastViewportFetchTime = 0;
 let viewportFetchTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -96,12 +89,10 @@ async function loadInitialData() {
 	try {
 		// Only load events from last 12 hours to avoid stale map markers
 		const geoSince = new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString();
-		// Pass viewport bounds for spatial filtering (Optimization #6)
+		// Pass viewport bounds for spatial filtering
 		const bounds = mapStore.viewportBounds;
 		const [events, intelGeo] = await Promise.all([
 			api.getEvents({ limit: 200, exclude: FEED_EXCLUDE }),
-			// Don't pass zoom — the backend severity filter hides low-severity events
-			// (e.g. FIRMS thermal_anomaly) at low zoom, causing them to vanish on pan/zoom.
 			api.getEventsGeo(geoSince, 1500, INTEL_GEO_TYPES, undefined, bounds)
 		]);
 		if (events && events.length > 0) {
@@ -169,28 +160,82 @@ export async function refetchGeoForViewport() {
 			});
 		}
 	} catch {
-		// Silent — viewport refetch is best-effort
+		// Silent -- viewport refetch is best-effort
 	}
 }
 
-function openSSE() {
-	source = new EventSource('/api/sse');
+function openWS() {
+	const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+	const url = `${proto}//${location.host}/api/ws`;
+	socket = new WebSocket(url);
 
-	source.onopen = () => {
+	socket.onopen = () => {
 		eventStore.connectionStatus = 'connected';
 		reconnectAttempts = 0; // reset backoff on successful connect
 	};
 
-	source.onerror = () => {
+	socket.onclose = () => {
 		scheduleReconnect();
 	};
 
-	attachSSEListeners(source);
+	socket.onerror = () => {
+		eventStore.connectionStatus = 'reconnecting';
+	};
+
+	socket.onmessage = (e: MessageEvent) => {
+		try {
+			const envelope = JSON.parse(e.data);
+			const { type, data } = envelope;
+
+			if (PASSTHROUGH_EVENT_TYPES.includes(type)) {
+				// Individual event (editorially important / low-volume)
+				if (data.kind === 'event') {
+					const { kind: _, ...event } = data;
+					const sitEvent = event as SituationEvent;
+					eventStore.addEvent(sitEvent);
+					mapStore.addEventFeature(sitEvent);
+				}
+			} else if (type.startsWith('incident:')) {
+				// Cross-source correlated incident
+				if (data.kind === 'incident') {
+					const { kind: _, ...incident } = data;
+					const inc = incident as Incident;
+					eventStore.addIncident(inc);
+					mapStore.addIncidentFeature(inc);
+				}
+			} else if (type === 'analysis') {
+				if (data.kind === 'analysis') {
+					const { kind: _, ...report } = data;
+					eventStore.updateAnalysis(report as AnalysisReport);
+				}
+			} else if (type === 'situations') {
+				// Situation cluster updates
+				let clusters: SituationCluster[] = [];
+				if (Array.isArray(data)) {
+					clusters = data;
+				} else if (data.kind === 'situations' && Array.isArray(data.clusters)) {
+					clusters = data.clusters;
+				} else {
+					// Try to find any array field
+					for (const val of Object.values(data)) {
+						if (Array.isArray(val)) {
+							clusters = val as SituationCluster[];
+							break;
+						}
+					}
+				}
+				situationsStore.backendClusters = clusters;
+			}
+			// alert: and source_health: types are informational — no frontend handler needed yet
+		} catch (err) {
+			console.error('Failed to parse WebSocket message:', err);
+		}
+	};
 }
 
-export async function connectSSE() {
-	if (source) {
-		source.close();
+export async function connectWS() {
+	if (socket) {
+		socket.close();
 	}
 	if (reconnectTimer) {
 		clearTimeout(reconnectTimer);
@@ -199,7 +244,7 @@ export async function connectSSE() {
 	reconnectAttempts = 0;
 
 	await loadInitialData();
-	openSSE();
+	openWS();
 
 	// Load latest analysis on connect
 	loadLatestAnalysis();
@@ -208,7 +253,7 @@ export async function connectSSE() {
 	pollSummaries();
 	summaryPollInterval = setInterval(pollSummaries, 30_000);
 
-	// Poll flight/vessel positions for live map tracking (these are absorbed, not on SSE)
+	// Poll flight/vessel positions for live map tracking (these are absorbed, not on WS)
 	pollPositions();
 	positionPollInterval = setInterval(pollPositions, 30_000);
 
@@ -216,85 +261,11 @@ export async function connectSSE() {
 	loadSituations();
 	situationPollInterval = setInterval(loadSituations, 30_000);
 
-	// Load persisted incidents (fires before SSE events arrive)
+	// Load persisted incidents (fires before WS events arrive)
 	loadIncidents();
 
 	// Start dead reckoning interpolation for smooth position movement
 	startInterpolation();
-}
-
-function attachSSEListeners(source: EventSource) {
-	// Listen for pass-through individual events (important / low-volume)
-	for (const eventType of PASSTHROUGH_EVENT_TYPES) {
-		source.addEventListener(eventType, (e: MessageEvent) => {
-			try {
-				const data: PublishEvent = JSON.parse(e.data);
-				if (data.kind === 'event') {
-					const { kind: _, ...event } = data;
-					const sitEvent = event as SituationEvent;
-					eventStore.addEvent(sitEvent);
-					mapStore.addEventFeature(sitEvent);
-				}
-			} catch (err) {
-				console.error(`Failed to parse SSE event ${eventType}:`, err);
-			}
-		});
-	}
-
-	// Listen for incident events (cross-source correlations)
-	for (const ruleId of INCIDENT_RULES) {
-		source.addEventListener(`incident:${ruleId}`, (e: MessageEvent) => {
-			try {
-				const data: PublishEvent = JSON.parse(e.data);
-				if (data.kind === 'incident') {
-					const { kind: _, ...incident } = data;
-					const inc = incident as Incident;
-					eventStore.addIncident(inc);
-					mapStore.addIncidentFeature(inc);
-				}
-			} catch (err) {
-				console.error(`Failed to parse SSE incident ${ruleId}:`, err);
-			}
-		});
-	}
-
-	// Listen for intelligence analysis reports
-	source.addEventListener('analysis', (e: MessageEvent) => {
-		try {
-			const data: PublishEvent = JSON.parse(e.data);
-			if (data.kind === 'analysis') {
-				const { kind: _, ...report } = data;
-				eventStore.updateAnalysis(report as AnalysisReport);
-			}
-		} catch (err) {
-			console.error('Failed to parse SSE analysis:', err);
-		}
-	});
-
-	// Listen for situation cluster updates
-	source.addEventListener('situations', (e: MessageEvent) => {
-		try {
-			const data = JSON.parse(e.data);
-			// Handle different possible serde serialization shapes
-			let clusters: SituationCluster[] = [];
-			if (Array.isArray(data)) {
-				clusters = data;
-			} else if (data.kind === 'situations' && Array.isArray(data.clusters)) {
-				clusters = data.clusters;
-			} else {
-				// Try to find any array field
-				for (const val of Object.values(data)) {
-					if (Array.isArray(val)) {
-						clusters = val as SituationCluster[];
-						break;
-					}
-				}
-			}
-			situationsStore.backendClusters = clusters;
-		} catch (err) {
-			console.error('Failed to parse SSE situations:', err);
-		}
-	});
 }
 
 async function loadLatestAnalysis() {
@@ -304,7 +275,7 @@ async function loadLatestAnalysis() {
 			eventStore.updateAnalysis(report);
 		}
 	} catch {
-		// Silent — analysis is supplementary
+		// Silent -- analysis is supplementary
 	}
 }
 
@@ -315,7 +286,7 @@ async function pollSummaries() {
 			eventStore.updateSummary(s);
 		}
 	} catch {
-		// Silent — summaries are supplementary
+		// Silent -- summaries are supplementary
 	}
 }
 
@@ -326,7 +297,7 @@ async function loadSituations() {
 			situationsStore.backendClusters = clusters;
 		}
 	} catch {
-		// Silent — situations are supplementary
+		// Silent -- situations are supplementary
 	}
 }
 
@@ -340,7 +311,7 @@ async function loadIncidents() {
 			}
 		}
 	} catch {
-		// Silent — incidents loaded via SSE as they arrive
+		// Silent -- incidents loaded via WS as they arrive
 	}
 }
 
@@ -348,17 +319,17 @@ async function pollPositions() {
 	try {
 		const positions = await api.getPositions({
 			bbox: mapStore.viewportBounds,
-			since: new Date(Date.now() - 10 * 60 * 1000).toISOString(),
+			since: new Date(Date.now() - 10 * 60 * 1000).toISOString()
 		});
 		// Replace positions entirely so stale entries disappear
 		mapStore.replacePositions(positions ?? []);
 		setBasePositions(mapStore.positions);
 	} catch {
-		// Silent — positions are supplementary
+		// Silent -- positions are supplementary
 	}
 }
 
-export function disconnectSSE() {
+export function disconnectWS() {
 	stopInterpolation();
 	if (reconnectTimer) {
 		clearTimeout(reconnectTimer);
@@ -369,9 +340,9 @@ export function disconnectSSE() {
 		viewportFetchTimer = null;
 	}
 	reconnectAttempts = 0;
-	if (source) {
-		source.close();
-		source = null;
+	if (socket) {
+		socket.close();
+		socket = null;
 		eventStore.connectionStatus = 'disconnected';
 	}
 	if (summaryPollInterval) {

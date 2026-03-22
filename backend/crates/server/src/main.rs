@@ -1,7 +1,6 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicU64;
 
 use axum::routing::{delete, get, post};
 use axum::Router;
@@ -49,14 +48,14 @@ async fn main() -> anyhow::Result<()> {
     sr_sources::db::run_migrations(&pool).await?;
     info!("Database connected and migrations applied");
 
-    // SSE broadcast channel (4096 event buffer)
+    // Event broadcast channel (4096 event buffer)
     let (event_tx, _) = broadcast::channel::<InsertableEvent>(4096);
 
     // Pipeline publish channel — created here so source health events
     // can be emitted before spawn_pipeline runs
     let (publish_tx, _) = broadcast::channel::<sr_pipeline::PublishEvent>(1024);
 
-    // Source health broadcast channel — bridged to publish_tx for SSE
+    // Source health broadcast channel — bridged to publish_tx for WebSocket
     let (health_tx, _) = broadcast::channel::<sr_sources::registry::SourceHealthEvent>(256);
     {
         let mut health_rx = health_tx.subscribe();
@@ -277,6 +276,9 @@ async fn main() -> anyhow::Result<()> {
         }
     };
 
+    // Keep a clone of llm_client for AppState (before pipeline moves it)
+    let llm_client_for_state = llm_client.clone();
+
     // Spawn the pipeline: ingest → correlate → enrich → publish
     let (summaries, analysis, metrics) =
         spawn_pipeline(
@@ -448,12 +450,13 @@ async fn main() -> anyhow::Result<()> {
         publish_tx,
         summaries,
         source_registry: registry,
-        sse_event_counter: Arc::new(AtomicU64::new(0)),
+
         analysis,
         budget,
         situations,
         cameras,
         metrics,
+        llm_client: llm_client_for_state,
         api_key,
         satellite_tles,
     };
@@ -463,7 +466,7 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/events", get(routes::events::list_events))
         .route("/api/events/latest", get(routes::events::latest_events))
         .route("/api/events/geo", get(routes::events::events_geo))
-        .route("/api/sse", get(routes::sse::sse_handler))
+        .route("/api/ws", get(routes::ws::ws_handler))
         .route("/api/sources", get(routes::sources::list_sources))
         .route(
             "/api/sources/{source_id}/config",

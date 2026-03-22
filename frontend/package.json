@@ -19,10 +19,16 @@
 		"@sveltejs/kit": "^2.50.2",
 		"@sveltejs/vite-plugin-svelte": "^6.2.4",
 		"@tailwindcss/vite": "^4.2.1",
+		"@typescript-eslint/eslint-plugin": "^8.57.1",
+		"@typescript-eslint/parser": "^8.57.1",
+		"eslint": "^10.1.0",
+		"eslint-plugin-svelte": "^3.16.0",
 		"svelte": "^5.51.0",
 		"svelte-check": "^4.4.2",
+		"svelte-eslint-parser": "^1.6.0",
 		"tailwindcss": "^4.2.1",
 		"typescript": "^5.9.3",
+		"typescript-eslint": "^8.57.1",
 		"vite": "^7.3.1"
 	},
 	"dependencies": {

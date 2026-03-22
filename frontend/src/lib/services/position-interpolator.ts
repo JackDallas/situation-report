@@ -1,5 +1,6 @@
 import { mapStore, type PositionEntry } from '$lib/stores/map.svelte';
 import { AFFILIATION_COLORS } from '$lib/config/colors';
+import type { Map as MapLibreMap, GeoJSONSource } from 'maplibre-gl';
 
 const EARTH_RADIUS_KM = 6371;
 const KTS_TO_KPH = 1.852;
@@ -10,7 +11,7 @@ let rafId: number | null = null;
 let lastTick = 0;
 
 /** Reference to the MapLibre map instance — set via setMapInstance() */
-let mapInstance: any = null;
+let mapInstance: MapLibreMap | null = null;
 
 /**
  * Extrapolate a position forward using heading (degrees) and speed (knots).
@@ -44,11 +45,34 @@ function extrapolate(
 	return [(newLngRad * 180) / Math.PI, (newLatRad * 180) / Math.PI];
 }
 
+/** Position feature for the MapLibre GeoJSON source */
+interface PositionFeature {
+	type: 'Feature';
+	geometry: { type: 'Point'; coordinates: [number, number] };
+	properties: {
+		entity_id: string;
+		label: string;
+		heading: number | null;
+		speed: number | null;
+		altitude: number | null;
+		source_type: string;
+		pos_type: string;
+		icon_image: string;
+		affiliation: string | null;
+		is_military: boolean;
+		is_high_value: boolean;
+		is_vessel: boolean;
+		on_ground: boolean;
+		is_stale: boolean;
+	};
+}
+
 /** Build a GeoJSON feature for a position entry */
-function buildPositionFeature(pos: PositionEntry, lat: number, lng: number): any {
-	const affiliation = (pos.payload as any)?.affiliation ?? null;
-	const isMil = (pos.payload as any)?.military === true;
-	const isHighValue = (pos.payload as any)?.high_value === true;
+function buildPositionFeature(pos: PositionEntry, lat: number, lng: number): PositionFeature {
+	const affiliationRaw = pos.payload['affiliation'];
+	const affiliation = typeof affiliationRaw === 'string' ? affiliationRaw : null;
+	const isMil = pos.payload['military'] === true;
+	const isHighValue = pos.payload['high_value'] === true;
 	const isFlight =
 		FLIGHT_SOURCES.includes(pos.source_type) ||
 		pos.source_type.includes('flight');
@@ -114,7 +138,7 @@ export function setBasePositions(positions: Map<string, PositionEntry>) {
  * Set the MapLibre map instance for direct source updates.
  * Called from MapPanel.svelte after map loads.
  */
-export function setMapInstance(map: any) {
+export function setMapInstance(map: MapLibreMap) {
 	mapInstance = map;
 }
 
@@ -153,10 +177,10 @@ function tick() {
 	const zoom = mapInstance.getZoom();
 
 	// Priority tiers: 0=high_value mil, 1=known-affiliation mil, 2=unknown mil, 3=vessel, 4=civilian
-	const tierFeatures: any[][] = [[], [], [], [], []];
+	const tierFeatures: PositionFeature[][] = [[], [], [], [], []];
 
 	// Iterate base positions and extrapolate moving ones
-	for (const [entityId, base] of basePositions) {
+	for (const [_entityId, base] of basePositions) {
 		let lat = base.latitude;
 		let lng = base.longitude;
 
@@ -176,8 +200,8 @@ function tick() {
 		const onGround = base.altitude != null && base.altitude <= 0;
 		if (hideGround && onGround) continue;
 
-		const isMil = (base.payload as any)?.military === true;
-		const isHighValue = (base.payload as any)?.high_value === true;
+		const isMil = base.payload['military'] === true;
+		const isHighValue = base.payload['high_value'] === true;
 		const isFlight =
 			FLIGHT_SOURCES.includes(base.source_type) ||
 			base.source_type.includes('flight');
@@ -190,16 +214,16 @@ function tick() {
 		const feature = buildPositionFeature(base, lat, lng);
 
 		// Assign to priority tier
-		if (isHighValue) tierFeatures[0].push(feature);
-		else if (isMil && feature.properties.affiliation) tierFeatures[1].push(feature);
-		else if (isMil) tierFeatures[2].push(feature);
-		else if (isVessel) tierFeatures[3].push(feature);
-		else tierFeatures[4].push(feature);
+		if (isHighValue) tierFeatures[0]!.push(feature);
+		else if (isMil && feature.properties.affiliation) tierFeatures[1]!.push(feature);
+		else if (isMil) tierFeatures[2]!.push(feature);
+		else if (isVessel) tierFeatures[3]!.push(feature);
+		else tierFeatures[4]!.push(feature);
 	}
 
 	// Cap total positions by zoom level to prevent map overload
 	const maxPositions = zoom < 4 ? 500 : zoom < 6 ? 1000 : 3000;
-	const features: any[] = [];
+	const features: PositionFeature[] = [];
 	for (const tier of tierFeatures) {
 		for (const f of tier) {
 			if (features.length >= maxPositions) break;
@@ -209,7 +233,8 @@ function tick() {
 	}
 
 	// Update MapLibre directly — bypass reactive store to avoid $effect overhead
-	(mapInstance.getSource('positions') as any).setData({
+	// MapLibre's getSource() returns Source | undefined; cast to GeoJSONSource for setData()
+	(mapInstance.getSource('positions') as GeoJSONSource | undefined)?.setData({
 		type: 'FeatureCollection',
 		features
 	});

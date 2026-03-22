@@ -1,7 +1,7 @@
 <script lang="ts">
 	import '../app.css';
 	import { onMount, onDestroy } from 'svelte';
-	import { connectSSE, disconnectSSE } from '$lib/services/sse';
+	import { connectWS, disconnectWS } from '$lib/services/ws';
 	import { digestStore } from '$lib/stores/digest.svelte';
 	import { themeStore } from '$lib/stores/theme.svelte';
 	import DigestOverlay from '$lib/components/shared/DigestOverlay.svelte';
@@ -14,12 +14,12 @@
 	}
 
 	onMount(() => {
-		connectSSE();
+		connectWS();
 		window.addEventListener('beforeunload', handleBeforeUnload);
 	});
 
 	onDestroy(() => {
-		disconnectSSE();
+		disconnectWS();
 		window.removeEventListener('beforeunload', handleBeforeUnload);
 	});
 </script>

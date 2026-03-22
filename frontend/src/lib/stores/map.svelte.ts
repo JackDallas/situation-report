@@ -98,7 +98,7 @@ class MapStore {
 
 	/** Get decay half-life in minutes for an event type */
 	getDecayHalfLife(eventType: string): number {
-		return MapStore.DECAY_HALF_LIVES[eventType] ?? MapStore.DECAY_HALF_LIVES['default'];
+		return MapStore.DECAY_HALF_LIVES[eventType] ?? MapStore.DECAY_HALF_LIVES['default'] ?? 720;
 	}
 
 	/** Whether the conflict heatmap overlay is visible */
@@ -252,19 +252,19 @@ class MapStore {
 		this.prevSourceIdSet = nextSourceIdSet;
 		this.recentlyUpdated = nextUpdated;
 
-		// Merge: keep recent SSE-delivered features that aren't in the server response.
-		// Without this, pan/zoom refetches replace all features and SSE dots vanish.
-		const sseCutoff = now - 60_000; // keep SSE features from last 60 seconds
-		const sseFeatures = this.geoData.features.filter((f) => {
+		// Merge: keep recent WS-delivered features that aren't in the server response.
+		// Without this, pan/zoom refetches replace all features and WS dots vanish.
+		const wsCutoff = now - 60_000; // keep WS features from last 60 seconds
+		const wsFeatures = this.geoData.features.filter((f) => {
 			const fid = f.properties.source_id;
 			if (!fid || nextSourceIdSet.has(fid)) return false; // server already has it
 			const ts = f.properties.event_time
 				? new Date(f.properties.event_time as string).getTime()
 				: 0;
-			return ts > sseCutoff; // keep only recent SSE deliveries
+			return ts > wsCutoff; // keep only recent WS deliveries
 		});
 
-		const merged = [...sseFeatures, ...data.features].slice(0, this.maxFeatures);
+		const merged = [...wsFeatures, ...data.features].slice(0, this.maxFeatures);
 		this.geoData = { type: 'FeatureCollection', features: merged };
 		this.geoVersion++;
 	}
@@ -279,7 +279,7 @@ class MapStore {
 			nextPositions.set(entry.entity_id, entry);
 			nextMeta.set(entry.entity_id, {
 				source_type: entry.source_type,
-				military: (entry.payload as any)?.military === true
+				military: (entry.payload as Record<string, unknown>)?.military === true
 			});
 		}
 
@@ -298,7 +298,7 @@ class MapStore {
 			nextPositions.set(entry.entity_id, entry);
 			nextMeta.set(entry.entity_id, {
 				source_type: entry.source_type,
-				military: (entry.payload as any)?.military === true
+				military: (entry.payload as Record<string, unknown>)?.military === true
 			});
 		}
 
@@ -348,7 +348,7 @@ class MapStore {
 					simplified.push(pt);
 					continue;
 				}
-				const last = simplified[simplified.length - 1];
+				const last = simplified[simplified.length - 1]!;
 				const dLng = pt.lng - last.lng;
 				const dLat = pt.lat - last.lat;
 				if (dLng * dLng + dLat * dLat >= minDistSq) {
@@ -356,8 +356,9 @@ class MapStore {
 				}
 			}
 			// Always keep the last point for accurate endpoint
-			if (raw.length > 1 && simplified[simplified.length - 1] !== raw[raw.length - 1]) {
-				simplified.push(raw[raw.length - 1]);
+			const lastRaw = raw[raw.length - 1];
+			if (raw.length > 1 && lastRaw !== undefined && simplified[simplified.length - 1] !== lastRaw) {
+				simplified.push(lastRaw);
 			}
 			const nextHistory = new Map(this.positionHistory);
 			nextHistory.set(entityId, simplified.slice(0, this.maxTrailPoints));

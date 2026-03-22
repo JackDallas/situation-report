@@ -1,4 +1,4 @@
-import type { GeoJSONFeatureCollection, AnalysisReport, Summary, SituationCluster } from '$lib/types/events';
+import type { GeoJSONFeatureCollection, AnalysisReport, Summary, SituationCluster, Incident } from '$lib/types/events';
 import type { SourceInfo } from '$lib/types/sources';
 import type { PositionEntry } from '$lib/stores/map.svelte';
 
@@ -247,7 +247,7 @@ export const api = {
 		return fetchJson('/api/situations');
 	},
 
-	async getIncidents(params?: { limit?: number; since?: string }): Promise<any[]> {
+	async getIncidents(params?: { limit?: number; since?: string }): Promise<Incident[]> {
 		const searchParams = new URLSearchParams();
 		if (params?.limit) searchParams.set('limit', String(params.limit));
 		if (params?.since) searchParams.set('since', params.since);

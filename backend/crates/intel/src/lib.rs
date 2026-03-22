@@ -5,6 +5,7 @@ pub mod enrich;
 pub mod gemini;
 pub mod narrative;
 pub mod llm;
+pub mod llm_backend;
 pub mod prompts;
 pub mod retry;
 pub mod search;

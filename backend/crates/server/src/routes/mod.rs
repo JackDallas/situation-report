@@ -11,4 +11,4 @@ pub mod satellites;
 pub mod search;
 pub mod situations;
 pub mod sources;
-pub mod sse;
+pub mod ws;
