@@ -516,7 +516,7 @@ pub(crate) fn is_conflict_topic(topic: &str) -> bool {
         "missile", "airstrike", "frontline", "casualties", "killed",
         "combat", "offensive", "invasion", "battle", "siege",
         "armed-conflict", "military-strike", "drone-strike",
-        "cross-border", "artillery", "rocket",
+        "cross-border", "artillery", "rocket", "military",
     ];
     patterns.iter().any(|p| lower.contains(p))
 }

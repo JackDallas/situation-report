@@ -129,6 +129,10 @@ pub(crate) fn evaluate_phase_transition(
                 metrics.source_diversity >= 3,
                 metrics.max_severity_rank >= 3,
                 metrics.event_count >= 10,
+                // High total event count is a strong signal — after restart/rebuild,
+                // velocity windows are empty but large established situations should
+                // still transition to Active quickly.
+                metrics.event_count >= 50,
             ]
             .iter()
             .filter(|&&b| b)
@@ -229,10 +233,14 @@ pub(crate) fn recompute_cluster_severity(
     } else {
         &cluster.source_types
     };
+    // Use total_events_ingested when available — event_count is capped by event shedding
+    // (shed_target_events=150) and does not reflect the true scale of the situation.
+    // After restart/rebuild, event_count may be artificially low while total_events_ingested
+    // preserves the actual historical count.
     let effective_event_count = if is_child && cluster.direct_event_count > 0 {
         cluster.direct_event_count
     } else {
-        cluster.event_count
+        cluster.total_events_ingested.max(cluster.event_count)
     };
 
     let has_conflict_sources = effective_source_types.iter().any(|s| is_conflict_source(*s));
@@ -280,6 +288,15 @@ pub(crate) fn recompute_cluster_severity(
         && effective_event_count >= high_min_events
     {
         // Multi-source cyber or environmental disaster, actively developing
+        Severity::High.min(severity_cap)
+    } else if is_active_or_developing
+        && effective_event_count >= critical_min_events
+        && source_diversity >= severity_config.critical_min_sources
+    {
+        // Sheer scale: any active/developing situation with massive multi-source
+        // corroboration is HIGH regardless of topic classification. Topics may not
+        // contain conflict keywords (e.g., "iran", "united-states") but the volume
+        // and diversity of sources speaks for itself.
         Severity::High.min(severity_cap)
     } else if (has_conflict_topics || has_cyber_sources || is_natural_disaster)
         && source_diversity >= severity_config.medium_min_sources
@@ -513,7 +530,9 @@ impl SituationGraph {
                 source_diversity: effective_source_diversity(&cluster.source_types),
                 max_severity_rank: cluster.severity.rank(),
                 hours_since_last_event: hours_since_last,
-                event_count: cluster.event_count,
+                // Use total_events_ingested (survives shedding) so phase transitions
+                // reflect the true scale of the situation, not the capped event_ids window.
+                event_count: cluster.total_events_ingested.max(cluster.event_count),
             };
 
             let gap_tolerance = compute_gap_tolerance(cluster, &self.config.phases, now);
