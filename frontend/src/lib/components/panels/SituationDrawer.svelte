@@ -623,13 +623,13 @@
 					<div class="mt-2 grid grid-cols-2 gap-2">
 						{#each cameras as cam}
 							<a
-								href={cam.shodan_url}
+								href={cam.shodan_url as string | undefined}
 								target="_blank"
 								rel="noopener noreferrer"
 								class="group rounded border border-border-default bg-bg-card p-2 transition-colors hover:bg-bg-card-hover"
 							>
 								<img
-									src={cam.screenshot_url}
+									src={cam.screenshot_url as string | undefined}
 									alt="Camera at {cam.ip}"
 									class="mb-1.5 h-20 w-full rounded object-cover"
 									loading="lazy"

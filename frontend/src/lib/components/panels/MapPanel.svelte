@@ -13,7 +13,7 @@
 	import type { SituationEvent } from '$lib/types/events';
 	import { AFFILIATION_COLORS, DEFAULT_MIL_COLOR, CIVILIAN_COLOR, VESSEL_COLOR } from '$lib/config/colors';
 	import { satelliteStore } from '$lib/services/satellites.svelte';
-	import type { Map as MapLibreMap, GeoJSONSource } from 'maplibre-gl';
+	import type { Map as MapLibreMap, GeoJSONSource, FilterSpecification } from 'maplibre-gl';
 
 	let container: HTMLDivElement;
 	let map: MapLibreMap;
@@ -110,7 +110,7 @@
 			};
 
 			const enrichedFeature = {
-				type: 'Feature',
+				type: 'Feature' as const,
 				geometry: f.geometry,
 				properties: enrichedProps
 			};
@@ -181,7 +181,7 @@
 			}
 		}
 
-		const pseudoEvent: SituationEvent = {
+		const pseudoEvent = {
 			event_time: (props.event_time as string) ?? '',
 			source_type: (props.source_type as string) ?? '',
 			source_id: (props.source_id as string | null) ?? null,
@@ -200,7 +200,7 @@
 			heading: null,
 			speed: null,
 			altitude: null
-		};
+		} as SituationEvent;
 
 		const isIncident = pseudoEvent.event_type?.startsWith('incident:');
 		const label = isIncident
@@ -341,39 +341,40 @@
 
 			// Look up payload from cache (stripped from GeoJSON features)
 			let payload: Record<string, unknown> = {};
-			if (props.source_id) {
-				payload = mapStore.payloadCache.get(props.source_id) ?? {};
+			const sid = props.source_id as string | null;
+			if (sid) {
+				payload = mapStore.payloadCache.get(sid) ?? {};
 			}
 			if (Object.keys(payload).length === 0 && props.payload) {
 				try {
 					payload =
 						typeof props.payload === 'string'
 							? JSON.parse(props.payload)
-							: (props.payload ?? {});
+							: (props.payload as Record<string, unknown> ?? {});
 				} catch {
 					payload = {};
 				}
 			}
-			const pseudoEvent: SituationEvent = {
-				event_time: props.event_time ?? '',
-				source_type: props.source_type ?? '',
-				source_id: props.source_id ?? null,
-				latitude: props.latitude ?? null,
-				longitude: props.longitude ?? null,
-				region_code: props.region_code ?? null,
-				entity_id: props.entity_id ?? null,
-				entity_name: props.entity_name ?? null,
-				event_type: props.event_type ?? '',
-				severity: props.severity ?? 'low',
-				confidence: props.confidence ?? null,
+			const pseudoEvent = {
+				event_time: (props.event_time as string) ?? '',
+				source_type: (props.source_type as string) ?? '',
+				source_id: sid ?? null,
+				latitude: (props.latitude as number | null) ?? null,
+				longitude: (props.longitude as number | null) ?? null,
+				region_code: (props.region_code as string | null) ?? null,
+				entity_id: (props.entity_id as string | null) ?? null,
+				entity_name: (props.entity_name as string | null) ?? null,
+				event_type: (props.event_type as string) ?? '',
+				severity: (props.severity as string) ?? 'low',
+				confidence: (props.confidence as number | null) ?? null,
 				tags: [],
-				title: props.title ?? null,
-				description: props.description ?? null,
+				title: (props.title as string | null) ?? null,
+				description: (props.description as string | null) ?? null,
 				payload,
 				heading: null,
 				speed: null,
 				altitude: null
-			};
+			} as SituationEvent;
 			eventStore.selectedEvent = pseudoEvent;
 		};
 
@@ -1308,8 +1309,8 @@
 				if (hitLayers.length > 0) return;
 
 				// Find closest feature from the unclustered source within 30px
-				// MapLibre getSource() returns Source | undefined; cast to GeoJSONSource for setData()
-				const source = map.getSource('events-unclustered') as GeoJSONSource | undefined;
+				// Access GeoJSONSource internal _data — no public API for raw feature iteration
+				const source = map.getSource('events-unclustered') as (GeoJSONSource & { _data?: { features?: GeoJSON.Feature[] } }) | undefined;
 				if (!source?._data?.features) return;
 				const clickLng = e.lngLat.lng;
 				const clickLat = e.lngLat.lat;
@@ -1318,11 +1319,14 @@
 				const tolerance = metersPerPx * 30 / 111320; // degrees
 				const tolSq = tolerance * tolerance;
 
-				let closest: any = null;
+				let closest: GeoJSON.Feature | null = null;
 				let closestDist = Infinity;
 				for (const f of source._data.features) {
 					if (f.geometry?.type !== 'Point') continue;
-					const [lng, lat] = f.geometry.coordinates;
+					const coords = (f.geometry as GeoJSON.Point).coordinates;
+					const lng = coords[0];
+					const lat = coords[1];
+					if (lng === undefined || lat === undefined) continue;
 					const d = (lng - clickLng) ** 2 + (lat - clickLat) ** 2;
 					if (d < tolSq && d < closestDist) {
 						closestDist = d;
@@ -1331,7 +1335,7 @@
 				}
 				if (!closest) return;
 
-				const props = closest.properties;
+				const props = closest.properties ?? {};
 				const html = buildPopupHtml(props);
 				new maplibre.Popup({ className: 'sr-popup', maxWidth: '280px' })
 					.setLngLat(e.lngLat)
@@ -1384,7 +1388,7 @@
 		const hidden = mapStore.hiddenEventTypes;
 
 		// Exclude types handled by dedicated layers
-		const excludeSpecial: any[] = ['!', ['in', ['get', 'event_type'], ['literal', ['geo_event', 'notam_event', 'thermal_anomaly']]]];
+		const excludeSpecial = ['!', ['in', ['get', 'event_type'], ['literal', ['geo_event', 'notam_event', 'thermal_anomaly']]]] as FilterSpecification;
 
 		// Toggle NOTAM area visibility based on event type legend
 		const notamHidden = hidden.has('notam_event');
@@ -1399,13 +1403,13 @@
 			]);
 		} else {
 			const hiddenArr = [...hidden];
-			const baseFilter: any[] = ['!', ['in', ['get', 'event_type'], ['literal', hiddenArr]]];
-			map.setFilter('events-circle', ['all', baseFilter, excludeSpecial]);
+			const baseFilter = ['!', ['in', ['get', 'event_type'], ['literal', hiddenArr]]] as FilterSpecification;
+			map.setFilter('events-circle', ['all', baseFilter, excludeSpecial] as FilterSpecification);
 			map.setFilter('incidents-glow', [
 				'all',
 				['==', ['slice', ['coalesce', ['get', 'event_type'], ''], 0, 9], 'incident:'],
 				baseFilter
-			]);
+			] as FilterSpecification);
 		}
 	});
 
@@ -1501,7 +1505,7 @@
 			}, 'events-circle'); // Insert below event layers
 
 			// Compute centroids for label placement
-			const labelFeatures: any[] = [];
+			const labelFeatures: GeoJSON.Feature[] = [];
 			for (const f of data.features) {
 				if (!f.geometry?.coordinates?.[0]) continue;
 				const ring = f.geometry.coordinates[0];
@@ -1768,7 +1772,7 @@
 	$effect(() => {
 		if (!mapLoaded || !map?.getSource('trails')) return;
 		const meta = mapStore.entityMeta;
-		const features: any[] = [];
+		const features: GeoJSON.Feature[] = [];
 		for (const [entityId, trail] of mapStore.positionHistory) {
 			if (trail.length < 2) continue;
 			const em = meta.get(entityId);
@@ -1791,8 +1795,9 @@
 				}
 			});
 		}
-		map.getSource('trails').setData({
-			type: 'FeatureCollection',
+		// MapLibre getSource() returns Source | undefined; cast to GeoJSONSource for setData()
+		(map.getSource('trails') as GeoJSONSource | undefined)?.setData({
+			type: 'FeatureCollection' as const,
 			features
 		});
 	});

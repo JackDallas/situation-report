@@ -200,6 +200,9 @@ function openWS() {
 				if (data.kind === 'incident') {
 					const { kind: _, ...incident } = data;
 					const inc = incident as Incident;
+					// Normalize optional array fields the backend may omit via skip_serializing_if
+					inc.related_ids ??= [];
+					inc.merged_from ??= [];
 					eventStore.addIncident(inc);
 					mapStore.addIncidentFeature(inc);
 				}
@@ -223,6 +226,10 @@ function openWS() {
 							break;
 						}
 					}
+				}
+				// Normalize optional array fields the backend may omit
+				for (const c of clusters) {
+					c.event_titles ??= [];
 				}
 				situationsStore.backendClusters = clusters;
 			}
@@ -294,6 +301,10 @@ async function loadSituations() {
 	try {
 		const clusters = await api.getSituations();
 		if (Array.isArray(clusters)) {
+			// Normalize optional array fields the backend may omit
+			for (const c of clusters) {
+				c.event_titles ??= [];
+			}
 			situationsStore.backendClusters = clusters;
 		}
 	} catch {
@@ -306,6 +317,9 @@ async function loadIncidents() {
 		const incidents = await api.getIncidents({ limit: 50 });
 		if (Array.isArray(incidents)) {
 			for (const inc of incidents) {
+				// Normalize optional array fields the backend may omit via skip_serializing_if
+				inc.related_ids ??= [];
+				inc.merged_from ??= [];
 				eventStore.addIncident(inc);
 				mapStore.addIncidentFeature(inc);
 			}

@@ -14,27 +14,40 @@
 	);
 	const isAircraft = $derived(!isVessel);
 
-	const payload = $derived(position?.payload ?? {} as Record<string, unknown>);
-	const isMilitary = $derived(payload.military === true);
-	const affiliation = $derived(payload.affiliation as string | undefined);
+	const payload = $derived((position?.payload ?? {}) as Record<string, unknown>);
+
+	/** Helper to extract a string property from payload */
+	function pStr(key: string): string | undefined {
+		const v = payload[key];
+		return typeof v === 'string' ? v : undefined;
+	}
+	/** Helper to extract a string-or-number property from payload */
+	function pStrNum(key: string): string | number | undefined {
+		const v = payload[key];
+		if (typeof v === 'string' || typeof v === 'number') return v;
+		return undefined;
+	}
+
+	const isMilitary = $derived(payload['military'] === true);
+	const affiliation = $derived(pStr('affiliation'));
 
 	// Aircraft derived data
-	const aircraftInfo = $derived(getAircraftInfo(payload.type_code ?? payload.aircraft_type));
-	const aircraftCategory = $derived(getAircraftCategory(payload.category));
-	const squawkAlert = $derived(decodeSquawk(payload.squawk));
-	const callsign = $derived(payload.callsign ?? position?.entity_name ?? position?.entity_id ?? 'Unknown');
-	const registration = $derived(payload.registration as string | undefined);
-	const hexCode = $derived(payload.hex ?? payload.icao24 ?? position?.entity_id ?? '');
+	const aircraftInfo = $derived(getAircraftInfo(pStr('type_code') ?? pStr('aircraft_type')));
+	const aircraftCategory = $derived(getAircraftCategory(pStr('category')));
+	const squawkAlert = $derived(decodeSquawk(pStr('squawk')));
+	const callsign = $derived(pStr('callsign') ?? position?.entity_name ?? position?.entity_id ?? 'Unknown');
+	const registration = $derived(pStr('registration'));
+	const hexCode = $derived(pStr('hex') ?? pStr('icao24') ?? position?.entity_id ?? '');
 
 	// Vessel derived data
-	const vesselName = $derived(payload.name ?? position?.entity_name ?? 'Unknown Vessel');
-	const mmsi = $derived(payload.mmsi ?? position?.entity_id ?? '');
-	const shipTypeName = $derived(getShipTypeName(payload.ship_type));
+	const vesselName = $derived(pStr('name') ?? position?.entity_name ?? 'Unknown Vessel');
+	const mmsi = $derived(pStr('mmsi') ?? position?.entity_id ?? '');
+	const shipTypeName = $derived(getShipTypeName(pStrNum('ship_type')));
 	const navStatus = $derived(
-		payload.nav_status
-			? String(payload.nav_status)
-			: payload.nav_status_code != null
-				? getNavStatusName(payload.nav_status_code)
+		payload['nav_status']
+			? String(payload['nav_status'])
+			: payload['nav_status_code'] != null
+				? getNavStatusName(pStrNum('nav_status_code'))
 				: null
 	);
 
@@ -213,7 +226,7 @@
 					<div class="rounded bg-bg-card p-2">
 						<div class="text-[10px] text-text-muted uppercase">Heading</div>
 						<div class="text-sm font-mono font-medium text-text-primary">
-							{compassDir(heading ?? payload.track)}
+							{compassDir(heading ?? payload['track'] as number | null)}
 						</div>
 					</div>
 
@@ -240,7 +253,7 @@
 					<div class="rounded bg-bg-card p-2">
 						<div class="text-[10px] text-text-muted uppercase">Course</div>
 						<div class="text-sm font-mono font-medium text-text-primary">
-							{compassDir(payload.course ?? heading)}
+							{compassDir(payload['course'] as number | null ?? heading)}
 						</div>
 					</div>
 
