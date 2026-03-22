@@ -160,11 +160,15 @@ services:
       # NVIDIA GPU (CUDA EP for ONNX Runtime)
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    # Docker group so app can stop/start llama container for GPU toggle
+    group_add:
+      - ${DOCKER_GID:-999}
     volumes:
       - embeddings-cache:/app/models
       - llama-models:/app/llm-models:ro
       - ./data:/app/data
       - ${AIRCRAFT_DB_DIR:-./modes-db}:/app/modes-db:ro
+      - /var/run/docker.sock:/var/run/docker.sock:rw
     ports:
       - "3001:3000"
     deploy:
