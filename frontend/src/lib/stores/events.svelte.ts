@@ -32,6 +32,9 @@ class EventStore {
 	}
 
 	addIncident(incident: Incident) {
+		// Normalize optional array fields that the backend may omit via skip_serializing_if
+		incident.related_ids ??= [];
+		incident.merged_from ??= [];
 		// Deduplicate: replace existing incident with same id, or prepend new
 		const existingIdx = this.incidents.findIndex((i) => i.id === incident.id);
 		let next: Incident[];

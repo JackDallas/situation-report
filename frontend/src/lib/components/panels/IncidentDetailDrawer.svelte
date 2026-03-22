@@ -332,17 +332,17 @@
 			{/if}
 
 			<!-- Related / Merged info -->
-			{#if incident.related_ids.length > 0 || incident.merged_from.length > 0}
+			{#if (incident.related_ids?.length ?? 0) > 0 || (incident.merged_from?.length ?? 0) > 0}
 				<div class="mt-4 border-t border-border-default pt-3">
 					<span class="text-[10px] font-semibold uppercase tracking-wider text-text-muted">
 						Links
 					</span>
-					{#if incident.related_ids.length > 0}
+					{#if (incident.related_ids?.length ?? 0) > 0}
 						<p class="mt-1 text-[10px] text-text-muted">
 							{incident.related_ids.length} related incident{incident.related_ids.length === 1 ? '' : 's'}
 						</p>
 					{/if}
-					{#if incident.merged_from.length > 0}
+					{#if (incident.merged_from?.length ?? 0) > 0}
 						<p class="mt-1 text-[10px] text-text-muted">
 							Merged from {incident.merged_from.length} incident{incident.merged_from.length === 1 ? '' : 's'}
 						</p>
