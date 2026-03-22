@@ -11,6 +11,7 @@
 	import NewsPanel from '$lib/components/panels/NewsPanel.svelte';
 	import SituationReportsPanel from '$lib/components/panels/SituationReportsPanel.svelte';
 	import EventDetailDrawer from '$lib/components/panels/EventDetailDrawer.svelte';
+	import IncidentDetailDrawer from '$lib/components/panels/IncidentDetailDrawer.svelte';
 	import SituationDrawer from '$lib/components/panels/SituationDrawer.svelte';
 	import PositionDetailPane from '$lib/components/panels/PositionDetailPane.svelte';
 	import MapLegend from '$lib/components/shared/MapLegend.svelte';
@@ -42,6 +43,12 @@
 	$effect(() => {
 		if (eventStore.selectedEvent) {
 			uiStore.openPanel('event-detail');
+		}
+	});
+
+	$effect(() => {
+		if (eventStore.selectedIncident) {
+			uiStore.openPanel('incident-detail');
 		}
 	});
 
@@ -80,6 +87,8 @@
 			<div class="flex w-[400px] shrink-0 flex-col border-l border-border-default">
 				{#if uiStore.rightPanel === 'event-detail'}
 					<EventDetailDrawer />
+				{:else if uiStore.rightPanel === 'incident-detail'}
+					<IncidentDetailDrawer />
 				{:else if uiStore.rightPanel === 'situation-detail'}
 					<SituationDrawer />
 				{:else if uiStore.rightPanel === 'position-detail'}

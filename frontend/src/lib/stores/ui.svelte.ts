@@ -1,6 +1,6 @@
 import type { PositionEntry } from '$lib/stores/map.svelte';
 
-export type RightPanel = 'sitreps' | 'news' | 'event-detail' | 'situation-detail' | 'position-detail' | 'domain' | 'intel-brief' | 'search' | null;
+export type RightPanel = 'sitreps' | 'news' | 'event-detail' | 'incident-detail' | 'situation-detail' | 'position-detail' | 'domain' | 'intel-brief' | 'search' | null;
 export type DomainTab = 'kinetic' | 'cyber' | 'track' | 'intel' | 'flow';
 
 class UIStore {

@@ -22,19 +22,14 @@
 	}
 
 	import { ENTITY_TYPE_ICONS } from '$lib/config/colors';
+	import { api } from '$lib/services/api';
+	import type { BudgetStatus } from '$lib/services/api';
 
-	let budgetData = $state<{
-		daily_budget_usd: number;
-		spent_today_usd: number;
-		remaining_usd: number;
-		budget_exhausted: boolean;
-		degraded: boolean;
-	} | null>(null);
+	let budgetData = $state<BudgetStatus | null>(null);
 
 	async function loadBudget() {
 		try {
-			const resp = await fetch('/api/intel/budget');
-			if (resp.ok) budgetData = await resp.json();
+			budgetData = await api.getBudget();
 		} catch { /* silent */ }
 	}
 

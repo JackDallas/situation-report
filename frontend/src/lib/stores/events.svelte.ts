@@ -9,6 +9,7 @@ class EventStore {
 	latestAnalysis = $state<AnalysisReport | null>(null);
 	connectionStatus = $state<ConnectionStatus>('disconnected');
 	selectedEvent = $state<SituationEvent | null>(null);
+	selectedIncident = $state<Incident | null>(null);
 
 	private maxEvents = 500;
 	private maxIncidents = 100;
