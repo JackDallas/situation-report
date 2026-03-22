@@ -30,7 +30,9 @@ const PASSTHROUGH_EVENT_TYPES: readonly EventType[] = [
 	'gps_interference',
 	'fishing_event',
 	'bgp_leak',
-	'geo_news'
+	'geo_news',
+	'bluesky_post',
+	'maritime_security'
 ];
 
 /**
@@ -52,7 +54,7 @@ const INCIDENT_RULES = [
 const FEED_EXCLUDE =
 	'bgp_anomaly,flight_position,vessel_position,cert_issued,shodan_banner,geo_news,shodan_count';
 const INTEL_GEO_TYPES =
-	'conflict_event,seismic_event,geo_event,nuclear_event,notam_event,internet_outage,gps_interference,censorship_event,threat_intel,fishing_event,geo_news,thermal_anomaly';
+	'conflict_event,seismic_event,geo_event,nuclear_event,notam_event,internet_outage,gps_interference,censorship_event,threat_intel,fishing_event,geo_news,thermal_anomaly,bluesky_post,maritime_security';
 
 let source: EventSource | null = null;
 let summaryPollInterval: ReturnType<typeof setInterval> | null = null;

@@ -181,7 +181,7 @@ class MapStore {
 			'conflict_event', 'thermal_anomaly', 'seismic_event', 'nuclear_event',
 			'notam_event', 'gps_interference', 'internet_outage', 'censorship_event',
 			'news_article', 'geo_event', 'geo_news', 'telegram_message', 'threat_intel',
-			'shodan_banner', 'fishing_event', 'bgp_leak'
+			'shodan_banner', 'fishing_event', 'bgp_leak', 'bluesky_post', 'maritime_security'
 		]);
 	}
 
@@ -249,7 +249,21 @@ class MapStore {
 
 		this.prevSourceIdSet = nextSourceIdSet;
 		this.recentlyUpdated = nextUpdated;
-		this.geoData = data;
+
+		// Merge: keep recent SSE-delivered features that aren't in the server response.
+		// Without this, pan/zoom refetches replace all features and SSE dots vanish.
+		const sseCutoff = now - 60_000; // keep SSE features from last 60 seconds
+		const sseFeatures = this.geoData.features.filter((f) => {
+			const fid = f.properties.source_id;
+			if (!fid || nextSourceIdSet.has(fid)) return false; // server already has it
+			const ts = f.properties.event_time
+				? new Date(f.properties.event_time as string).getTime()
+				: 0;
+			return ts > sseCutoff; // keep only recent SSE deliveries
+		});
+
+		const merged = [...sseFeatures, ...data.features].slice(0, this.maxFeatures);
+		this.geoData = { type: 'FeatureCollection', features: merged };
 		this.geoVersion++;
 	}
 
