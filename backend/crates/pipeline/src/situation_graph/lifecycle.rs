@@ -507,6 +507,37 @@ impl SituationGraph {
                     continue;
             }
 
+            // Hard cap: Declining clusters that have lingered beyond declining_max_hours
+            // are force-resolved, even if they still trickle in events.
+            if cluster.phase == SituationPhase::Declining {
+                let hours_in_declining = (now - cluster.phase_changed_at).num_minutes().max(0) as f64 / 60.0;
+                if hours_in_declining > self.config.phases.declining_max_hours {
+                    let transition = PhaseTransition {
+                        from_phase: SituationPhase::Declining,
+                        to_phase: SituationPhase::Resolved,
+                        trigger_reason: format!(
+                            "Resolved: hard cap — {:.1}h in declining phase exceeds {:.1}h limit",
+                            hours_in_declining, self.config.phases.declining_max_hours
+                        ),
+                        metrics_snapshot: serde_json::json!({
+                            "hours_in_declining": hours_in_declining,
+                            "declining_max_hours": self.config.phases.declining_max_hours,
+                        }),
+                        transitioned_at: now,
+                    };
+                    if let Some(cluster) = self.clusters.get_mut(&cid) {
+                        cluster.phase = SituationPhase::Resolved;
+                        cluster.phase_changed_at = now;
+                        cluster.phase_transitions.push(transition.clone());
+                        if cluster.phase_transitions.len() > 20 {
+                            cluster.phase_transitions.drain(..cluster.phase_transitions.len() - 20);
+                        }
+                        transitions.push((cid, transition));
+                    }
+                    continue;
+                }
+            }
+
             // Compute metrics
             let hours_since_last = (now - cluster.last_updated).num_minutes().max(0) as f64 / 60.0;
 
@@ -790,6 +821,13 @@ impl SituationGraph {
                     // but total_events_ingested preserves the true historical count.
                     cluster.event_count = cluster.event_ids.len();
                     shed_events += drain_count;
+                }
+                // Cap direct_event_count at total_events_ingested — it can
+                // overshoot when enriched events are re-ingested (counted twice
+                // as "direct") while total_events_ingested only grows on the
+                // first ingestion path.
+                if cluster.direct_event_count > cluster.total_events_ingested {
+                    cluster.direct_event_count = cluster.total_events_ingested;
                 }
             }
         }

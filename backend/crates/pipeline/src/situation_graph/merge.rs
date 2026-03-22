@@ -139,13 +139,15 @@ impl SituationGraph {
     /// Merge a child cluster's data into a parent cluster.
     ///
     /// Transfers event_ids, source_types, event_titles, severity, first_seen,
-    /// last_updated, coord_buffer, event_count, and signal_event_count from
-    /// child to parent. Returns `false` if either cluster is missing.
+    /// last_updated, coord_buffer, and event_count from child to parent.
+    /// signal_event_count is NOT transferred — each cluster tracks only its
+    /// own directly-ingested high-signal events to prevent inflation from
+    /// merge/unmerge cycles. Returns `false` if either cluster is missing.
     pub(crate) fn merge_child_into_parent(&mut self, parent_id: Uuid, child_id: Uuid) -> bool {
         // Collect child data first (immutable borrow)
         let (child_event_ids, child_source_types, child_event_titles,
              child_severity, child_first_seen, child_last_updated,
-             child_coord_buffer, child_event_count, child_signal_count) = {
+             child_coord_buffer, child_event_count) = {
             let Some(child) = self.clusters.get(&child_id) else {
                 warn!(child = %child_id, "child missing from clusters during merge");
                 return false;
@@ -159,7 +161,6 @@ impl SituationGraph {
                 child.last_updated,
                 child.coord_buffer.clone(),
                 child.event_count,
-                child.signal_event_count,
             )
         };
 
@@ -175,7 +176,11 @@ impl SituationGraph {
             parent.event_ids.drain(..drain_count);
         }
         parent.event_count += child_event_count;
-        parent.signal_event_count += child_signal_count;
+        // NOTE: signal_event_count is NOT transferred from child to parent.
+        // Each cluster's signal count reflects only its own directly-ingested
+        // high-signal events. Transferring it caused runaway inflation because
+        // merge/unmerge cycles would re-add the child's count to the parent
+        // without ever subtracting it on unmerge.
         parent.source_types.extend(child_source_types);
         for title in child_event_titles {
             if parent.event_titles.len() < self.config.cluster_caps.max_event_titles {
@@ -1112,6 +1117,27 @@ impl SituationGraph {
             }
         }
 
+        // Title words that indicate conflict/military activity — situations with
+        // these words belong in a conflict theater. Situations about elections,
+        // cyber-attacks, diplomacy, etc. should NOT be swept into the theater
+        // even if they mention the same country (e.g., "Russia Election
+        // Interference" should not merge with "Ukraine Kupiansk Offensive").
+        const CONFLICT_TITLE_WORDS: &[&str] = &[
+            "war", "offensive", "strike", "strikes", "attack", "attacks",
+            "military", "missile", "drone", "bomb", "bombing", "shelling",
+            "frontline", "battle", "siege", "invasion", "escalat",
+            "combat", "artillery", "rocket", "casualties", "killed",
+            "naval", "navy", "airforce", "army", "armed", "forces",
+            "weapon", "nuclear", "troops", "deploy", "advance",
+            "coalition", "defense", "defence", "fighter", "jet",
+            "ship", "shipping", "fleet", "blockade", "patrol",
+            "tensions", "crisis", "conflict",
+        ];
+
+        fn has_conflict_title(title: &str) -> bool {
+            CONFLICT_TITLE_WORDS.iter().any(|w| title.contains(w))
+        }
+
         let mut theater_groups: HashMap<String, Vec<(Uuid, usize)>> = HashMap::new();
         for &(id, ref title, event_count) in &top_level {
             // Check ALL keywords, prefer conflict theater over individual country
@@ -1131,6 +1157,13 @@ impl SituationGraph {
                 }
             }
             if let Some(theater) = best_theater {
+                // For named conflict theaters, only include situations whose
+                // titles indicate military/conflict activity. This prevents
+                // "Russia Election Interference" from absorbing war situations
+                // just because it mentions "Russia".
+                if theater != "other" && !has_conflict_title(title) {
+                    continue;
+                }
                 let key = if theater == "other" {
                     best_keyword.unwrap_or("unknown").to_string()
                 } else {
