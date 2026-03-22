@@ -62,7 +62,7 @@ impl GdeltGeoSource {
 impl DataSource for GdeltGeoSource {
     fn id(&self) -> &str { "gdelt-geo" }
     fn name(&self) -> &str { "GDELT GEO 2.0" }
-    fn default_interval(&self) -> Duration { Duration::from_secs(20 * 60) }
+    fn default_interval(&self) -> Duration { Duration::from_secs(45 * 60) } // 45 min — shares GDELT rate limit
 
     fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
         Box::pin(async move {
@@ -79,20 +79,10 @@ impl DataSource for GdeltGeoSource {
 
         debug!(query, "Polling GDELT GEO 2.0");
 
-        let resp = match ctx.http.get(&url).timeout(Duration::from_secs(15)).send().await {
-            Ok(r) => r,
-            Err(e) => {
-                warn!(error = %e, query, "GDELT GEO request failed, retrying once");
-                tokio::time::sleep(Duration::from_secs(2)).await;
-                match ctx.http.get(&url).timeout(Duration::from_secs(15)).send().await {
-                    Ok(r) => r,
-                    Err(e2) => {
-                        warn!(error = %e2, query, "GDELT GEO retry also failed");
-                        return Err(anyhow::anyhow!("GDELT GEO request failed after retry: {e2}"));
-                    }
-                }
-            }
-        };
+        // No in-poll retry — let the registry handle backoff to avoid doubling
+        // request count during outages (which accelerates hitting GDELT rate limits).
+        let resp = ctx.http.get(&url).timeout(Duration::from_secs(30)).send().await
+            .map_err(|e| anyhow::anyhow!("GDELT GEO request failed: {e}"))?;
 
         // GDELT GEO returns 404 for queries it can't resolve geographically
         if resp.status() == reqwest::StatusCode::NOT_FOUND {

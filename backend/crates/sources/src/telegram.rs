@@ -526,14 +526,36 @@ impl DataSource for TelegramSource {
                 }
             }
 
-            // ---- 7. Real-time streaming (main loop) ----
+            // ---- 7. Fetch dialogs to populate channel update state ----
+            // grammers requires iterating dialogs at least once so that the
+            // session knows each channel's pts.  Without this, the MessageBoxes
+            // starts empty and the client never receives channel updates.
+            // See: https://docs.rs/grammers-client/latest/grammers_client/struct.Client.html#method.stream_updates
+            info!("Fetching dialogs to register channel update state");
+            {
+                let mut dialogs = client.iter_dialogs();
+                let mut dialog_count = 0u32;
+                loop {
+                    match dialogs.next().await {
+                        Ok(Some(_)) => dialog_count += 1,
+                        Ok(None) => break,
+                        Err(e) => {
+                            warn!(error = %e, "Error fetching dialogs (continuing with partial state)");
+                            break;
+                        }
+                    }
+                }
+                info!(dialog_count, "Dialog iteration complete — channel state populated");
+            }
+
+            // ---- 8. Real-time streaming (main loop) ----
             info!("Starting Telegram real-time update stream");
 
             let mut update_stream = client
                 .stream_updates(
                     updates,
                     UpdatesConfiguration {
-                        catch_up: false,
+                        catch_up: true,
                         update_queue_limit: Some(500),
                     },
                 )

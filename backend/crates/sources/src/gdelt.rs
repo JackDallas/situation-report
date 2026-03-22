@@ -106,7 +106,7 @@ impl DataSource for GdeltSource {
     }
 
     fn default_interval(&self) -> Duration {
-        Duration::from_secs(15 * 60) // 15 minutes
+        Duration::from_secs(30 * 60) // 30 minutes — GDELT rate-limits aggressively
     }
 
     fn poll<'a>(&'a self, ctx: &'a SourceContext) -> Pin<Box<dyn Future<Output = anyhow::Result<Vec<InsertableEvent>>> + Send + 'a>> {
@@ -118,27 +118,19 @@ impl DataSource for GdeltSource {
         // form_urlencoded prepends "query=", but we only need the value portion.
         let encoded_value = &encoded_query["query=".len()..];
 
+        // timespan=60min scopes the search to recent articles, reducing overlap
+        // between rotated queries and avoiding stale results from the 3-month window.
         let url = format!(
-            "https://api.gdeltproject.org/api/v2/doc/doc?query={q}&mode=ArtList&maxrecords=250&format=json",
+            "https://api.gdeltproject.org/api/v2/doc/doc?query={q}&mode=ArtList&maxrecords=250&format=json&timespan=60min",
             q = encoded_value,
         );
 
         debug!(query, "Polling GDELT Doc API");
 
-        let resp = match ctx.http.get(&url).timeout(Duration::from_secs(15)).send().await {
-            Ok(r) => r,
-            Err(e) => {
-                warn!(error = %e, query, "GDELT request failed, retrying once");
-                tokio::time::sleep(Duration::from_secs(2)).await;
-                match ctx.http.get(&url).timeout(Duration::from_secs(15)).send().await {
-                    Ok(r) => r,
-                    Err(e2) => {
-                        warn!(error = %e2, query, "GDELT retry also failed");
-                        return Err(anyhow::anyhow!("GDELT request failed after retry: {e2}"));
-                    }
-                }
-            }
-        };
+        // No in-poll retry — let the registry handle backoff to avoid doubling
+        // request count during outages (which accelerates hitting GDELT rate limits).
+        let resp = ctx.http.get(&url).timeout(Duration::from_secs(30)).send().await
+            .map_err(|e| anyhow::anyhow!("GDELT request failed: {e}"))?;
 
         // Propagate 429 rate limits to the registry for proper backoff
         let resp = crate::rate_limit::check_rate_limit(resp, "gdelt")?;

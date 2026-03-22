@@ -368,21 +368,25 @@ pub async fn update_source_health(
     last_error: Option<&str>,
 ) -> anyhow::Result<()> {
     let is_healthy = status == "healthy";
+    // "connecting" is a transitional state, not a failure — don't bump the
+    // failure counter or set last_failure when a streaming source reconnects.
+    let is_connecting = status == "connecting";
 
     sqlx::query(
         r#"
         INSERT INTO source_health (source_id, status, last_error, last_success, last_failure, consecutive_failures)
         VALUES ($1, $2, $3,
             CASE WHEN $4 THEN NOW() ELSE NULL END,
-            CASE WHEN $4 THEN NULL ELSE NOW() END,
-            CASE WHEN $4 THEN 0 ELSE 1 END)
+            CASE WHEN $4 OR $5 THEN NULL ELSE NOW() END,
+            CASE WHEN $4 OR $5 THEN 0 ELSE 1 END)
         ON CONFLICT (source_id) DO UPDATE SET
             status = EXCLUDED.status,
             last_error = EXCLUDED.last_error,
             last_success = CASE WHEN $4 THEN NOW() ELSE source_health.last_success END,
-            last_failure = CASE WHEN $4 THEN source_health.last_failure ELSE NOW() END,
+            last_failure = CASE WHEN $4 OR $5 THEN source_health.last_failure ELSE NOW() END,
             consecutive_failures = CASE
                 WHEN $4 THEN 0
+                WHEN $5 THEN COALESCE(source_health.consecutive_failures, 0)
                 ELSE COALESCE(source_health.consecutive_failures, 0) + 1
             END
         "#,
@@ -391,6 +395,7 @@ pub async fn update_source_health(
     .bind(status)
     .bind(last_error)
     .bind(is_healthy)
+    .bind(is_connecting)
     .execute(pool)
     .await?;
     Ok(())
