@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicU64;
 
 use sqlx::PgPool;
 use sr_intel::{BudgetManager, SharedAnalysis};
-use sr_pipeline::{PipelineConfig, PipelineMetrics, PublishEvent, SharedSummaries, SituationClusterDTO};
+use sr_pipeline::{PipelineMetrics, PublishEvent, SharedSummaries, SituationClusterDTO};
 use sr_sources::registry::SourceRegistry;
 use sr_sources::shodan::CameraResult;
 use tokio::sync::broadcast;
@@ -28,8 +28,6 @@ pub struct AppState {
     pub situations: SharedSituations,
     pub cameras: SharedCameras,
     pub metrics: Arc<PipelineMetrics>,
-    pub pipeline_config: Arc<PipelineConfig>,
-    pub intel_config: Arc<sr_config::IntelConfig>,
     pub api_key: Option<String>,
     pub satellite_tles: SharedSatelliteTles,
 }

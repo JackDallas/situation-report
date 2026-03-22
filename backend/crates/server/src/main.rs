@@ -258,7 +258,6 @@ async fn main() -> anyhow::Result<()> {
 
     // Load pipeline configuration from environment
     let pipeline_config = Arc::new(PipelineConfig::from_env());
-    let intel_config = Arc::new(sr_config::IntelConfig::from_env());
     info!("Pipeline config loaded (use PIPELINE_CONFIG_JSON or PIPELINE_* env vars to override)");
 
     // Load restricted airspace spatial index for aviation event annotation
@@ -455,8 +454,6 @@ async fn main() -> anyhow::Result<()> {
         situations,
         cameras,
         metrics,
-        pipeline_config,
-        intel_config,
         api_key,
         satellite_tles,
     };
@@ -479,9 +476,6 @@ async fn main() -> anyhow::Result<()> {
         )
         .route("/api/positions", get(routes::positions::list_positions))
         .route("/api/positions/{entity_id}/trail", get(routes::positions::get_position_trail))
-        .route("/api/config", get(routes::config::get_app_config))
-        .route("/api/config/pipeline", get(routes::config::get_pipeline_config))
-        .route("/api/config/intel", get(routes::config::get_intel_config))
         .route("/api/stats", get(routes::events::event_stats))
         .route(
             "/api/pipeline/summaries",
@@ -515,13 +509,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/situations/{id}/cameras", get(routes::situations::get_situation_cameras))
         // Correlated incidents
         .route("/api/incidents", get(routes::incidents::list_incidents))
-        // Shodan proxy routes
-        .route("/api/shodan/search", get(routes::shodan::search_shodan))
-        .route("/api/shodan/host/{ip}", get(routes::shodan::host_lookup))
-        .route("/api/shodan/alerts", get(routes::shodan::list_alerts))
-        .route("/api/shodan/api-info", get(routes::shodan::api_info))
-        .route("/api/shodan/scan", post(routes::shodan::submit_scan))
-        .route("/api/shodan/discover", post(routes::shodan::trigger_discovery))
         // Analytics
         .route("/api/analytics/timeseries", get(routes::analytics::get_timeseries))
         .route("/api/analytics/anomalies", get(routes::analytics::get_anomalies))
@@ -538,9 +525,6 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/alerts/history", get(routes::alerts::get_history))
         // Satellite TLEs for FIRMS orbit tracking
         .route("/api/satellite-tles", get(routes::satellites::get_satellite_tles))
-        // Replay / algorithm testing
-        .route("/api/replay/run", post(routes::replay::run_replay))
-        .route("/api/replay/compare", post(routes::replay::compare_replay))
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth::require_api_key));
 
     // Static file serving for SvelteKit SPA
