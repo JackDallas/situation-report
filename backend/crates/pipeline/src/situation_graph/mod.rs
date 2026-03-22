@@ -195,6 +195,13 @@ pub(crate) fn is_region_center_fallback(lat: f64, lon: f64) -> bool {
         .any(|(clat, clon)| (lat - clat).abs() < 0.01 && (lon - clon).abs() < 0.01)
 }
 
+/// Check if coordinates are at (0,0) — "Null Island" in the Atlantic.
+/// Events with lat=0.0 AND lon=0.0 have no real location data; the zeros are
+/// default/missing values.  These must never enter coord_buffer or set a centroid.
+pub(crate) fn is_null_island(lat: f64, lon: f64) -> bool {
+    lat.abs() < 0.01 && lon.abs() < 0.01
+}
+
 /// Maximum distance (km) an event can be from the cluster centroid to contribute
 /// to the coord_buffer. Prevents worldwide GDACS events from averaging to Africa.
 const CENTROID_COHERENCE_RADIUS_KM: f64 = 2000.0;
@@ -860,7 +867,7 @@ impl SituationGraph {
         // Update centroid via coordinate buffer (median-based, outlier-resistant)
         // Prefer geo-reliable event types; fall back to any coords if cluster has none
         if let (Some(lat), Some(lon)) = (event.latitude, event.longitude) {
-            if !is_region_center_fallback(lat, lon) {
+            if !is_region_center_fallback(lat, lon) && !is_null_island(lat, lon) {
                 if has_reliable_coordinates(event.event_type) {
                     // Geo-reliable: add to buffer, but only if geographically coherent
                     // with existing centroid (prevents worldwide GDACS events from
@@ -1114,7 +1121,7 @@ impl SituationGraph {
         }
 
         let (centroid, coord_buffer) = match (event.latitude, event.longitude) {
-            (Some(lat), Some(lon)) if !is_region_center_fallback(lat, lon) => {
+            (Some(lat), Some(lon)) if !is_region_center_fallback(lat, lon) && !is_null_island(lat, lon) => {
                 if has_reliable_coordinates(event.event_type) {
                     // Geo-reliable: seed both centroid and buffer
                     (Some((lat, lon)), vec![(lat, lon)])
@@ -1515,7 +1522,12 @@ impl SituationGraph {
 
     /// Update a cluster's title with an AI-generated one.
     /// Applies title stability checks for parent situations to prevent drift.
-    pub fn update_cluster_title(&mut self, cluster_id: Uuid, title: String) {
+    ///
+    /// After setting the title, checks for near-duplicate titles among other
+    /// top-level clusters. If a duplicate is found, the smaller cluster is
+    /// merged into the larger one. Returns `Some((parent_id, child_id))` if
+    /// a post-title merge occurred, `None` otherwise.
+    pub fn update_cluster_title(&mut self, cluster_id: Uuid, title: String) -> Option<(Uuid, Uuid)> {
         let now = self.now();
         // Reject garbage titles from the AI
         if Self::is_garbage_title(&title) {
@@ -1542,7 +1554,7 @@ impl SituationGraph {
                     );
                 }
             }
-            return;
+            return None;
         }
 
         let child_count = self.clusters.values().filter(|c| c.parent_id == Some(cluster_id)).count();
@@ -1560,7 +1572,7 @@ impl SituationGraph {
                     );
                     // Still update the signal count to prevent re-triggering
                     cluster.title_signal_count_at_gen = cluster.signal_event_count;
-                    return;
+                    return None;
                 }
             }
             cluster.title = title;
@@ -1568,6 +1580,78 @@ impl SituationGraph {
             cluster.title_signal_count_at_gen = cluster.signal_event_count;
             cluster.last_title_gen = now;
         }
+
+        // --- Post-title dedup gate ---
+        // Now that the title is set, check if another top-level cluster already
+        // has an identical or near-identical title. This catches duplicates
+        // created by the AI giving the same title to different clusters that
+        // were created from simultaneous events before titles were assigned.
+        if let Some(dup_id) = self.find_duplicate_title_excluding(&self.clusters.get(&cluster_id)?.title.clone(), cluster_id) {
+            // Determine winner (more events) vs loser
+            let my_count = self.clusters.get(&cluster_id).map_or(0, |c| c.event_count);
+            let dup_count = self.clusters.get(&dup_id).map_or(0, |c| c.event_count);
+            let (parent_id, child_id) = if my_count >= dup_count {
+                (cluster_id, dup_id)
+            } else {
+                (dup_id, cluster_id)
+            };
+
+            info!(
+                parent_id = %parent_id,
+                child_id = %child_id,
+                title = %self.clusters.get(&parent_id).map(|c| c.title.as_str()).unwrap_or("?"),
+                "Post-title dedup: merging duplicate situation"
+            );
+
+            // Merge event data from child into parent
+            self.merge_child_into_parent(parent_id, child_id);
+
+            // Reparent grandchildren (child's children become parent's children)
+            let grandchild_ids: Vec<Uuid> = self.clusters.values()
+                .filter(|c| c.parent_id == Some(child_id))
+                .map(|c| c.id)
+                .collect();
+            for gc_id in &grandchild_ids {
+                if let Some(gc) = self.clusters.get_mut(gc_id) {
+                    gc.parent_id = Some(parent_id);
+                }
+            }
+
+            // Make child a sub-situation of parent
+            if let Some(child) = self.clusters.get_mut(&child_id) {
+                child.parent_id = Some(parent_id);
+            }
+
+            return Some((parent_id, child_id));
+        }
+
+        None
+    }
+
+    /// Like `find_duplicate_title` but excludes a specific cluster ID from matching.
+    /// Used for post-title dedup to avoid a cluster matching itself.
+    fn find_duplicate_title_excluding(&self, title: &str, exclude_id: Uuid) -> Option<Uuid> {
+        let normalized = title.trim().to_lowercase();
+        if Self::is_garbage_title(title) {
+            return None;
+        }
+        let mut best: Option<(Uuid, f64)> = None;
+        for c in self.clusters.values() {
+            if c.id == exclude_id || c.parent_id.is_some() {
+                continue; // skip self and non-top-level
+            }
+            let c_normalized = c.title.trim().to_lowercase();
+            if c_normalized == normalized {
+                return Some(c.id);
+            }
+            let sim = Self::word_jaccard(title, &c.title);
+            if sim >= 0.85 {
+                if best.as_ref().map_or(true, |(_, s)| sim > *s) {
+                    best = Some((c.id, sim));
+                }
+            }
+        }
+        best.map(|(id, _)| id)
     }
 
     /// Attach or accumulate supplementary web search data for a cluster.
@@ -1716,7 +1800,7 @@ impl SituationGraph {
 
             // Update centroid if event has reliable coordinates and is geographically coherent
             if let (Some(lat), Some(lon)) = (event.latitude, event.longitude) {
-                if !is_region_center_fallback(lat, lon) && has_reliable_coordinates(event.event_type) {
+                if !is_region_center_fallback(lat, lon) && !is_null_island(lat, lon) && has_reliable_coordinates(event.event_type) {
                     let close_enough = match cluster.centroid {
                         Some((clat, clon)) => {
                             distance_km(lat, lon, clat, clon) < CENTROID_COHERENCE_RADIUS_KM

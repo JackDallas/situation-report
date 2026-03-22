@@ -434,16 +434,36 @@ fn is_osint_relevant(title: &str, description: &str) -> bool {
 
     // Negative keywords — topics that are never OSINT-relevant
     const REJECT_KEYWORDS: &[&str] = &[
+        // Entertainment / celebrity
         "k-pop", "kpop", "bts ", "blackpink", "taylor swift", "beyonce",
         "grammy", "oscar", "emmy", "golden globe", "box office", "blockbuster",
+        "kardashian", "celebrity", "red carpet", "fashion week", "met gala",
+        "reality tv", "contestant", "idol ", "talent show",
+        "box set", "streaming series", "netflix", "new album", "concert tour",
+        // Awards / film
+        "academy award", "oscar nomination", "cannes", "sundance",
+        "film festival", "movie premiere", "tv series", "sitcom",
+        "soap opera", "talk show",
+        // Sports
         "premier league", "champions league", "world cup", "fifa", "uefa",
         "nba ", "nfl ", "nhl ", "mlb ", "cricket", "tennis", "rugby",
         "formula 1", "f1 race", "grand prix", "olympics",
-        "kardashian", "celebrity", "red carpet", "fashion week", "met gala",
-        "reality tv", "contestant", "idol ", "talent show",
+        "football", "soccer", "basketball", "baseball", "hockey",
+        "golf", "swimming", "athletics", "marathon", "triathlon",
+        "batting", "goalkeeper",
+        // Lifestyle
+        "retirement", "retires", "birthday", "anniversary",
+        "funeral", "obituary", "wedding", "divorce",
+        "baby bump", "engagement ring", "memoir", "autobiography",
+        // Food / drink
         "recipe", "cookbook", "restaurant review", "michelin star",
-        "box set", "streaming series", "netflix", "new album", "concert tour",
-        "wedding", "divorce", "baby bump", "engagement ring",
+        // Business fluff (not sanctions/trade-related — those hit accept keywords)
+        "stock price", "ipo", "quarterly earnings", "market cap",
+        "dividend", "profit margin",
+        // Culture / education
+        "museum", "exhibition", "gallery", "art show", "book launch",
+        "literary", "poetry", "music festival", "tour dates",
+        // Misc
         "horoscope", "zodiac", "astrology",
         "video game", "playstation", "xbox", "nintendo", "esports",
     ];

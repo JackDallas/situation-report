@@ -191,7 +191,7 @@ impl SituationGraph {
             severity: c.severity,
             first_seen: c.first_seen,
             last_updated: c.last_updated,
-            centroid: c.centroid,
+            centroid: c.centroid.filter(|(lat, lon)| !super::is_null_island(*lat, *lon)),
             event_count: c.event_count,
             source_types,
             source_count,
@@ -303,7 +303,7 @@ impl SituationGraph {
                     .map(|ids| ids.iter().map(|id| id.to_string()).collect())
                     .unwrap_or_default();
 
-                let centroid = c.centroid;
+                let centroid = c.centroid.filter(|(lat, lon)| !super::is_null_island(*lat, *lon));
 
                 let event_ids: Vec<(DateTime<Utc>, String)> = c
                     .event_ids

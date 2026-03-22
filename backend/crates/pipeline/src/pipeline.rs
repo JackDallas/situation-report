@@ -24,7 +24,7 @@ use crate::airspace::SharedAirspaceIndex;
 use crate::alerts::{AlertRule, AlertTracker, FiredAlert, evaluate_rules};
 use crate::core::{PipelineCore, NarrativeState};
 use crate::rules;
-use crate::situation_graph::{SituationCluster, SituationGraph, SituationPhase, is_region_center_fallback};
+use crate::situation_graph::{SituationCluster, SituationGraph, SituationPhase, is_region_center_fallback, is_null_island};
 use crate::types::{Incident, PublishEvent, Summary, SharedEntityResolver, SharedEntityGraph};
 use crate::window::CorrelationWindow;
 
@@ -467,7 +467,7 @@ fn cluster_from_db_row(row: &SituationDbRow) -> Option<SituationCluster> {
                             if a.len() >= 2 {
                                 let lat = a[0].as_f64()?;
                                 let lon = a[1].as_f64()?;
-                                if is_region_center_fallback(lat, lon) { None } else { Some((lat, lon)) }
+                                if is_region_center_fallback(lat, lon) || is_null_island(lat, lon) { None } else { Some((lat, lon)) }
                             } else { None }
                         })
                         .collect();
@@ -490,7 +490,7 @@ fn cluster_from_db_row(row: &SituationDbRow) -> Option<SituationCluster> {
                         if a.len() >= 2 {
                             let lat = a[0].as_f64()?;
                             let lon = a[1].as_f64()?;
-                            if is_region_center_fallback(lat, lon) {
+                            if is_region_center_fallback(lat, lon) || is_null_island(lat, lon) {
                                 None
                             } else {
                                 Some((lat, lon))
@@ -667,10 +667,12 @@ async fn upsert_situation(
         "direct_source_types": &cluster.direct_source_types,
     });
 
-    // Build PostGIS point from centroid if available
-    let location_wkt: Option<String> = cluster.centroid.map(|(lat, lon)| {
-        format!("SRID=4326;POINT({lon} {lat})")
-    });
+    // Build PostGIS point from centroid if available (skip Null Island)
+    let location_wkt: Option<String> = cluster.centroid
+        .filter(|(lat, lon)| !is_null_island(*lat, *lon))
+        .map(|(lat, lon)| {
+            format!("SRID=4326;POINT({lon} {lat})")
+        });
 
     // Build pgvector for centroid embedding if available
     let centroid_vec = centroid_embedding.map(pgvector::Vector::from);

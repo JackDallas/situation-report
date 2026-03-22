@@ -141,7 +141,7 @@ impl SituationGraph {
     /// Transfers event_ids, source_types, event_titles, severity, first_seen,
     /// last_updated, coord_buffer, event_count, and signal_event_count from
     /// child to parent. Returns `false` if either cluster is missing.
-    fn merge_child_into_parent(&mut self, parent_id: Uuid, child_id: Uuid) -> bool {
+    pub(crate) fn merge_child_into_parent(&mut self, parent_id: Uuid, child_id: Uuid) -> bool {
         // Collect child data first (immutable borrow)
         let (child_event_ids, child_source_types, child_event_titles,
              child_severity, child_first_seen, child_last_updated,
@@ -192,11 +192,18 @@ impl SituationGraph {
             parent.last_updated = child_last_updated;
         }
         if !child_coord_buffer.is_empty() {
-            parent.coord_buffer.extend(child_coord_buffer);
-            if parent.coord_buffer.len() > 30 {
-                parent.coord_buffer.drain(..parent.coord_buffer.len() - 30);
+            // Filter out Null Island (0,0) coords inherited from child
+            let filtered: Vec<(f64, f64)> = child_coord_buffer
+                .into_iter()
+                .filter(|(lat, lon)| !super::is_null_island(*lat, *lon))
+                .collect();
+            if !filtered.is_empty() {
+                parent.coord_buffer.extend(filtered);
+                if parent.coord_buffer.len() > 30 {
+                    parent.coord_buffer.drain(..parent.coord_buffer.len() - 30);
+                }
+                parent.centroid = Some(median_centroid(&parent.coord_buffer));
             }
-            parent.centroid = Some(median_centroid(&parent.coord_buffer));
         }
 
         true
