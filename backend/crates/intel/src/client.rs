@@ -1,7 +1,8 @@
 use anyhow::{Context, Result, bail};
-use rand::Rng;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
+
+use crate::retry::backoff_delay;
 
 /// Thin wrapper around the Anthropic Messages API with prompt caching support.
 pub struct ClaudeClient {
@@ -125,10 +126,7 @@ impl ClaudeClient {
         let mut last_err = String::new();
         for attempt in 0..4u32 {
             if attempt > 0 {
-                let base = 500 * 2u64.pow(attempt);
-                let jitter = rand::thread_rng().gen_range(0..500);
-                let delay = std::time::Duration::from_millis(base + jitter);
-                tokio::time::sleep(delay).await;
+                tokio::time::sleep(backoff_delay(attempt, 500, 500)).await;
             }
 
             let resp = self

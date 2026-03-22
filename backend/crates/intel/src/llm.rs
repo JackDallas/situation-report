@@ -162,6 +162,37 @@ fn enrichment_schema() -> serde_json::Value {
 }
 
 impl LlmClient {
+    /// Send a ChatRequest and extract (content, completion_tokens).
+    async fn send_chat(&self, request: &ChatRequest) -> Result<(String, u32)> {
+        let url = format!("{}/v1/chat/completions", self.base_url);
+        let resp = self.http
+            .post(&url)
+            .json(request)
+            .send()
+            .await
+            .context("LLM request failed")?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("LLM API error {status}: {body}");
+        }
+
+        let chat_resp: ChatResponse = resp.json().await
+            .context("Failed to parse LLM response")?;
+
+        let content = chat_resp.choices.first()
+            .and_then(|c| c.message.content.clone())
+            .unwrap_or_default();
+
+        let tokens = chat_resp.usage
+            .as_ref()
+            .and_then(|u| u.completion_tokens)
+            .unwrap_or(0);
+
+        Ok((content, tokens))
+    }
+
     /// Create from environment variables.
     /// Reads LLM_URL (required), falls back to OLLAMA_URL for backwards compat.
     /// Returns None if neither is set.
@@ -257,35 +288,11 @@ impl LlmClient {
             stream: false,
         };
 
-        let url = format!("{}/v1/chat/completions", self.base_url);
-        let resp = self.http
-            .post(&url)
-            .json(&request)
-            .send()
-            .await
-            .context("LLM request failed")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            bail!("LLM API error {status}: {body}");
-        }
-
-        let chat_resp: ChatResponse = resp.json().await
-            .context("Failed to parse LLM response")?;
-
-        let content = chat_resp.choices.first()
-            .and_then(|c| c.message.content.as_deref())
-            .unwrap_or("");
-
-        let tokens_used = chat_resp.usage
-            .as_ref()
-            .and_then(|u| u.completion_tokens)
-            .unwrap_or(0);
+        let (content, tokens_used) = self.send_chat(&request).await?;
 
         debug!(tokens = tokens_used, "LLM enrichment complete");
 
-        let mut enriched: EnrichedArticleV2 = serde_json::from_str(content)
+        let mut enriched: EnrichedArticleV2 = serde_json::from_str(&content)
             .context("Failed to parse enrichment JSON from LLM")?;
 
         enriched.model = "llama-server".to_string();
@@ -322,28 +329,9 @@ impl LlmClient {
             stream: false,
         };
 
-        let url = format!("{}/v1/chat/completions", self.base_url);
-        let resp = self.http
-            .post(&url)
-            .json(&request)
-            .send()
-            .await
-            .context("LLM request failed")?;
+        let (content, _tokens) = self.send_chat(&request).await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            bail!("LLM API error {status}: {body}");
-        }
-
-        let chat_resp: ChatResponse = resp.json().await
-            .context("Failed to parse LLM response")?;
-
-        let content = chat_resp.choices.first()
-            .and_then(|c| c.message.content.as_deref())
-            .unwrap_or("");
-
-        Ok(strip_think_tags(content))
+        Ok(strip_think_tags(&content))
     }
 
     /// Generate a situation narrative using local LLM.
@@ -371,34 +359,10 @@ impl LlmClient {
             stream: false,
         };
 
-        let url = format!("{}/v1/chat/completions", self.base_url);
-        let resp = self.http
-            .post(&url)
-            .json(&request)
-            .send()
-            .await
-            .context("LLM narrative request failed")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            bail!("LLM API error {status}: {body}");
-        }
-
-        let chat_resp: ChatResponse = resp.json().await
-            .context("Failed to parse LLM narrative response")?;
-
-        let content = chat_resp.choices.first()
-            .and_then(|c| c.message.content.as_deref())
-            .unwrap_or("");
-
-        let tokens = chat_resp.usage
-            .as_ref()
-            .and_then(|u| u.completion_tokens)
-            .unwrap_or(0);
+        let (content, tokens) = self.send_chat(&request).await?;
 
         debug!(tokens, "LLM narrative complete");
-        Ok((strip_think_tags(content), tokens))
+        Ok((strip_think_tags(&content), tokens))
     }
 
     /// Run periodic analysis using local LLM with structured JSON output.
@@ -441,31 +405,7 @@ impl LlmClient {
             stream: false,
         };
 
-        let url = format!("{}/v1/chat/completions", self.base_url);
-        let resp = self.http
-            .post(&url)
-            .json(&request)
-            .send()
-            .await
-            .context("LLM analysis request failed")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            bail!("LLM API error {status}: {body}");
-        }
-
-        let chat_resp: ChatResponse = resp.json().await
-            .context("Failed to parse LLM analysis response")?;
-
-        let content = chat_resp.choices.first()
-            .and_then(|c| c.message.content.clone())
-            .unwrap_or_default();
-
-        let tokens = chat_resp.usage
-            .as_ref()
-            .and_then(|u| u.completion_tokens)
-            .unwrap_or(0);
+        let (content, tokens) = self.send_chat(&request).await?;
 
         debug!(tokens, "LLM analysis complete");
         Ok((content, tokens))
@@ -533,28 +473,9 @@ impl LlmClient {
             stream: false,
         };
 
-        let url = format!("{}/v1/chat/completions", self.base_url);
-        let resp = self.http
-            .post(&url)
-            .json(&request)
-            .send()
-            .await
-            .context("LLM consolidation request failed")?;
+        let (raw_content, _tokens) = self.send_chat(&request).await?;
 
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            bail!("LLM API error {status}: {body}");
-        }
-
-        let chat_resp: ChatResponse = resp.json().await
-            .context("Failed to parse LLM consolidation response")?;
-
-        let content = chat_resp.choices.first()
-            .and_then(|c| c.message.content.as_deref())
-            .unwrap_or("");
-
-        let content = strip_think_tags(content);
+        let content = strip_think_tags(&raw_content);
 
         // Parse JSON — extract the "groups" object.
         // LLM may wrap in code fences or append extra text with braces,
@@ -644,27 +565,15 @@ impl LlmClient {
             stream: false,
         };
 
-        let url = format!("{}/v1/chat/completions", self.base_url);
-        let resp = self.http
-            .post(&url)
-            .json(&request)
-            .send()
-            .await
-            .context("LLM merge audit request failed")?;
+        let (content, _tokens) = match self.send_chat(&request).await {
+            Ok(result) => result,
+            Err(_) => {
+                // On error, assume merge is valid (don't undo)
+                return Ok(true);
+            }
+        };
 
-        if !resp.status().is_success() {
-            // On error, assume merge is valid (don't undo)
-            return Ok(true);
-        }
-
-        let chat_resp: ChatResponse = resp.json().await
-            .context("Failed to parse LLM merge audit response")?;
-
-        let content = chat_resp.choices.first()
-            .and_then(|c| c.message.content.as_deref())
-            .unwrap_or("");
-
-        let answer = strip_think_tags(content).trim().to_lowercase();
+        let answer = strip_think_tags(&content).trim().to_lowercase();
         // Default to accept — only explicit "no" rejects the merge.
         // This prevents empty responses, thinking artifacts, or ambiguous
         // output from causing fragmentation.

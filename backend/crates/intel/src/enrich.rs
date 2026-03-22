@@ -64,42 +64,7 @@ pub async fn enrich_article(
     let parsed: serde_json::Value =
         serde_json::from_str(json_str).context("Failed to parse enrichment JSON")?;
 
-    let inferred_location = parse_inferred_location(&parsed["inferred_location"]);
-
-    let enriched = EnrichedArticleV2 {
-        translated_title: parsed["translated_title"]
-            .as_str()
-            .unwrap_or(&article.title)
-            .to_string(),
-        summary: parsed["summary"]
-            .as_str()
-            .unwrap_or("")
-            .to_string(),
-        entities: parse_entities(&parsed["entities"]),
-        topics: parsed["topics"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        relationships: parse_relationships(&parsed["relationships"]),
-        state_changes: parse_state_changes(&parsed["state_changes"]),
-        inferred_location,
-        relevance_score: parsed["relevance_score"]
-            .as_f64()
-            .unwrap_or(0.5) as f32,
-        sentiment: parsed["sentiment"]
-            .as_f64()
-            .unwrap_or(0.0) as f32,
-        original_language: parsed["original_language"]
-            .as_str()
-            .unwrap_or("en")
-            .to_string(),
-        model: model.clone(),
-        tokens_used: response.usage.total_tokens(),
-    };
+    let enriched = parse_enrichment(&parsed, &article.title, &model, response.usage.total_tokens());
 
     debug!(
         title = enriched.translated_title,
@@ -214,44 +179,9 @@ pub async fn enrich_article_gemini(
     let parsed: serde_json::Value =
         serde_json::from_str(&response.text).context("Failed to parse Gemini enrichment JSON")?;
 
-    let inferred_location = parse_inferred_location(&parsed["inferred_location"]);
-
     let tokens_used = response.usage.prompt_token_count + response.usage.candidates_token_count;
 
-    let enriched = EnrichedArticleV2 {
-        translated_title: parsed["translated_title"]
-            .as_str()
-            .unwrap_or(&article.title)
-            .to_string(),
-        summary: parsed["summary"]
-            .as_str()
-            .unwrap_or("")
-            .to_string(),
-        entities: parse_entities(&parsed["entities"]),
-        topics: parsed["topics"]
-            .as_array()
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| v.as_str().map(String::from))
-                    .collect()
-            })
-            .unwrap_or_default(),
-        relationships: parse_relationships(&parsed["relationships"]),
-        state_changes: parse_state_changes(&parsed["state_changes"]),
-        inferred_location,
-        relevance_score: parsed["relevance_score"]
-            .as_f64()
-            .unwrap_or(0.5) as f32,
-        sentiment: parsed["sentiment"]
-            .as_f64()
-            .unwrap_or(0.0) as f32,
-        original_language: parsed["original_language"]
-            .as_str()
-            .unwrap_or("en")
-            .to_string(),
-        model: model.display_name().to_string(),
-        tokens_used,
-    };
+    let enriched = parse_enrichment(&parsed, &article.title, model.display_name(), tokens_used);
 
     debug!(
         title = enriched.translated_title,
@@ -328,6 +258,49 @@ fn parse_state_changes(value: &serde_json::Value) -> Vec<ExtractedStateChange> {
             })
         })
         .collect()
+}
+
+/// Parse enrichment JSON (from any provider) into an EnrichedArticleV2.
+fn parse_enrichment(
+    parsed: &serde_json::Value,
+    fallback_title: &str,
+    model: &str,
+    tokens_used: u32,
+) -> EnrichedArticleV2 {
+    EnrichedArticleV2 {
+        translated_title: parsed["translated_title"]
+            .as_str()
+            .unwrap_or(fallback_title)
+            .to_string(),
+        summary: parsed["summary"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        entities: parse_entities(&parsed["entities"]),
+        topics: parsed["topics"]
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default(),
+        relationships: parse_relationships(&parsed["relationships"]),
+        state_changes: parse_state_changes(&parsed["state_changes"]),
+        inferred_location: parse_inferred_location(&parsed["inferred_location"]),
+        relevance_score: parsed["relevance_score"]
+            .as_f64()
+            .unwrap_or(0.5) as f32,
+        sentiment: parsed["sentiment"]
+            .as_f64()
+            .unwrap_or(0.0) as f32,
+        original_language: parsed["original_language"]
+            .as_str()
+            .unwrap_or("en")
+            .to_string(),
+        model: model.to_string(),
+        tokens_used,
+    }
 }
 
 fn parse_inferred_location(value: &serde_json::Value) -> Option<InferredLocation> {

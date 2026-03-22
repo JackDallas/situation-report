@@ -6,6 +6,7 @@ pub mod gemini;
 pub mod narrative;
 pub mod llm;
 pub mod prompts;
+pub mod retry;
 pub mod search;
 pub mod titles;
 pub mod types;
