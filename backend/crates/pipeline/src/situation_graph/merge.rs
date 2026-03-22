@@ -1407,7 +1407,7 @@ impl SituationGraph {
         // Look up embeddings, keeping track of which index maps to which event
         let mut keyed_embeddings: Vec<(usize, Vec<f32>)> = Vec::new();
         for (idx, (_ts, ref_id)) in recent_keys.iter().enumerate() {
-            if let Some(emb) = embedding_cache.get(ref_id) {
+            if let Some(emb) = embedding_cache.peek(ref_id) {
                 keyed_embeddings.push((idx, emb.clone()));
             }
         }

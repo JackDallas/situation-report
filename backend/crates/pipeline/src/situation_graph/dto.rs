@@ -378,7 +378,25 @@ impl SituationGraph {
 
         dtos.sort_by(|a, b| b.last_updated.cmp(&a.last_updated));
 
-        // --- Pass A: Collapse 1-child parents where child has same title ---
+        Self::collapse_single_child(&mut dtos);
+        self.flatten_hierarchy(&mut dtos);
+        self.cap_category_counts(&mut dtos);
+        self.cleanup_orphans(&mut dtos);
+        Self::deduplicate_near_duplicates(&mut dtos);
+
+        // Final safety net: remove any top-level DTO with a garbage title.
+        // Catches titles that slipped through the initial filter (e.g., restored
+        // from DB with stale formulaic titles that haven't been AI-regenerated yet).
+        dtos.retain(|d| {
+            if d.parent_id.is_some() { return true; }
+            !super::SituationGraph::is_garbage_title(&d.title)
+        });
+
+        dtos
+    }
+
+    /// Pass A: Collapse 1-child parents where child has the same title.
+    fn collapse_single_child(dtos: &mut Vec<SituationClusterDTO>) {
         let single_child_collapse: HashSet<Uuid> = {
             let dto_map: HashMap<Uuid, &SituationClusterDTO> = dtos.iter().map(|d| (d.id, d)).collect();
             dtos.iter()
@@ -396,92 +414,95 @@ impl SituationGraph {
         };
         if !single_child_collapse.is_empty() {
             dtos.retain(|d| !single_child_collapse.contains(&d.id));
-            for d in &mut dtos {
+            for d in dtos.iter_mut() {
                 d.child_ids.retain(|cid| {
                     cid.parse::<Uuid>().map_or(true, |id| !single_child_collapse.contains(&id))
                 });
             }
         }
+    }
 
-        // --- Pass B: Flatten multi-level hierarchy + fix orphans ---
-        // Must run before ND cap so promoted clusters get counted.
-        {
-            let current_ids: HashSet<Uuid> = dtos.iter().map(|d| d.id).collect();
-            let parent_map: HashMap<Uuid, Option<Uuid>> = dtos.iter()
-                .map(|d| (d.id, d.parent_id.as_ref().and_then(|s| s.parse::<Uuid>().ok())))
-                .collect();
+    /// Pass B: Flatten multi-level hierarchy + fix orphans.
+    /// Must run before category caps so promoted clusters get counted.
+    fn flatten_hierarchy(&self, dtos: &mut Vec<SituationClusterDTO>) {
+        let current_ids: HashSet<Uuid> = dtos.iter().map(|d| d.id).collect();
+        let parent_map: HashMap<Uuid, Option<Uuid>> = dtos.iter()
+            .map(|d| (d.id, d.parent_id.as_ref().and_then(|s| s.parse::<Uuid>().ok())))
+            .collect();
 
-            // Walk up chain to find root parent
-            let find_root = |start_pid: Uuid| -> Option<Uuid> {
-                let mut current = start_pid;
-                for _ in 0..10 {
-                    match parent_map.get(&current).copied().flatten() {
-                        Some(gp) if current_ids.contains(&gp) => current = gp,
-                        _ => break,
-                    }
+        // Walk up chain to find root parent
+        let find_root = |start_pid: Uuid| -> Option<Uuid> {
+            let mut current = start_pid;
+            for _ in 0..10 {
+                match parent_map.get(&current).copied().flatten() {
+                    Some(gp) if current_ids.contains(&gp) => current = gp,
+                    _ => break,
                 }
-                if current != start_pid { Some(current) } else { None }
-            };
+            }
+            if current != start_pid { Some(current) } else { None }
+        };
 
-            let mut reparents: Vec<(Uuid, Uuid)> = Vec::new();
-            let mut orphans_promote: Vec<Uuid> = Vec::new();
-            let mut orphans_drop: Vec<Uuid> = Vec::new();
-            for d in dtos.iter() {
-                if let Some(ref pid_str) = d.parent_id {
-                    if let Ok(pid) = pid_str.parse::<Uuid>() {
-                        if !current_ids.contains(&pid) {
-                            if d.event_count >= self.config.quality.min_events_standalone
-                                && d.source_count >= 2
-                            {
-                                orphans_promote.push(d.id);
-                            } else {
-                                orphans_drop.push(d.id);
-                            }
-                        } else if let Some(root) = find_root(pid) {
-                            reparents.push((d.id, root));
+        let mut reparents: Vec<(Uuid, Uuid)> = Vec::new();
+        let mut orphans_promote: Vec<Uuid> = Vec::new();
+        let mut orphans_drop: Vec<Uuid> = Vec::new();
+        for d in dtos.iter() {
+            if let Some(ref pid_str) = d.parent_id {
+                if let Ok(pid) = pid_str.parse::<Uuid>() {
+                    if !current_ids.contains(&pid) {
+                        if d.event_count >= self.config.quality.min_events_standalone
+                            && d.source_count >= 2
+                        {
+                            orphans_promote.push(d.id);
+                        } else {
+                            orphans_drop.push(d.id);
                         }
+                    } else if let Some(root) = find_root(pid) {
+                        reparents.push((d.id, root));
                     }
                 }
             }
-
-            // Apply reparents (grandchild → root)
-            let reparent_map: HashMap<Uuid, Uuid> = reparents.iter().copied().collect();
-            for d in dtos.iter_mut() {
-                if let Some(&new_parent) = reparent_map.get(&d.id) {
-                    d.parent_id = Some(new_parent.to_string());
-                }
-                if orphans_promote.contains(&d.id) {
-                    d.parent_id = None;
-                }
-            }
-            // Update child_ids: remove reparented children from old parents, add to roots
-            for d in dtos.iter_mut() {
-                // Remove children that were reparented away
-                d.child_ids.retain(|cid| {
-                    if let Ok(cid_uuid) = cid.parse::<Uuid>() {
-                        if let Some(&new_parent) = reparent_map.get(&cid_uuid) {
-                            return new_parent == d.id; // keep only if we're the new parent
-                        }
-                    }
-                    true
-                });
-                // Add newly reparented children
-                for (child_id, new_parent) in &reparents {
-                    if *new_parent == d.id {
-                        let child_str = child_id.to_string();
-                        if !d.child_ids.contains(&child_str) {
-                            d.child_ids.push(child_str);
-                        }
-                    }
-                }
-            }
-
-            // Drop orphans that don't pass standalone gate
-            dtos.retain(|d| !orphans_drop.contains(&d.id));
         }
 
-        // --- Pass C: Cap natural-disaster top-level situations ---
-        // Runs after flatten so all promoted clusters are correctly counted.
+        // Apply reparents (grandchild -> root)
+        let reparent_map: HashMap<Uuid, Uuid> = reparents.iter().copied().collect();
+        for d in dtos.iter_mut() {
+            if let Some(&new_parent) = reparent_map.get(&d.id) {
+                d.parent_id = Some(new_parent.to_string());
+            }
+            if orphans_promote.contains(&d.id) {
+                d.parent_id = None;
+            }
+        }
+        // Update child_ids: remove reparented children from old parents, add to roots
+        for d in dtos.iter_mut() {
+            // Remove children that were reparented away
+            d.child_ids.retain(|cid| {
+                if let Ok(cid_uuid) = cid.parse::<Uuid>() {
+                    if let Some(&new_parent) = reparent_map.get(&cid_uuid) {
+                        return new_parent == d.id; // keep only if we're the new parent
+                    }
+                }
+                true
+            });
+            // Add newly reparented children
+            for (child_id, new_parent) in &reparents {
+                if *new_parent == d.id {
+                    let child_str = child_id.to_string();
+                    if !d.child_ids.contains(&child_str) {
+                        d.child_ids.push(child_str);
+                    }
+                }
+            }
+        }
+
+        // Drop orphans that don't pass standalone gate
+        dtos.retain(|d| !orphans_drop.contains(&d.id));
+    }
+
+    /// Pass C: Cap natural-disaster and routine-event top-level situations.
+    /// Runs after flatten so all promoted clusters are correctly counted.
+    fn cap_category_counts(&self, dtos: &mut Vec<SituationClusterDTO>) {
+        // Natural disasters
         let mut nd_standalone = 0usize;
         let mut nd_parent = 0usize;
         dtos.retain(|d| {
@@ -502,8 +523,7 @@ impl SituationGraph {
             }
         });
 
-        // --- Pass C2: Cap routine-event top-level situations ---
-        // Routine diplomatic/institutional/economic events should not flood the board.
+        // Routine diplomatic/institutional/economic events
         let mut routine_standalone = 0usize;
         let mut routine_parent = 0usize;
         dtos.retain(|d| {
@@ -529,109 +549,99 @@ impl SituationGraph {
                 routine_parent <= self.config.quality.routine_parent_cap
             }
         });
+    }
 
-        // --- Pass D: Final orphan cleanup after ND/routine caps ---
-        {
-            let final_ids: HashSet<Uuid> = dtos.iter().map(|d| d.id).collect();
-            let mut promote = Vec::new();
-            let mut drop = Vec::new();
-            for d in dtos.iter() {
-                if let Some(ref pid_str) = d.parent_id {
-                    if let Ok(pid) = pid_str.parse::<Uuid>() {
-                        if !final_ids.contains(&pid) {
-                            if d.event_count >= self.config.quality.min_events_standalone
-                                && d.source_count >= 2
-                            {
-                                promote.push(d.id);
-                            } else {
-                                drop.push(d.id);
-                            }
+    /// Pass D: Final orphan cleanup after category caps remove parents.
+    fn cleanup_orphans(&self, dtos: &mut Vec<SituationClusterDTO>) {
+        let final_ids: HashSet<Uuid> = dtos.iter().map(|d| d.id).collect();
+        let mut promote = Vec::new();
+        let mut drop = Vec::new();
+        for d in dtos.iter() {
+            if let Some(ref pid_str) = d.parent_id {
+                if let Ok(pid) = pid_str.parse::<Uuid>() {
+                    if !final_ids.contains(&pid) {
+                        if d.event_count >= self.config.quality.min_events_standalone
+                            && d.source_count >= 2
+                        {
+                            promote.push(d.id);
+                        } else {
+                            drop.push(d.id);
                         }
                     }
                 }
             }
-            for d in dtos.iter_mut() {
-                if promote.contains(&d.id) {
-                    d.parent_id = None;
+        }
+        for d in dtos.iter_mut() {
+            if promote.contains(&d.id) {
+                d.parent_id = None;
+            }
+        }
+        dtos.retain(|d| !drop.contains(&d.id));
+    }
+
+    /// Pass E: Merge near-duplicate top-level titles.
+    /// e.g., "Central Israel Rocket Alerts" + "Israel Central Rocket Alerts" -> keep higher-event one
+    fn deduplicate_near_duplicates(dtos: &mut Vec<SituationClusterDTO>) {
+        let top_level_indices: Vec<usize> = dtos.iter().enumerate()
+            .filter(|(_, d)| d.parent_id.is_none())
+            .map(|(i, _)| i)
+            .collect();
+
+        let mut merge_into: HashMap<usize, usize> = HashMap::new(); // victim -> winner
+        for ii in 0..top_level_indices.len() {
+            let idx_a = top_level_indices[ii];
+            if merge_into.contains_key(&idx_a) { continue; }
+            for jj in (ii + 1)..top_level_indices.len() {
+                let idx_b = top_level_indices[jj];
+                if merge_into.contains_key(&idx_b) { continue; }
+                let jaccard = super::scoring::title_jaccard_filtered(&dtos[idx_a].title, &dtos[idx_b].title);
+                if jaccard >= 0.75 {
+                    // Keep the one with more events
+                    let (winner, loser) = if dtos[idx_a].event_count >= dtos[idx_b].event_count {
+                        (idx_a, idx_b)
+                    } else {
+                        (idx_b, idx_a)
+                    };
+                    merge_into.insert(loser, winner);
                 }
             }
-            dtos.retain(|d| !drop.contains(&d.id));
         }
 
-        // --- Pass E: Merge near-duplicate top-level titles ---
-        // e.g., "Central Israel Rocket Alerts" + "Israel Central Rocket Alerts" → keep higher-event one
-        {
-            let top_level_indices: Vec<usize> = dtos.iter().enumerate()
-                .filter(|(_, d)| d.parent_id.is_none())
-                .map(|(i, _)| i)
+        if !merge_into.is_empty() {
+            // Pre-compute loser id -> winner id mappings
+            let reparent_map: HashMap<String, String> = merge_into.iter()
+                .map(|(&loser, &winner)| (dtos[loser].id.to_string(), dtos[winner].id.to_string()))
                 .collect();
 
-            let mut merge_into: HashMap<usize, usize> = HashMap::new(); // victim → winner
-            for ii in 0..top_level_indices.len() {
-                let idx_a = top_level_indices[ii];
-                if merge_into.contains_key(&idx_a) { continue; }
-                for jj in (ii + 1)..top_level_indices.len() {
-                    let idx_b = top_level_indices[jj];
-                    if merge_into.contains_key(&idx_b) { continue; }
-                    let jaccard = super::scoring::title_jaccard_filtered(&dtos[idx_a].title, &dtos[idx_b].title);
-                    if jaccard >= 0.75 {
-                        // Keep the one with more events
-                        let (winner, loser) = if dtos[idx_a].event_count >= dtos[idx_b].event_count {
-                            (idx_a, idx_b)
-                        } else {
-                            (idx_b, idx_a)
-                        };
-                        merge_into.insert(loser, winner);
-                    }
-                }
-            }
-
-            if !merge_into.is_empty() {
-                // Pre-compute loser id → winner id mappings
-                let reparent_map: HashMap<String, String> = merge_into.iter()
-                    .map(|(&loser, &winner)| (dtos[loser].id.to_string(), dtos[winner].id.to_string()))
-                    .collect();
-
-                // Move children of loser to winner
-                let loser_children: HashMap<usize, Vec<String>> = merge_into.iter()
-                    .map(|(&loser, _)| (loser, dtos[loser].child_ids.clone()))
-                    .collect();
-                for (&loser, &winner) in &merge_into {
-                    if let Some(children) = loser_children.get(&loser) {
-                        for cid in children {
-                            if !dtos[winner].child_ids.contains(cid) {
-                                dtos[winner].child_ids.push(cid.clone());
-                            }
+            // Move children of loser to winner
+            let loser_children: HashMap<usize, Vec<String>> = merge_into.iter()
+                .map(|(&loser, _)| (loser, dtos[loser].child_ids.clone()))
+                .collect();
+            for (&loser, &winner) in &merge_into {
+                if let Some(children) = loser_children.get(&loser) {
+                    for cid in children {
+                        if !dtos[winner].child_ids.contains(cid) {
+                            dtos[winner].child_ids.push(cid.clone());
                         }
                     }
                 }
-                // Reparent loser's children to winner
-                for d in dtos.iter_mut() {
-                    if let Some(ref pid) = d.parent_id {
-                        if let Some(new_pid) = reparent_map.get(pid) {
-                            d.parent_id = Some(new_pid.clone());
-                        }
+            }
+            // Reparent loser's children to winner
+            for d in dtos.iter_mut() {
+                if let Some(ref pid) = d.parent_id {
+                    if let Some(new_pid) = reparent_map.get(pid) {
+                        d.parent_id = Some(new_pid.clone());
                     }
                 }
-                let losers: HashSet<usize> = merge_into.keys().copied().collect();
-                let mut idx = 0;
-                dtos.retain(|_| {
-                    let keep = !losers.contains(&idx);
-                    idx += 1;
-                    keep
-                });
             }
+            let losers: HashSet<usize> = merge_into.keys().copied().collect();
+            let mut idx = 0;
+            dtos.retain(|_| {
+                let keep = !losers.contains(&idx);
+                idx += 1;
+                keep
+            });
         }
-
-        // --- Final safety net: remove any top-level DTO with a garbage title ---
-        // This catches titles that slipped through the initial filter (e.g., restored
-        // from DB with stale formulaic titles that haven't been AI-regenerated yet).
-        dtos.retain(|d| {
-            if d.parent_id.is_some() { return true; } // children are allowed
-            !super::SituationGraph::is_garbage_title(&d.title)
-        });
-
-        dtos
     }
 
     /// Return clusters that have AI titles and are due for (re-)search.

@@ -423,7 +423,7 @@ impl SituationGraph {
         if let Some(cache) = embedding_cache {
             let event_key = embed_key(event);
             if let (Some(event_vec), Some(centroid)) = (
-                cache.get(&event_key),
+                cache.peek(&event_key),
                 cache.get_cluster_centroid(&cluster.id),
             ) {
                 let sim = EmbeddingCache::cosine_similarity(event_vec, centroid);

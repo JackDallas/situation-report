@@ -891,7 +891,7 @@ impl SituationGraph {
                         .collect();
 
                     let embeddings: Vec<&[f32]> = recent_keys.iter()
-                        .filter_map(|k| cache.get(k))
+                        .filter_map(|k| cache.peek(k))
                         .map(|v| v.as_slice())
                         .collect();
 

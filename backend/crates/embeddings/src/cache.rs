@@ -1,6 +1,7 @@
 use std::collections::HashMap;
+use std::num::NonZeroUsize;
 
-use indexmap::IndexMap;
+use lru::LruCache;
 use uuid::Uuid;
 
 /// In-memory cache for event embeddings and cluster centroids.
@@ -11,12 +12,10 @@ use uuid::Uuid;
 /// Cluster centroids are keyed by cluster UUID and updated via EWMA
 /// (exponentially-weighted moving average) so recent events dominate.
 pub struct EmbeddingCache {
-    /// Event embedding vectors, keyed by embed_key (IndexMap preserves insertion order for LRU-like eviction).
-    events: IndexMap<String, Vec<f32>>,
+    /// Event embedding vectors, keyed by embed_key. LRU eviction on insert when at capacity.
+    events: LruCache<String, Vec<f32>>,
     /// Cluster centroid vectors, keyed by cluster ID.
     centroids: HashMap<Uuid, Vec<f32>>,
-    /// Max number of event embeddings to cache.
-    max_events: usize,
     /// EWMA smoothing factor for centroid updates.
     /// Alpha=0.05 means ~50% weight on the last ~14 events.
     centroid_alpha: f32,
@@ -24,30 +23,28 @@ pub struct EmbeddingCache {
 
 impl EmbeddingCache {
     pub fn new(max_events: usize, centroid_alpha: f32) -> Self {
+        let cap = NonZeroUsize::new(max_events).unwrap_or(NonZeroUsize::new(1).unwrap());
         Self {
-            events: IndexMap::new(),
+            events: LruCache::new(cap),
             centroids: HashMap::new(),
-            max_events,
             centroid_alpha,
         }
     }
 
     /// Insert an event embedding into the cache.
-    /// If the cache is full, evict the oldest half (IndexMap preserves insertion order).
+    /// LruCache automatically evicts the least-recently-used entry when at capacity.
     pub fn insert(&mut self, key: String, embedding: Vec<f32>) {
-        if self.events.len() >= self.max_events {
-            // Evict oldest half (IndexMap preserves insertion order)
-            let drain_count = self.max_events / 2;
-            for _ in 0..drain_count {
-                self.events.shift_remove_index(0);
-            }
-        }
-        self.events.insert(key, embedding);
+        self.events.put(key, embedding);
     }
 
-    /// Get an event's embedding by key.
-    pub fn get(&self, key: &str) -> Option<&Vec<f32>> {
+    /// Get an event's embedding by key (promotes to most-recently-used).
+    pub fn get(&mut self, key: &str) -> Option<&Vec<f32>> {
         self.events.get(key)
+    }
+
+    /// Get an event's embedding by key without promoting it in the LRU order.
+    pub fn peek(&self, key: &str) -> Option<&Vec<f32>> {
+        self.events.peek(key)
     }
 
     /// Get a cluster's centroid vector.
