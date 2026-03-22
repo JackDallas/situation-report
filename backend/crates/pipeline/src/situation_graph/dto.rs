@@ -148,10 +148,18 @@ impl SituationGraph {
         let mut region_codes: Vec<String> = c.region_codes.iter().cloned().collect();
         region_codes.sort();
         region_codes.truncate(4);
+        // Children use their own direct_source_types (not inherited from parent).
+        // Parents and standalone clusters use the full source_types (which includes
+        // children's contributions — correct aggregate view).
+        let effective_sources = if c.parent_id.is_some() && !c.direct_source_types.is_empty() {
+            &c.direct_source_types
+        } else {
+            &c.source_types
+        };
         let mut source_types: Vec<String> =
-            c.source_types.iter().map(|st| st.to_string()).collect();
+            effective_sources.iter().map(|st| st.to_string()).collect();
         source_types.sort();
-        let source_count = effective_source_diversity(&c.source_types);
+        let source_count = effective_source_diversity(effective_sources);
 
         let child_ids: Vec<String> = children_map
             .get(&c.id)
@@ -280,9 +288,15 @@ impl SituationGraph {
                 let mut region_codes: Vec<String> = c.region_codes.iter().cloned().collect();
                 region_codes.sort();
                 region_codes.truncate(4);
-                let mut source_types: Vec<String> = c.source_types.iter().map(|st| st.to_string()).collect();
+                // Children use their own direct_source_types (not inherited from parent).
+                let effective_sources = if c.parent_id.is_some() && !c.direct_source_types.is_empty() {
+                    &c.direct_source_types
+                } else {
+                    &c.source_types
+                };
+                let mut source_types: Vec<String> = effective_sources.iter().map(|st| st.to_string()).collect();
                 source_types.sort();
-                let source_count = effective_source_diversity(&c.source_types);
+                let source_count = effective_source_diversity(effective_sources);
 
                 let child_ids: Vec<String> = children_map
                     .get(&c.id)

@@ -1782,6 +1782,16 @@ impl SituationGraph {
                 }
             }
 
+            // Bootstrap direct_source_types for clusters persisted before this field existed.
+            // For children: if direct_source_types is empty but the cluster has events,
+            // we can't recover the true direct sources, so leave empty and let the DTO
+            // fallback use source_types. For top-level clusters (no parent), initialize
+            // direct_source_types = source_types since all their sources are "direct".
+            if cluster.direct_source_types.is_empty() && cluster.parent_id.is_none() {
+                cluster.direct_source_types = cluster.source_types.clone();
+                cluster.direct_event_count = cluster.event_count;
+            }
+
             // Rebuild entity index
             for entity in &cluster.entities {
                 self.entity_index.entry(entity.clone()).or_default().insert(id);
