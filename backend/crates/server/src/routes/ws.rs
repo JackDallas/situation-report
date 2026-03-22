@@ -1,11 +1,13 @@
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::response::IntoResponse;
-use futures::{SinkExt, StreamExt};
+use futures::SinkExt;
 use sr_pipeline::PublishEvent;
 use std::time::Duration;
 use tokio_stream::wrappers::BroadcastStream;
-use tokio_stream::StreamExt as TokioStreamExt;
+
+// Use futures::StreamExt for WebSocket receiver (not tokio_stream)
+use futures::StreamExt as FuturesStreamExt;
 
 use crate::state::AppState;
 
@@ -33,7 +35,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
     loop {
         tokio::select! {
             // Incoming message from broadcast channel
-            msg = TokioStreamExt::next(&mut stream) => {
+            msg = tokio_stream::StreamExt::next(&mut stream) => {
                 match msg {
                     Some(Ok(publish_event)) => {
                         let (event_type, json) = match format_event(&publish_event) {
@@ -59,7 +61,7 @@ async fn handle_socket(socket: WebSocket, state: AppState) {
             }
 
             // Incoming message from WebSocket client
-            msg = receiver.next() => {
+            msg = FuturesStreamExt::next(&mut receiver) => {
                 match msg {
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Err(_)) => break,
