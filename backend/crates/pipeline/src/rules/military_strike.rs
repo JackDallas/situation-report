@@ -70,6 +70,25 @@ impl CorrelationRule for MilitaryStrikeRule {
             return None;
         }
 
+        // Filter out natural earthquakes: genuine strike-induced seismic events
+        // are typically shallow (< 10km depth) and low magnitude (< 4.0).
+        // Natural earthquakes (M4.0+, deeper) in seismically active regions like
+        // Greece should not be treated as evidence of military strikes.
+        seismic.retain(|s| {
+            let mag = s.payload.get("mag")
+                .or_else(|| s.payload.get("magnitude"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            let depth = s.payload.get("depth")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            // Keep only explosion-like signatures: low magnitude, shallow depth
+            mag < 4.0 || depth < 10.0
+        });
+        if seismic.is_empty() {
+            return None;
+        }
+
         // Check for military-related flights
         let mut military_flights: Vec<&InsertableEvent> = flights
             .iter()

@@ -328,6 +328,27 @@ impl SituationGraph {
             }
         }
 
+        // Source type incompatibility: flight positions should not merge into
+        // natural disaster clusters (seismic/thermal/GDACS/Copernicus-only).
+        // This prevents Greece-style false positives where routine NATO logistics
+        // flights near earthquake epicenters get classified as military strikes.
+        if event.event_type == EventType::FlightPosition {
+            let natural_only = cluster.source_types.iter().all(|s| {
+                matches!(s, SourceType::Usgs | SourceType::Firms | SourceType::Gdacs | SourceType::Copernicus)
+            });
+            if natural_only && !cluster.source_types.is_empty() {
+                return None;
+            }
+        }
+        // Converse: natural disaster events should not merge into flight-only clusters
+        if matches!(event.event_type, EventType::SeismicEvent | EventType::ThermalAnomaly) {
+            let flight_only = !cluster.source_types.is_empty()
+                && cluster.source_types.iter().all(|s| s.is_flight_source());
+            if flight_only {
+                return None;
+            }
+        }
+
         // Smooth size penalty — may block merge entirely
         let penalty = self.config.size_penalty(cluster.event_count)?;
         let mut score: i32 = penalty;
@@ -552,6 +573,33 @@ impl SituationGraph {
         // "situations" on their own; flights only become relevant when correlated
         // with conflict, news, or other intelligence signals.
         if event.event_type == EventType::FlightPosition {
+            return;
+        }
+
+        // Routine earthquake suppression: seismic events below M6.5 should NOT
+        // create standalone situations. They can merge into existing clusters
+        // (handled above) but are not individually significant enough to warrant
+        // a new situation. M6.5+ earthquakes are genuinely newsworthy.
+        if event.event_type == EventType::SeismicEvent {
+            let mag = event.payload.get("mag")
+                .or_else(|| event.payload.get("magnitude"))
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0);
+            if mag < 6.5 {
+                debug!(
+                    mag = mag,
+                    "Suppressing routine earthquake (< M6.5) from creating situation"
+                );
+                return;
+            }
+        }
+
+        // Standalone wildfire/thermal suppression: FIRMS thermal anomalies should
+        // NOT create new situations on their own. They can merge into existing
+        // clusters (e.g. conflict-thermal correlation) but isolated hotspots are
+        // too common to be individually significant.
+        if event.event_type == EventType::ThermalAnomaly {
+            debug!("Suppressing standalone thermal anomaly from creating situation");
             return;
         }
 
