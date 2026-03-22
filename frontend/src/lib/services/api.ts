@@ -85,6 +85,60 @@ export interface StoredEvent {
 	payload: Record<string, unknown>;
 }
 
+/** Search result from GET /api/search */
+export interface SearchResult {
+	source_type: string;
+	source_id: string | null;
+	title: string | null;
+	event_type: string | null;
+	severity: string | null;
+	event_time: string;
+	region_code: string | null;
+	score: number;
+	match_type: string;
+}
+
+/** Similar event result from GET /api/search/similar */
+export interface SimilarResult {
+	source_type: string;
+	source_id: string | null;
+	title: string | null;
+	event_type: string | null;
+	event_time: string;
+	distance: number;
+}
+
+/** Budget status from GET /api/intel/budget */
+export interface BudgetStatus {
+	spent_today_usd: number;
+	daily_budget_usd: number;
+	remaining_usd: number;
+	budget_exhausted: boolean;
+	degraded: boolean;
+}
+
+/** Pipeline metrics from GET /api/pipeline/metrics */
+export interface PipelineMetrics {
+	events_ingested: number;
+	events_correlated: number;
+	events_enriched: number;
+	events_published: number;
+	events_filtered: number;
+	incidents_created: number;
+	gpu_paused: boolean;
+	gpu_state?: 'on' | 'starting' | 'off' | 'stopping';
+}
+
+/** Source health from GET /api/analytics/sources/health */
+export interface SourceHealthEntry {
+	source_id: string;
+	status: string;
+	last_success: string | null;
+	last_error: string | null;
+	consecutive_failures: number;
+	total_events_24h: number;
+}
+
 async function fetchJson<T>(path: string, init?: RequestInit): Promise<T> {
 	const res = await fetch(`${BASE}${path}`, init);
 	if (!res.ok) {
@@ -166,10 +220,6 @@ export const api = {
 		return fetchJson('/api/stats');
 	},
 
-	async getConfig(): Promise<Record<string, unknown>> {
-		return fetchJson('/api/config');
-	},
-
 	async getEntities(limit = 100): Promise<EntityNode[]> {
 		return fetchJson(`/api/entities?limit=${limit}`);
 	},
@@ -223,5 +273,51 @@ export const api = {
 		if (params?.since) searchParams.set('since', params.since);
 		const qs = searchParams.toString();
 		return fetchJson(`/api/positions${qs ? `?${qs}` : ''}`);
+	},
+
+	/** Hybrid lexical+semantic event search. */
+	async searchEvents(query: string, limit = 20): Promise<SearchResult[]> {
+		const params = new URLSearchParams();
+		params.set('q', query);
+		params.set('limit', String(limit));
+		return fetchJson(`/api/search?${params}`);
+	},
+
+	/** Find events similar to a given event (vector similarity). */
+	async findSimilar(
+		sourceType: string,
+		sourceId: string,
+		eventTime: string,
+	): Promise<SimilarResult[]> {
+		const params = new URLSearchParams();
+		params.set('source_type', sourceType);
+		params.set('source_id', sourceId);
+		params.set('event_time', eventTime);
+		return fetchJson(`/api/search/similar?${params}`);
+	},
+
+	/** Get AI budget status. */
+	async getBudget(): Promise<BudgetStatus> {
+		return fetchJson('/api/intel/budget');
+	},
+
+	/** Get pipeline metrics (throughput counters, GPU status). */
+	async getPipelineMetrics(): Promise<PipelineMetrics> {
+		return fetchJson('/api/pipeline/metrics');
+	},
+
+	/** Pause GPU — stops the llama container to free VRAM. */
+	async pauseGpu(): Promise<{ gpu_state: string }> {
+		return fetchJson('/api/pipeline/gpu/pause', { method: 'POST' });
+	},
+
+	/** Resume GPU — starts the llama container and waits for health. */
+	async resumeGpu(): Promise<{ gpu_state: string }> {
+		return fetchJson('/api/pipeline/gpu/resume', { method: 'POST' });
+	},
+
+	/** Get detailed source health from analytics. */
+	async getSourcesHealth(): Promise<SourceHealthEntry[]> {
+		return fetchJson('/api/analytics/sources/health');
 	},
 };

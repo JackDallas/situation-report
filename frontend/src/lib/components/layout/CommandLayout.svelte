@@ -14,6 +14,7 @@
 	import SituationDrawer from '$lib/components/panels/SituationDrawer.svelte';
 	import PositionDetailPane from '$lib/components/panels/PositionDetailPane.svelte';
 	import MapLegend from '$lib/components/shared/MapLegend.svelte';
+	import SearchPanel from '$lib/components/panels/SearchPanel.svelte';
 
 	const eventsPerMinute = $derived.by(() => {
 		const fiveMinAgo = Date.now() - 300000;
@@ -85,6 +86,8 @@
 					<PositionDetailPane />
 				{:else if uiStore.rightPanel === 'news'}
 					<NewsPanel />
+				{:else if uiStore.rightPanel === 'search'}
+					<SearchPanel />
 				{:else}
 					<SituationReportsPanel />
 				{/if}
