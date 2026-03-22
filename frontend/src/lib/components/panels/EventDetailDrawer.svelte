@@ -8,7 +8,6 @@
 		getSeverityColor,
 		getEventSummary,
 		formatTimestamp,
-		formatAbsoluteTime,
 		formatFullTimestamp
 	} from '$lib/services/event-display';
 	import { getOutlink, getEventDetails } from '$lib/services/outlinks';

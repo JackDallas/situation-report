@@ -348,7 +348,8 @@ class MapStore {
 					simplified.push(pt);
 					continue;
 				}
-				const last = simplified[simplified.length - 1]!;
+				const last = simplified[simplified.length - 1];
+				if (!last) continue;
 				const dLng = pt.lng - last.lng;
 				const dLat = pt.lat - last.lat;
 				if (dLng * dLng + dLat * dLat >= minDistSq) {

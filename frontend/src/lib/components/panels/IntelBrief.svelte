@@ -1,6 +1,5 @@
 <script lang="ts">
 	import { eventStore } from '$lib/stores/events.svelte';
-	import { uiStore } from '$lib/stores/ui.svelte';
 	import { clockStore } from '$lib/stores/clock.svelte';
 	import { formatAbsoluteTime, formatTimestamp, formatFullTimestamp } from '$lib/services/event-display';
 

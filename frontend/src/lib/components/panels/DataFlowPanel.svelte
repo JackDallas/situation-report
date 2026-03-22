@@ -11,7 +11,6 @@
 	}
 
 	let metrics = $state<PipelineMetrics | null>(null);
-	let prevMetrics = $state<PipelineMetrics | null>(null);
 	let rates = $state<Record<string, number>>({});
 	let timer: ReturnType<typeof setInterval>;
 
@@ -34,7 +33,6 @@
 							Math.round(((data.events_enriched - metrics.events_enriched) / dt) * 10) / 10
 					};
 				}
-				prevMetrics = metrics;
 				metrics = data;
 			}
 		} catch {

@@ -1,6 +1,4 @@
 <script lang="ts">
-	import { clockStore } from '$lib/stores/clock.svelte';
-
 	interface Props {
 		situationId: string;
 	}
@@ -117,28 +115,36 @@
 		<!-- Time labels -->
 		<div class="mt-1 flex justify-between text-[9px] text-text-muted">
 			{#if buckets.length > 0}
-				<span>{formatBucketTime(buckets[0]!.bucket)}</span>
+				{@const first = buckets[0]}
+				{#if first}
+					<span>{formatBucketTime(first.bucket)}</span>
+				{/if}
 				{#if buckets.length > 1}
-					<span>{formatBucketTime(buckets[buckets.length - 1]!.bucket)}</span>
+					{@const last = buckets[buckets.length - 1]}
+					{#if last}
+						<span>{formatBucketTime(last.bucket)}</span>
+					{/if}
 				{/if}
 			{/if}
 		</div>
 
 		<!-- Tooltip -->
-		{#if hoveredIndex !== null && buckets[hoveredIndex] !== undefined}
-			{@const b = buckets[hoveredIndex]!}
-			{@const leftPct = ((hoveredIndex + 0.5) / buckets.length) * 100}
-			<div
-				class="pointer-events-none absolute -top-14 z-10 whitespace-nowrap rounded border border-border-default bg-bg-primary px-2 py-1 text-[10px] shadow-lg"
-				style="left: {leftPct}%; transform: translateX(-50%);"
-			>
-				<div class="font-medium text-text-primary">
-					{b.event_count} event{b.event_count !== 1 ? 's' : ''}
+		{#if hoveredIndex !== null}
+			{@const b = buckets[hoveredIndex]}
+			{#if b}
+				{@const leftPct = ((hoveredIndex + 0.5) / buckets.length) * 100}
+				<div
+					class="pointer-events-none absolute -top-14 z-10 whitespace-nowrap rounded border border-border-default bg-bg-primary px-2 py-1 text-[10px] shadow-lg"
+					style="left: {leftPct}%; transform: translateX(-50%);"
+				>
+					<div class="font-medium text-text-primary">
+						{b.event_count} event{b.event_count !== 1 ? 's' : ''}
+					</div>
+					<div class="text-text-muted">
+						{b.source_count} source{b.source_count !== 1 ? 's' : ''} &middot; {formatBucketDate(b.bucket)} {formatBucketTime(b.bucket)}
+					</div>
 				</div>
-				<div class="text-text-muted">
-					{b.source_count} source{b.source_count !== 1 ? 's' : ''} &middot; {formatBucketDate(b.bucket)} {formatBucketTime(b.bucket)}
-				</div>
-			</div>
+			{/if}
 		{/if}
 	</div>
 {:else if error}

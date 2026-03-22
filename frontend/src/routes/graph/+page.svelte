@@ -238,24 +238,26 @@
 
 			const isHovered = hoveredNode?.id === node.id;
 			const isSelected = selectedNode?.id === node.id;
+			const hovId = hoveredNode?.id;
 			const isConnected =
-				hoveredNode &&
+				hovId != null &&
 				links.some((l) => {
 					const s = (l.source as GraphNode).id;
 					const t = (l.target as GraphNode).id;
 					return (
-						(s === hoveredNode!.id && t === node.id) ||
-						(t === hoveredNode!.id && s === node.id)
+						(s === hovId && t === node.id) ||
+						(t === hovId && s === node.id)
 					);
 				});
+			const selId = selectedNode?.id;
 			const isSelectedConnected =
-				selectedNode &&
+				selId != null &&
 				links.some((l) => {
 					const s = (l.source as GraphNode).id;
 					const t = (l.target as GraphNode).id;
 					return (
-						(s === selectedNode!.id && t === node.id) ||
-						(t === selectedNode!.id && s === node.id)
+						(s === selId && t === node.id) ||
+						(t === selId && s === node.id)
 					);
 				});
 

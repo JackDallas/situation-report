@@ -1,13 +1,10 @@
 <script lang="ts">
 	import { situationsStore } from '$lib/stores/situations.svelte';
-	import { eventStore } from '$lib/stores/events.svelte';
 	import { mapStore } from '$lib/stores/map.svelte';
 	import { uiStore } from '$lib/stores/ui.svelte';
 	import { clockStore } from '$lib/stores/clock.svelte';
 	import {
-		getTypeColor,
 		getSeverityColor,
-		getEventSummary,
 		formatTimestamp,
 		formatAbsoluteTime,
 		formatFullTimestamp
@@ -15,7 +12,6 @@
 	import { getOutlink } from '$lib/services/outlinks';
 	import { CATEGORY_COLORS, REGION_LABELS } from '$lib/types/situations';
 	import { renderMarkdown, splitMarkdownParagraphs } from '$lib/services/markdown';
-	import SituationTimeline from './SituationTimeline.svelte';
 
 	interface NarrativeEntry {
 		id: string;
@@ -46,7 +42,6 @@
 		payload: Record<string, unknown>;
 	}
 
-	let expandedGroups = $state<Set<string>>(new Set());
 	let cameras = $state<Record<string, unknown>[]>([]);
 	let narratives = $state<NarrativeEntry[]>([]);
 	let narrativesExpanded = $state(false);
@@ -91,7 +86,7 @@
 			// Group key: first topic > region > severity
 			let groupKey: string;
 			if (child.topics && child.topics.length > 0) {
-				groupKey = child.topics[0]!;
+				groupKey = child.topics[0] ?? 'Unknown';
 			} else if (child.region && child.region !== 'global') {
 				groupKey = REGION_LABELS[child.region] ?? child.region;
 			} else {
@@ -221,7 +216,6 @@
 
 	function close() {
 		situationsStore.selectedSituation = null;
-		expandedGroups = new Set();
 		narrativesExpanded = false;
 		subSituationsExpanded = false;
 		expandedTreeGroups = new Set();
@@ -229,24 +223,8 @@
 		uiStore.openDefault();
 	}
 
-	function flyTo() {
-		if (situation?.latitude != null && situation?.longitude != null) {
-			mapStore.flyTo(situation.longitude, situation.latitude, situation.incident ? 10 : 6);
-		}
-	}
-
 	function handleKeydown(e: KeyboardEvent) {
 		if (e.key === 'Escape' && situation) close();
-	}
-
-	function openEvent(event: import('$lib/types/events').SituationEvent) {
-		situationsStore.selectedSituation = null;
-		expandedGroups = new Set();
-		eventStore.selectedEvent = event;
-		uiStore.openPanel('event-detail');
-		if (event.latitude != null && event.longitude != null) {
-			mapStore.flyTo(event.longitude, event.latitude);
-		}
 	}
 
 	function navigateToSituation(id: string) {
@@ -258,32 +236,6 @@
 			}
 		}
 	}
-
-	function toggleGroup(sourceType: string) {
-		const next = new Set(expandedGroups);
-		if (next.has(sourceType)) {
-			next.delete(sourceType);
-		} else {
-			next.add(sourceType);
-		}
-		expandedGroups = next;
-	}
-
-	// Group events by source_type for cluster situations
-	const eventsBySource = $derived.by(() => {
-		if (!situation || situation.incident)
-			return new Map<string, import('$lib/types/events').SituationEvent[]>();
-		const grouped = new Map<string, import('$lib/types/events').SituationEvent[]>();
-		for (const event of situation.events) {
-			let group = grouped.get(event.source_type);
-			if (!group) {
-				group = [];
-				grouped.set(event.source_type, group);
-			}
-			group.push(event);
-		}
-		return grouped;
-	});
 </script>
 
 <svelte:window onkeydown={handleKeydown} />
@@ -537,8 +489,8 @@
 			{/if}
 
 			<!-- Narratives (intelligence analysis for this situation) -->
-			{#if narratives.length > 0}
-				{@const latest = narratives[0]!}
+			{#if narratives.length > 0 && narratives[0]}
+				{@const latest = narratives[0]}
 				<div class="mt-3">
 					<span class="text-[10px] font-semibold uppercase tracking-wider text-text-muted">
 						Analysis

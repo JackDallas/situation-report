@@ -900,10 +900,10 @@
 			});
 
 			// Bases popup on click
-			map.on('click', 'bases-symbols', (e: any) => {
-				if (!e.features?.length) return;
-				const f = e.features[0];
-				const coords = f.geometry.coordinates.slice();
+			map.on('click', 'bases-symbols', (e: MapLayerMouseEvent) => {
+				const f = e.features?.[0];
+				if (!f || f.geometry.type !== 'Point') return;
+				const coords = f.geometry.coordinates as [number, number];
 				const p = f.properties;
 				const html = `<div style="font-family:monospace;font-size:12px;color:#e5e7eb;max-width:220px;">
 					<div style="font-weight:bold;color:#fbbf24;margin-bottom:4px;">${p.name || 'Unknown'}</div>
@@ -1099,11 +1099,11 @@
 			// --- Click handlers ---
 
 			// Click handler for situation markers
-			map.on('click', 'situation-dots', (e: any) => {
-				if (!e.features?.length) return;
-				const f = e.features[0];
+			map.on('click', 'situation-dots', (e: MapLayerMouseEvent) => {
+				const f = e.features?.[0];
+				if (!f || f.geometry.type !== 'Point') return;
 				const p = f.properties;
-				const coords = f.geometry.coordinates.slice();
+				const coords = f.geometry.coordinates as [number, number];
 
 				const sevColor = p.severity === 'critical' ? '#f87171'
 					: p.severity === 'high' ? '#fb923c'
@@ -1134,11 +1134,12 @@
 			map.on('mouseleave', 'situation-dots', () => { map.getCanvas().style.cursor = ''; });
 
 			// Click handler for event popups
-			map.on('click', 'events-circle', (e: any) => {
-				if (!e.features?.length) return;
-				const coords = e.features[0].geometry.coordinates.slice();
+			map.on('click', 'events-circle', (e: MapLayerMouseEvent) => {
+				const f = e.features?.[0];
+				if (!f || f.geometry.type !== 'Point') return;
+				const coords = f.geometry.coordinates as [number, number];
 				const props = {
-					...e.features[0].properties,
+					...f.properties,
 					longitude: coords[0],
 					latitude: coords[1]
 				};
@@ -1150,11 +1151,12 @@
 			});
 
 			// Click handler for impact site markers
-			map.on('click', 'impact-sites', (e: any) => {
-				if (!e.features?.length) return;
-				const coords = e.features[0].geometry.coordinates.slice();
+			map.on('click', 'impact-sites', (e: MapLayerMouseEvent) => {
+				const f = e.features?.[0];
+				if (!f || f.geometry.type !== 'Point') return;
+				const coords = f.geometry.coordinates as [number, number];
 				const props = {
-					...e.features[0].properties,
+					...f.properties,
 					longitude: coords[0],
 					latitude: coords[1]
 				};
@@ -1167,9 +1169,9 @@
 			map.on('mouseleave', 'impact-sites', () => { map.getCanvas().style.cursor = ''; });
 
 			// Click handler for NOTAM area polygons — use stored center for popup
-			map.on('click', 'notam-area-fill', (e: any) => {
-				if (!e.features?.length) return;
-				const f = e.features[0];
+			map.on('click', 'notam-area-fill', (e: MapLayerMouseEvent) => {
+				const f = e.features?.[0];
+				if (!f) return;
 				const popupCoords: [number, number] = (f.properties.center_lng != null && f.properties.center_lat != null)
 					? [f.properties.center_lng, f.properties.center_lat]
 					: [e.lngLat.lng, e.lngLat.lat];
@@ -1187,9 +1189,9 @@
 			map.on('mouseleave', 'notam-area-fill', () => { map.getCanvas().style.cursor = ''; });
 
 			// Click handler for position arrows — opens detail pane + loads trail
-			map.on('click', 'position-arrows', (e: any) => {
-				if (!e.features?.length) return;
-				const f = e.features[0];
+			map.on('click', 'position-arrows', (e: MapLayerMouseEvent) => {
+				const f = e.features?.[0];
+				if (!f || f.geometry.type !== 'Point') return;
 				const entityId = f.properties?.entity_id;
 
 				// Look up full position entry from the store
@@ -1204,7 +1206,7 @@
 				}
 
 				// Fallback: show popup if position not found in store
-				const coords = f.geometry.coordinates.slice();
+				const coords = f.geometry.coordinates as [number, number];
 				const p = f.properties;
 
 				const hdg = p.heading != null ? `${Math.round(p.heading)}°` : 'N/A';
@@ -1248,9 +1250,10 @@
 			});
 
 			// Thermal dot clicks
-			map.on('click', 'thermal-dots', (e: any) => {
-				if (!e.features?.length) return;
-				const props = e.features[0].properties;
+			map.on('click', 'thermal-dots', (e: MapLayerMouseEvent) => {
+				const f = e.features?.[0];
+				if (!f) return;
+				const props = f.properties;
 				const html = buildPopupHtml(props);
 				new maplibre.Popup({ className: 'sr-popup', maxWidth: '280px' })
 					.setLngLat(e.lngLat)
@@ -1261,9 +1264,10 @@
 			map.on('mouseleave', 'thermal-dots', () => { map.getCanvas().style.cursor = ''; });
 
 			// Satellite dot clicks — show details popup + orbit trail
-			map.on('click', 'satellite-dots', (e: any) => {
-				if (!e.features?.length) return;
-				const p = e.features[0].properties;
+			map.on('click', 'satellite-dots', (e: MapLayerMouseEvent) => {
+				const f = e.features?.[0];
+				if (!f) return;
+				const p = f.properties;
 				const noradId = p.norad_id;
 				const name = p.name ?? 'Unknown';
 				const alt = p.altitude_km ?? 0;
@@ -1303,10 +1307,10 @@
 				'notam-area-fill', 'thermal-dots', 'position-arrows', 'bases-symbols',
 				'restricted-airspace-fill', 'satellite-dots'
 			];
-			map.on('click', (e: any) => {
+			map.on('click', (e: MapMouseEvent) => {
 				// Skip if a specific layer already handled this click
 				const hitLayers = map.queryRenderedFeatures(e.point)
-					.filter((f: any) => interactiveLayers.includes(f.layer?.id));
+					.filter((f: MapGeoJSONFeature) => interactiveLayers.includes(f.layer?.id));
 				if (hitLayers.length > 0) return;
 
 				// Find closest feature from the unclustered source within 30px
@@ -1436,7 +1440,7 @@
 				type: 'Feature' as const,
 				geometry: {
 					type: 'Point' as const,
-					coordinates: [s.longitude!, s.latitude!]
+					coordinates: [s.longitude as number, s.latitude as number]
 				},
 				properties: {
 					situation_id: s.id,
@@ -1628,9 +1632,9 @@
 
 			// Click handler for restricted zones
 			const maplibre = await import('maplibre-gl');
-			map.on('click', 'restricted-airspace-fill', (e: any) => {
-				if (!e.features?.length) return;
-				const f = e.features[0];
+			map.on('click', 'restricted-airspace-fill', (e: MapLayerMouseEvent) => {
+				const f = e.features?.[0];
+				if (!f) return;
 				const p = f.properties;
 				const typeColors: Record<string, string> = {
 					PROHIBITED: '#ef4444', RESTRICTED: '#f97316',
@@ -1723,11 +1727,13 @@
 		const toSegments = (points: typeof trail) => {
 			if (points.length < 2) return [];
 			const segments: [number, number][][] = [];
-			const first = points[0]!;
+			const first = points[0];
+			if (!first) return [];
 			let current: [number, number][] = [[first.lon, first.lat]];
 			for (let i = 1; i < points.length; i++) {
-				const prev = points[i - 1]!;
-				const cur = points[i]!;
+				const prev = points[i - 1] ?? first;
+				const cur = points[i];
+				if (!cur) continue;
 				// If longitude jumps > 180°, start a new segment (antimeridian crossing)
 				if (Math.abs(cur.lon - prev.lon) > 180) {
 					if (current.length >= 2) segments.push(current);

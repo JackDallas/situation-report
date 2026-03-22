@@ -6,7 +6,7 @@ import {
 	type SituationCategory,
 } from '$lib/types/situations';
 import type { SituationCluster, SituationEvent } from '$lib/types/events';
-import { SEVERITY_RANK, severityRank } from '$lib/config/colors';
+import { severityRank } from '$lib/config/colors';
 
 const SIX_HOURS_MS = 6 * 60 * 60 * 1000;
 
@@ -113,7 +113,7 @@ function pickPrimaryRegion(codes: string[], title?: string): string {
 	if (!codes.length) return 'global';
 	// If only one region, use it
 	const descriptive = codes.filter((c) => c.length > 2);
-	if (descriptive.length === 1) return descriptive[0]!;
+	if (descriptive.length === 1) return descriptive[0] ?? 'global';
 	// Try to match region from title
 	if (title) {
 		for (const [re, region] of TITLE_REGION_HINTS) {
@@ -127,8 +127,8 @@ function pickPrimaryRegion(codes: string[], title?: string): string {
 	// 4+ diverse regions with no title match = global
 	if (codes.length >= 4) return 'global';
 	// Return first descriptive region
-	if (descriptive.length > 0) return descriptive[0]!;
-	if (codes.length > 0) return codes[0]!;
+	if (descriptive.length > 0) return descriptive[0] ?? 'global';
+	if (codes.length > 0) return codes[0] ?? 'global';
 	return 'global';
 }
 
@@ -281,9 +281,9 @@ class SituationsStore {
 		}
 		for (const s of result) {
 			// Forward link: if this situation has a parentId, ensure parent knows about it
-			if (s.parentId && byId.has(s.parentId)) {
-				const parent = byId.get(s.parentId)!;
-				if (!parent.childIds.includes(s.id)) {
+			if (s.parentId) {
+				const parent = byId.get(s.parentId);
+				if (parent && !parent.childIds.includes(s.id)) {
 					parent.childIds.push(s.id);
 				}
 			}

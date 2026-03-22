@@ -177,7 +177,12 @@ function tick() {
 	const zoom = mapInstance.getZoom();
 
 	// Priority tiers: 0=high_value mil, 1=known-affiliation mil, 2=unknown mil, 3=vessel, 4=civilian
-	const tierFeatures: PositionFeature[][] = [[], [], [], [], []];
+	const highValue: PositionFeature[] = [];
+	const knownMil: PositionFeature[] = [];
+	const unknownMil: PositionFeature[] = [];
+	const vessels: PositionFeature[] = [];
+	const civilian: PositionFeature[] = [];
+	const tierFeatures = [highValue, knownMil, unknownMil, vessels, civilian];
 
 	// Iterate base positions and extrapolate moving ones
 	for (const [_entityId, base] of basePositions) {
@@ -214,11 +219,11 @@ function tick() {
 		const feature = buildPositionFeature(base, lat, lng);
 
 		// Assign to priority tier
-		if (isHighValue) tierFeatures[0]!.push(feature);
-		else if (isMil && feature.properties.affiliation) tierFeatures[1]!.push(feature);
-		else if (isMil) tierFeatures[2]!.push(feature);
-		else if (isVessel) tierFeatures[3]!.push(feature);
-		else tierFeatures[4]!.push(feature);
+		if (isHighValue) highValue.push(feature);
+		else if (isMil && feature.properties.affiliation) knownMil.push(feature);
+		else if (isMil) unknownMil.push(feature);
+		else if (isVessel) vessels.push(feature);
+		else civilian.push(feature);
 	}
 
 	// Cap total positions by zoom level to prevent map overload

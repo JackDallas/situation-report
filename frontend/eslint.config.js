@@ -8,10 +8,10 @@ export default tseslint.config(
 		files: ['**/*.ts'],
 		extends: [tseslint.configs.recommended],
 		rules: {
-			'@typescript-eslint/no-explicit-any': 'warn',
-			'@typescript-eslint/no-non-null-assertion': 'warn',
+			'@typescript-eslint/no-explicit-any': 'error',
+			'@typescript-eslint/no-non-null-assertion': 'error',
 			'@typescript-eslint/no-unused-vars': [
-				'warn',
+				'error',
 				{ argsIgnorePattern: '^_', varsIgnorePattern: '^_' }
 			]
 		}
@@ -30,10 +30,10 @@ export default tseslint.config(
 			}
 		},
 		rules: {
-			'@typescript-eslint/no-explicit-any': 'warn',
-			'@typescript-eslint/no-non-null-assertion': 'warn',
+			'@typescript-eslint/no-explicit-any': 'error',
+			'@typescript-eslint/no-non-null-assertion': 'error',
 			'@typescript-eslint/no-unused-vars': [
-				'warn',
+				'error',
 				{ argsIgnorePattern: '^_', varsIgnorePattern: '^_' }
 			],
 			// Svelte 5 $props() destructuring requires `let`, not `const`
