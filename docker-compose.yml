@@ -146,8 +146,8 @@ services:
       test: ["CMD-SHELL", "wget -q --spider http://localhost:8000/health || exit 1"]
       interval: 10s
       timeout: 5s
-      start_period: 30s
-      retries: 3
+      start_period: 120s
+      retries: 30
     restart: unless-stopped
     logging:
       driver: json-file
