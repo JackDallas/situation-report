@@ -73,10 +73,10 @@ pub struct Incident {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_id: Option<Uuid>,
     /// Related incident IDs (for cross-references)
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub related_ids: Vec<Uuid>,
     /// IDs of incidents that were merged into this one
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub merged_from: Vec<Uuid>,
     /// AI-generated display title (clearer than rule-generated)
     #[serde(skip_serializing_if = "Option::is_none")]

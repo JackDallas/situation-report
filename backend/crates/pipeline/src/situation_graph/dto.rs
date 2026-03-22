@@ -46,7 +46,7 @@ pub struct SituationClusterDTO {
     #[serde(default)]
     pub anomaly_score: f64,
     /// Recent event titles for display (capped at 10).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub event_titles: Vec<String>,
     /// Latest narrative text for this situation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
