@@ -314,6 +314,18 @@
 			const props = (window as any).__srDetailProps?.[idx];
 			if (!props) return;
 
+			// Check if this is an incident feature (event_type starts with "incident:")
+			const isIncident = typeof props.event_type === 'string' && props.event_type.startsWith('incident:');
+			if (isIncident && props.entity_id) {
+				const foundIncident = eventStore.incidents.find((i) => i.id === props.entity_id);
+				if (foundIncident) {
+					eventStore.selectedEvent = null;
+					eventStore.selectedIncident = foundIncident;
+					uiStore.openPanel('incident-detail');
+					return;
+				}
+			}
+
 			const found = props.source_id
 				? eventStore.events.find(
 						(e) => e.source_id === props.source_id && e.source_type === props.source_type

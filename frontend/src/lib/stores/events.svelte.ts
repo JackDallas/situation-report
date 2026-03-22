@@ -32,8 +32,15 @@ class EventStore {
 	}
 
 	addIncident(incident: Incident) {
-		const next = this.incidents.slice();
-		next.unshift(incident);
+		// Deduplicate: replace existing incident with same id, or prepend new
+		const existingIdx = this.incidents.findIndex((i) => i.id === incident.id);
+		let next: Incident[];
+		if (existingIdx >= 0) {
+			next = this.incidents.slice();
+			next[existingIdx] = incident;
+		} else {
+			next = [incident, ...this.incidents];
+		}
 		if (next.length > this.maxIncidents) {
 			next.length = this.maxIncidents;
 		}
