@@ -13,7 +13,7 @@ pub use airspace::{AirspaceIndex, SharedAirspaceIndex, annotate_aviation_event, 
 pub use types::{PublishEvent, Incident, Summary, EvidenceRef, SharedEntityResolver, SharedEntityGraph};
 pub use alerts::FiredAlert;
 pub use core::{PipelineCore, TickOutput, NarrativeState};
-pub use pipeline::{spawn_pipeline, SharedSummaries, PipelineMetrics};
+pub use pipeline::{spawn_pipeline, SharedSummaries, PipelineMetrics, GpuState};
 pub use sr_intel::SharedAnalysis;
 pub use sr_config::PipelineConfig;
 pub use situation_graph::{SituationGraph, SituationClusterDTO, SituationPhase, PhaseTransition};

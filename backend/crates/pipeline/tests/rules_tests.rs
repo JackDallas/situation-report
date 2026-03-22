@@ -36,6 +36,24 @@ fn make_event(
     }
 }
 
+/// Like make_event but includes a 2-letter country code in the payload
+/// (required by country-level correlation rules like InfraAttack and CoordinatedShutdown).
+fn make_event_with_country(
+    event_type: EventType,
+    source_type: SourceType,
+    region: Option<&str>,
+    country: &str,
+) -> InsertableEvent {
+    InsertableEvent {
+        event_type,
+        source_type,
+        severity: Severity::Medium,
+        region_code: region.map(|s| s.to_string()),
+        payload: json!({"country": country}),
+        ..Default::default()
+    }
+}
+
 fn make_military_flight(
     callsign: &str,
     region: Option<&str>,
@@ -65,28 +83,31 @@ fn test_infra_attack_triggers_with_full_evidence() {
     let rule = InfraAttackRule;
     let mut window = CorrelationWindow::new(Duration::from_secs(3600));
 
-    // Push 2 ShodanBanner events in "eastern-europe"
-    window.push(make_event(EventType::ShodanBanner, SourceType::Shodan, Some("eastern-europe"), None, None));
-    window.push(make_event(EventType::ShodanBanner, SourceType::Shodan, Some("eastern-europe"), None, None));
+    let region = "eastern-europe";
+    let country = "UA";
 
-    // Push 3 BgpAnomaly events in "eastern-europe"
-    window.push(make_event(EventType::BgpAnomaly, SourceType::Bgp, Some("eastern-europe"), None, None));
-    window.push(make_event(EventType::BgpAnomaly, SourceType::Bgp, Some("eastern-europe"), None, None));
-    window.push(make_event(EventType::BgpAnomaly, SourceType::Bgp, Some("eastern-europe"), None, None));
-
-    // Push 2 InternetOutage events in "eastern-europe"
-    window.push(make_event(EventType::InternetOutage, SourceType::Ioda, Some("eastern-europe"), None, None));
-    window.push(make_event(EventType::InternetOutage, SourceType::Ioda, Some("eastern-europe"), None, None));
+    // 25 ShodanBanner events (threshold: 20)
+    for _ in 0..25 {
+        window.push(make_event_with_country(EventType::ShodanBanner, SourceType::Shodan, Some(region), country));
+    }
+    // 55 BgpAnomaly events (threshold: 50)
+    for _ in 0..55 {
+        window.push(make_event_with_country(EventType::BgpAnomaly, SourceType::Bgp, Some(region), country));
+    }
+    // 6 InternetOutage events (threshold: 5)
+    for _ in 0..6 {
+        window.push(make_event_with_country(EventType::InternetOutage, SourceType::Ioda, Some(region), country));
+    }
 
     // Trigger on an InternetOutage
-    let trigger = make_event(EventType::InternetOutage, SourceType::Ioda, Some("eastern-europe"), None, None);
+    let trigger = make_event_with_country(EventType::InternetOutage, SourceType::Ioda, Some(region), country);
     let result = rule.evaluate(&trigger, &window, &[]);
 
     assert!(result.is_some(), "InfraAttackRule should fire with full evidence");
     let incident = result.unwrap();
     assert_eq!(incident.rule_id, "infra_attack");
     assert_eq!(incident.severity, Severity::High);
-    assert_eq!(incident.region_code.as_deref(), Some("eastern-europe"));
+    assert_eq!(incident.region_code.as_deref(), Some(region));
 }
 
 #[test]
@@ -388,29 +409,30 @@ fn test_coordinated_shutdown_triggers_with_full_evidence() {
     let mut window = CorrelationWindow::new(Duration::from_secs(3600));
 
     let region = "middle-east";
+    let country = "IR";
 
-    // 2 InternetOutage events
-    window.push(make_event(EventType::InternetOutage, SourceType::Ioda, Some(region), None, None));
-    window.push(make_event(EventType::InternetOutage, SourceType::Ioda, Some(region), None, None));
-
-    // 3 BgpAnomaly events
-    window.push(make_event(EventType::BgpAnomaly, SourceType::Bgp, Some(region), None, None));
-    window.push(make_event(EventType::BgpAnomaly, SourceType::Bgp, Some(region), None, None));
-    window.push(make_event(EventType::BgpAnomaly, SourceType::Bgp, Some(region), None, None));
-
-    // 2 CensorshipEvent events
-    window.push(make_event(EventType::CensorshipEvent, SourceType::Ooni, Some(region), None, None));
-    window.push(make_event(EventType::CensorshipEvent, SourceType::Ooni, Some(region), None, None));
+    // 6 InternetOutage events (threshold: 5)
+    for _ in 0..6 {
+        window.push(make_event_with_country(EventType::InternetOutage, SourceType::Ioda, Some(region), country));
+    }
+    // 55 BgpAnomaly events (threshold: 50)
+    for _ in 0..55 {
+        window.push(make_event_with_country(EventType::BgpAnomaly, SourceType::Bgp, Some(region), country));
+    }
+    // 12 CensorshipEvent events (threshold: 10)
+    for _ in 0..12 {
+        window.push(make_event_with_country(EventType::CensorshipEvent, SourceType::Ooni, Some(region), country));
+    }
 
     // Trigger on an outage
-    let trigger = make_event(EventType::InternetOutage, SourceType::Ioda, Some(region), None, None);
+    let trigger = make_event_with_country(EventType::InternetOutage, SourceType::Ioda, Some(region), country);
     let result = rule.evaluate(&trigger, &window, &[]);
 
     assert!(result.is_some(), "CoordinatedShutdownRule should fire with outage + bgp + censorship");
     let incident = result.unwrap();
     assert_eq!(incident.rule_id, "coordinated_shutdown");
     assert_eq!(incident.severity, Severity::High);
-    assert!(incident.title.contains(region));
+    assert!(incident.title.contains(country));
 }
 
 #[test]
@@ -570,8 +592,8 @@ fn test_rule_ids_are_unique() {
         }
     }
 
-    // We expect 9 unique rule IDs
-    assert_eq!(seen_ids.len(), 9, "Expected 9 unique rule IDs, got: {:?}", seen_ids);
+    // We expect 10 unique rule IDs
+    assert_eq!(seen_ids.len(), 10, "Expected 10 unique rule IDs, got: {:?}", seen_ids);
 }
 
 // ===========================================================================

@@ -24,7 +24,7 @@ fn severity_variant_count() {
 fn event_type_variant_count() {
     assert_eq!(
         ALL_EVENT_TYPES.len(),
-        22,
+        24,
         "EventType variant count changed! Update ALL_EVENT_TYPES and this test.",
     );
 }
@@ -33,7 +33,7 @@ fn event_type_variant_count() {
 fn source_type_variant_count() {
     assert_eq!(
         ALL_SOURCE_TYPES.len(),
-        29,
+        31,
         "SourceType variant count changed! Update ALL_SOURCE_TYPES and this test.",
     );
 }

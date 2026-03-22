@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -28,6 +28,35 @@ use crate::situation_graph::{SituationCluster, SituationGraph, SituationPhase, i
 use crate::types::{Incident, PublishEvent, Summary, SharedEntityResolver, SharedEntityGraph};
 use crate::window::CorrelationWindow;
 
+/// GPU lifecycle state for container control.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum GpuState {
+    On = 0,
+    Stopping = 1,
+    Off = 2,
+    Starting = 3,
+}
+
+impl GpuState {
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            1 => Self::Stopping,
+            2 => Self::Off,
+            3 => Self::Starting,
+            _ => Self::On,
+        }
+    }
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::On => "on",
+            Self::Stopping => "stopping",
+            Self::Off => "off",
+            Self::Starting => "starting",
+        }
+    }
+}
+
 /// Atomic counters for pipeline throughput monitoring and runtime controls.
 pub struct PipelineMetrics {
     pub events_ingested: AtomicU64,
@@ -36,9 +65,10 @@ pub struct PipelineMetrics {
     pub events_published: AtomicU64,
     pub events_filtered: AtomicU64,
     pub incidents_created: AtomicU64,
-    /// When true, GPU-intensive work is paused (embeddings, Ollama LLM calls).
+    /// GPU container lifecycle state (On/Stopping/Off/Starting).
+    /// When not On, GPU-intensive work is skipped (embeddings, LLM calls).
     /// Data ingestion, clustering, correlation rules, and SSE publishing continue.
-    pub gpu_paused: AtomicBool,
+    gpu_state: AtomicU8,
 }
 
 impl PipelineMetrics {
@@ -50,13 +80,23 @@ impl PipelineMetrics {
             events_published: AtomicU64::new(0),
             events_filtered: AtomicU64::new(0),
             incidents_created: AtomicU64::new(0),
-            gpu_paused: AtomicBool::new(false),
+            gpu_state: AtomicU8::new(GpuState::On as u8),
         }
     }
 
-    /// Check if GPU processing is currently paused.
+    /// Check if GPU processing is currently unavailable (Off, Stopping, or Starting).
     pub fn is_gpu_paused(&self) -> bool {
-        self.gpu_paused.load(Ordering::Relaxed)
+        self.gpu_state() != GpuState::On
+    }
+
+    /// Get the current GPU state.
+    pub fn gpu_state(&self) -> GpuState {
+        GpuState::from_u8(self.gpu_state.load(Ordering::Relaxed))
+    }
+
+    /// Set the GPU state.
+    pub fn set_gpu_state(&self, state: GpuState) {
+        self.gpu_state.store(state as u8, Ordering::Relaxed);
     }
 }
 
@@ -241,6 +281,11 @@ fn is_routine_high_volume(event: &InsertableEvent) -> bool {
             });
             let high_sev = event.severity.rank() >= Severity::High.rank();
             !has_alert && !high_sev
+        }
+        EventType::ThermalAnomaly => {
+            // FIRMS produces 200k+ events/week — only high-severity fire clusters
+            // (large fires, conflict zones) should create situations.
+            event.severity.rank() < Severity::High.rank()
         }
         // bgp_anomaly removed: only withdrawals reach the pipeline now (pre-filtered at source)
         EventType::CertIssued | EventType::ShodanBanner => true,
@@ -1066,7 +1111,9 @@ async fn run_pipeline(
             }
         } else {
             info!("No persisted clusters found — falling back to event backfill");
-            match sr_sources::db::queries::query_backfill_events(&pool, 6, 10_000).await {
+            // Use 168h (7 days) and 500k limit so a fresh restart after situation
+            // wipe rebuilds from a meaningful window of OSINT signal events.
+            match sr_sources::db::queries::query_backfill_events(&pool, 168, 500_000).await {
                 Ok(rows) => {
                     let total = rows.len();
                     let mut fed = 0usize;
@@ -2647,7 +2694,7 @@ fn spawn_enrichment(
 /// runs BGE-M3 inference via spawn_blocking, persists to DB, and sends results
 /// back to the pipeline loop.
 ///
-/// When `metrics.gpu_paused` is set, the worker drains the channel but skips
+/// When GPU state is not On, the worker drains the channel but skips
 /// inference — events are consumed so the sender doesn't block, but no GPU
 /// work is done.
 async fn embedding_worker(

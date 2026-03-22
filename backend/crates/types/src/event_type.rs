@@ -69,6 +69,7 @@ impl EventType {
             self,
             Self::FlightPosition
                 | Self::VesselPosition
+                | Self::ThermalAnomaly
                 | Self::BgpAnomaly
                 | Self::CertIssued
                 | Self::ShodanBanner
