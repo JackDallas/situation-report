@@ -426,6 +426,32 @@ impl DataSource for RssNewsSource {
     }
 }
 
+/// Detect meta-news titles: an outlet name followed by 3+ region/country names.
+/// These are typically aggregator round-up headlines, not actionable OSINT.
+fn is_media_meta_title(combined: &str) -> bool {
+    const OUTLETS: &[&str] = &[
+        "wall street journal", "reuters", "associated press", " ap ",
+        "cnn", "bbc", "fox news", "new york times", "washington post",
+        "bloomberg", "al jazeera",
+    ];
+
+    const REGIONS: &[&str] = &[
+        "ukraine", "russia", "china", "iran", "israel", "gaza", "syria",
+        "iraq", "yemen", "north korea", "south korea", "taiwan", "india",
+        "pakistan", "afghanistan", "africa", "europe", "asia", "middle east",
+        "latin america", "turkey", "lebanon", "libya", "sudan", "myanmar",
+        "somalia", "nigeria", "ethiopia", "egypt", "saudi", "japan",
+    ];
+
+    let has_outlet = OUTLETS.iter().any(|o| combined.contains(o));
+    if !has_outlet {
+        return false;
+    }
+
+    let region_count = REGIONS.iter().filter(|r| combined.contains(*r)).count();
+    region_count >= 3
+}
+
 /// Check if an RSS article is relevant to OSINT/security monitoring.
 /// Filters out entertainment, sports, lifestyle, celebrity, culture content.
 /// Articles from defense/OSINT-specific feeds (Bellingcat, USNI, etc.) always pass.
@@ -441,9 +467,11 @@ fn is_osint_relevant(title: &str, description: &str) -> bool {
         "reality tv", "contestant", "idol ", "talent show",
         "box set", "streaming series", "netflix", "new album", "concert tour",
         // Awards / film
-        "academy award", "oscar nomination", "cannes", "sundance",
+        "academy award", "academy awards", "oscar nomination", "cannes", "sundance",
         "film festival", "movie premiere", "tv series", "sitcom",
-        "soap opera", "talk show",
+        "soap opera", "talk show", "award ceremony", "awards ceremony",
+        "voting delay", "oscar nominee", "emmy nominee", "grammy nominee",
+        "best actor", "best actress", "best director", "best picture",
         // Sports
         "premier league", "champions league", "world cup", "fifa", "uefa",
         "nba ", "nfl ", "nhl ", "mlb ", "cricket", "tennis", "rugby",
@@ -451,6 +479,7 @@ fn is_osint_relevant(title: &str, description: &str) -> bool {
         "football", "soccer", "basketball", "baseball", "hockey",
         "golf", "swimming", "athletics", "marathon", "triathlon",
         "batting", "goalkeeper",
+        "federation scandal", "federation ban", "committee ban",
         // Lifestyle
         "retirement", "retires", "birthday", "anniversary",
         "funeral", "obituary", "wedding", "divorce",
@@ -472,6 +501,11 @@ fn is_osint_relevant(title: &str, description: &str) -> bool {
         if combined.contains(kw) {
             return false;
         }
+    }
+
+    // Reject meta-news: outlet name + 3+ region/country names = aggregator garbage
+    if is_media_meta_title(&combined) {
+        return false;
     }
 
     // Positive keywords — if present, always relevant regardless of other content
@@ -587,5 +621,62 @@ mod tests {
 
         assert_eq!(truncated.len(), 1999); // truncated just before the 2-byte char
         assert!(truncated.is_char_boundary(truncated.len()));
+    }
+
+    #[test]
+    fn test_rejects_academy_awards() {
+        assert!(!is_osint_relevant("Academy Awards Voting Delay", "Oscars ceremony postponed"));
+    }
+
+    #[test]
+    fn test_rejects_academy_awards_plural() {
+        assert!(!is_osint_relevant("Academy Awards Show 2026", "Stars gather for annual ceremony"));
+    }
+
+    #[test]
+    fn test_rejects_football_federation() {
+        assert!(!is_osint_relevant("Nigeria Football Federation Scandal", "FIFA investigates"));
+    }
+
+    #[test]
+    fn test_rejects_federation_scandal() {
+        assert!(!is_osint_relevant("Swimming Federation Scandal Deepens", "Officials suspended"));
+    }
+
+    #[test]
+    fn test_rejects_award_ceremony() {
+        assert!(!is_osint_relevant("Annual Award Ceremony Highlights", "Best moments from the show"));
+    }
+
+    #[test]
+    fn test_rejects_best_director() {
+        assert!(!is_osint_relevant("Best Director Race Heats Up", "Film industry celebrates"));
+    }
+
+    #[test]
+    fn test_rejects_media_meta_title() {
+        assert!(!is_osint_relevant(
+            "Wall Street Journal Coverage of Ukraine Russia Iran",
+            "Weekly roundup of global events",
+        ));
+    }
+
+    #[test]
+    fn test_accepts_media_with_few_regions() {
+        // Outlet + only 1 region should still pass if accept keywords match
+        assert!(is_osint_relevant(
+            "BBC Reports on Ukraine Military Offensive",
+            "Troops advance near front lines",
+        ));
+    }
+
+    #[test]
+    fn test_accepts_real_osint() {
+        assert!(is_osint_relevant("Missile Strike Hits Kyiv", "Multiple explosions reported"));
+    }
+
+    #[test]
+    fn test_rejects_committee_ban() {
+        assert!(!is_osint_relevant("Olympic Committee Ban on Athletes", "Doping violations cited"));
     }
 }
