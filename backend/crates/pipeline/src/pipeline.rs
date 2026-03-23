@@ -2201,7 +2201,7 @@ fn tick_situations(
                             debug!("LLM batch consolidation: no merge groups suggested");
                         }
                         Err(e) => {
-                            debug!(error = %e, "LLM batch consolidation failed");
+                            warn!(error = %e, "LLM batch consolidation failed");
                         }
                     }
                 });

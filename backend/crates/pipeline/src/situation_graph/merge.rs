@@ -1132,6 +1132,10 @@ impl SituationGraph {
             "coalition", "defense", "defence", "fighter", "jet",
             "ship", "shipping", "fleet", "blockade", "patrol",
             "tensions", "crisis", "conflict",
+            "threat", "guard", "guards", "incursion", "operation", "operations",
+            "pressure", "pressures", "surge", "revolutionary", "sanctions",
+            "desperation", "espionage", "spy", "assassination", "urges",
+            "warns", "warning", "embargo", "intercept", "seize", "seizes",
         ];
 
         fn has_conflict_title(title: &str) -> bool {
