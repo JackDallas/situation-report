@@ -2,8 +2,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use grammers_client::client::UpdatesConfiguration;
-use grammers_client::update::Update;
 use grammers_client::{Client, SenderPool};
 use grammers_session::storages::SqliteSession;
 use grammers_session::types::PeerRef;
@@ -316,7 +314,7 @@ impl DataSource for TelegramSource {
             let SenderPool {
                 runner,
                 handle,
-                updates,
+                updates: _updates,
             } = pool;
 
             let client = Client::new(handle.clone());
@@ -402,15 +400,10 @@ impl DataSource for TelegramSource {
 
             // ---- 5. Resolve channels ----
             let mut resolved: Vec<(PeerRef, &'static ChannelConfig)> = Vec::new();
-            let mut peer_id_to_config: std::collections::HashMap<
-                grammers_session::types::PeerId,
-                &'static ChannelConfig,
-            > = std::collections::HashMap::new();
 
             for config in CHANNELS {
                 match client.resolve_username(config.username).await {
                     Ok(Some(peer)) => {
-                        let peer_id = peer.id();
                         match peer.to_ref().await {
                             Some(peer_ref) => {
                                 info!(
@@ -418,7 +411,6 @@ impl DataSource for TelegramSource {
                                     name = config.display_name,
                                     "Resolved Telegram channel"
                                 );
-                                peer_id_to_config.insert(peer_id, config);
                                 resolved.push((peer_ref, config));
                             }
                             None => {
@@ -526,108 +518,134 @@ impl DataSource for TelegramSource {
                 }
             }
 
-            // ---- 7. Fetch dialogs to populate channel update state ----
-            // grammers requires iterating dialogs at least once so that the
-            // session knows each channel's pts.  Without this, the MessageBoxes
-            // starts empty and the client never receives channel updates.
-            // See: https://docs.rs/grammers-client/latest/grammers_client/struct.Client.html#method.stream_updates
-            info!("Fetching dialogs to register channel update state");
-            {
-                let mut dialogs = client.iter_dialogs();
-                let mut dialog_count = 0u32;
-                loop {
-                    match dialogs.next().await {
-                        Ok(Some(_)) => dialog_count += 1,
-                        Ok(None) => break,
-                        Err(e) => {
-                            warn!(error = %e, "Error fetching dialogs (continuing with partial state)");
-                            break;
-                        }
+            // ---- 7. Poll-based streaming (main loop) ----
+            // grammers stream_updates is unreliable for channel updates —
+            // the MessageBoxes state machine frequently fails to receive
+            // pushed channel updates even after iter_dialogs(). Instead,
+            // we poll each channel with iter_messages on a timer, relying
+            // on source_id dedup to avoid duplicates.
+            info!("Starting Telegram poll-based message loop");
+
+            // Track the newest message ID we've seen per channel to avoid
+            // re-sending old messages after the first poll.
+            let mut last_seen_id: std::collections::HashMap<&str, i32> =
+                std::collections::HashMap::new();
+
+            // On first poll, seed last_seen_id from what we already sent
+            // (backfill or DB) so we don't duplicate. We'll just fetch the
+            // latest message ID per channel without sending it.
+            for (peer_ref, config) in &resolved {
+                let mut messages = client.iter_messages(*peer_ref).limit(1);
+                match messages.next().await {
+                    Ok(Some(msg)) => {
+                        last_seen_id.insert(config.username, msg.id());
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        warn!(channel = config.username, error = %e, "Failed to seed last_seen_id");
                     }
                 }
-                info!(dialog_count, "Dialog iteration complete — channel state populated");
+                tokio::time::sleep(Duration::from_millis(200)).await;
             }
-
-            // ---- 8. Real-time streaming (main loop) ----
-            info!("Starting Telegram real-time update stream");
-
-            let mut update_stream = client
-                .stream_updates(
-                    updates,
-                    UpdatesConfiguration {
-                        catch_up: true,
-                        update_queue_limit: Some(500),
-                    },
-                )
-                .await;
+            info!(channels = last_seen_id.len(), "Seeded last-seen message IDs");
 
             let mut message_count: u64 = 0;
+            let poll_interval = Duration::from_secs(120); // poll every 2 minutes
+            let mut poll_timer = tokio::time::interval(poll_interval);
+            poll_timer.tick().await; // consume first tick
+
             let mut stats_timer = tokio::time::interval(Duration::from_secs(300));
             stats_timer.tick().await; // consume first tick
 
-            let stream_error = loop {
+            let mut consecutive_errors = 0u32;
+
+            loop {
                 tokio::select! {
                     _ = stats_timer.tick() => {
                         info!(
                             total_messages = message_count,
                             channels = resolved.len(),
-                            "Telegram stream periodic stats"
+                            "Telegram poll periodic stats"
                         );
                     }
 
-                    result = update_stream.next() => {
-                        match result {
-                            Ok(Update::NewMessage(message)) if !message.outgoing() => {
-                                // Find matching channel config by peer_id
-                                let peer_id = message.peer_id();
-                                let config = match peer_id_to_config.get(&peer_id) {
-                                    Some(c) => c,
-                                    None => {
-                                        // Message from a peer we're not monitoring
-                                        // (could be a private message or unrelated group)
-                                        continue;
+                    _ = poll_timer.tick() => {
+                        let mut poll_total = 0u32;
+                        let mut poll_errors = 0u32;
+
+                        for (peer_ref, config) in &resolved {
+                            let last_id = last_seen_id.get(config.username).copied().unwrap_or(0);
+                            // Fetch up to 50 recent messages
+                            let mut messages = client.iter_messages(*peer_ref).limit(50);
+                            let mut new_msgs: Vec<(i32, DateTime<Utc>, String)> = Vec::new();
+                            let mut highest_id = last_id;
+
+                            loop {
+                                match messages.next().await {
+                                    Ok(Some(msg)) => {
+                                        let msg_id = msg.id();
+                                        if msg_id <= last_id {
+                                            // We've reached messages we already processed
+                                            break;
+                                        }
+                                        if msg_id > highest_id {
+                                            highest_id = msg_id;
+                                        }
+                                        let text = msg.text().to_string();
+                                        if !text.is_empty() {
+                                            new_msgs.push((msg_id, msg.date(), text));
+                                        }
                                     }
-                                };
-
-                                let text = message.text();
-                                if text.is_empty() {
-                                    continue;
+                                    Ok(None) => break,
+                                    Err(e) => {
+                                        warn!(
+                                            channel = config.username,
+                                            error = %e,
+                                            "Error polling channel messages"
+                                        );
+                                        poll_errors += 1;
+                                        break;
+                                    }
                                 }
+                            }
 
-                                let event = message_to_event(
-                                    text,
-                                    message.id(),
-                                    message.date(),
-                                    config,
-                                );
+                            if highest_id > last_id {
+                                last_seen_id.insert(config.username, highest_id);
+                            }
 
+                            // Send in chronological order (oldest first)
+                            new_msgs.reverse();
+                            for (msg_id, msg_date, text) in &new_msgs {
+                                let event = message_to_event(text, *msg_id, *msg_date, config);
                                 let _ = tx.send(event);
                                 message_count += 1;
+                                poll_total += 1;
+                            }
 
-                                if message_count == 1 {
-                                    info!("Telegram: first real-time message received");
-                                }
-                                if message_count % 100 == 0 {
-                                    info!(
-                                        total = message_count,
-                                        "Telegram stream messages processed"
-                                    );
-                                }
+                            // Small delay between channels to avoid flood waits
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                        }
+
+                        if poll_total > 0 {
+                            info!(new_messages = poll_total, "Telegram poll cycle complete");
+                        }
+
+                        // Track connection health
+                        if poll_errors >= resolved.len() as u32 {
+                            // Every channel errored — connection is likely dead
+                            consecutive_errors += 1;
+                            if consecutive_errors >= 3 {
+                                warn!(consecutive_errors, "Telegram connection appears dead, reconnecting");
+                                break;
                             }
-                            Ok(_) => {
-                                // Ignore other update types (edits, deletions, etc.)
-                            }
-                            Err(e) => {
-                                break e;
-                            }
+                        } else {
+                            consecutive_errors = 0;
                         }
                     }
                 }
-            };
+            }
 
-            // Connection dropped -- save state and reconnect
-            warn!(error = %stream_error, "Telegram connection lost, will reconnect");
-            update_stream.sync_update_state().await;
+            // Reconnect
             handle.quit();
             let _ = runner_task.await;
 
