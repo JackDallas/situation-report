@@ -1453,6 +1453,57 @@ impl SituationGraph {
                 }
             }
         }
+        // News source name + region list garbage
+        // e.g. "Wall Street Journal Africa Middle East Europe Southeast Asia"
+        {
+            const NEWS_OUTLETS: &[&str] = &[
+                "wall street journal", "new york times", "washington post", "reuters",
+                "associated press", "al jazeera", "bbc", "cnn", "fox news", "msnbc",
+                "bloomberg", "financial times", "the guardian", "sky news", "npr",
+            ];
+            const REGION_WORDS: &[&str] = &[
+                "africa", "asia", "europe", "americas", "oceania", "pacific", "arctic",
+                "antarctic", "mediterranean", "balkans", "caucasus", "sahel", "caribbean",
+                "southeast", "southern", "central", "latin", "middle", "east", "west",
+                "north", "south", "eastern", "western", "northern",
+            ];
+            const ACTION_WORDS: &[&str] = &[
+                "reports", "report", "reveals", "says", "confirms", "warns",
+                "strikes", "attack", "attacks", "war", "conflict", "crisis",
+                "bombing", "explosion", "protests", "sanctions", "ceasefire",
+                "invasion", "offensive", "siege", "disaster", "earthquake",
+                "outbreak", "hack", "breach", "election",
+            ];
+            for outlet in NEWS_OUTLETS {
+                if lower.contains(outlet) {
+                    let remainder = lower.replace(outlet, " ");
+                    let remainder_words: Vec<&str> = remainder.split_whitespace()
+                        .filter(|w| w.len() >= 2)
+                        .collect();
+                    let region_count = remainder_words.iter()
+                        .filter(|w| REGION_WORDS.contains(w))
+                        .count();
+                    if region_count >= 3 {
+                        let has_action = remainder_words.iter()
+                            .any(|w| ACTION_WORDS.contains(w));
+                        if !has_action {
+                            return true;
+                        }
+                    }
+                }
+            }
+            // Pure region concatenation: >60% region words with no action
+            let words: Vec<&str> = lower.split_whitespace()
+                .filter(|w| w.len() >= 2)
+                .collect();
+            if words.len() >= 2 {
+                let rc = words.iter().filter(|w| REGION_WORDS.contains(w)).count();
+                let ratio = rc as f64 / words.len() as f64;
+                if ratio > 0.6 && !words.iter().any(|w| ACTION_WORDS.contains(w)) {
+                    return true;
+                }
+            }
+        }
         // Vague filler patterns
         let vague = [
             "economic security concerns",
@@ -3174,6 +3225,24 @@ mod tests {
         assert!(!SituationGraph::is_garbage_title("Yemen Military Activity"));
         assert!(!SituationGraph::is_garbage_title("Ukraine-Russia Maritime Conflict"));
         assert!(!SituationGraph::is_garbage_title("Myanmar Military Deployments"));
+    }
+
+    #[test]
+    fn test_is_garbage_title_news_source_region_list() {
+        assert!(SituationGraph::is_garbage_title("Wall Street Journal Africa Middle East Europe Southeast Asia"));
+        assert!(SituationGraph::is_garbage_title("Reuters Middle East Africa East Asia"));
+        assert!(SituationGraph::is_garbage_title("BBC Africa Middle East South Asia"));
+        // With action word = not garbage
+        assert!(!SituationGraph::is_garbage_title("Wall Street Journal Reports Iran Strike"));
+        assert!(!SituationGraph::is_garbage_title("Reuters Confirms Syria Ceasefire"));
+    }
+
+    #[test]
+    fn test_is_garbage_title_mostly_regions() {
+        assert!(SituationGraph::is_garbage_title("Africa Asia Europe"));
+        assert!(SituationGraph::is_garbage_title("Middle East North Africa"));
+        // With action word = not garbage
+        assert!(!SituationGraph::is_garbage_title("Middle East Ceasefire Talks"));
     }
 
     #[test]

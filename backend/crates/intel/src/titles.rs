@@ -22,6 +22,21 @@ const GEO_WORDS: &[&str] = &[
     "un", "eu", "nato", "usa", "uk",
 ];
 
+/// Known news outlet names (lowercase) for detecting garbage source+region titles.
+const NEWS_OUTLETS: &[&str] = &[
+    "wall street journal", "new york times", "washington post", "reuters",
+    "associated press", "al jazeera", "bbc", "cnn", "fox news", "msnbc",
+    "bloomberg", "financial times", "the guardian", "sky news", "npr",
+];
+
+/// All region words (single + from phrases) for proportion-based detection.
+const ALL_REGION_WORDS: &[&str] = &[
+    "africa", "asia", "europe", "americas", "oceania", "pacific", "arctic",
+    "antarctic", "mediterranean", "balkans", "caucasus", "sahel", "caribbean",
+    "southeast", "southern", "central", "latin", "middle", "east", "west",
+    "north", "south", "eastern", "western", "northern",
+];
+
 /// Detect garbage titles produced by LLM refusals or vague generation.
 fn is_garbage_title(title: &str) -> bool {
     // Empty or excessively long titles are garbage (LLM ran on too long)
@@ -64,6 +79,14 @@ fn is_garbage_title(title: &str) -> bool {
     if lower.contains(" and ") && title.split_whitespace().count() >= 6 {
         return true;
     }
+    // News source name + region list: e.g. "Wall Street Journal Africa Middle East Europe Southeast Asia"
+    if is_news_source_region_list(&lower) {
+        return true;
+    }
+    // Pure region concatenation: titles that are >60% region words with no action
+    if is_mostly_regions(&lower) {
+        return true;
+    }
     // Region-concatenation garbage: titles that are just geographic/org names strung together
     // with no action word. E.g. "UN South Asia Middle East East Asia"
     if is_region_concatenation(&lower) {
@@ -82,6 +105,68 @@ fn is_garbage_title(title: &str) -> bool {
         "no logical connection",
     ];
     vague_patterns.iter().any(|p| lower.contains(p))
+}
+
+/// Detect titles like "Wall Street Journal Africa Middle East Europe Southeast Asia"
+/// — a news outlet name followed by 3+ region words with no meaningful action content.
+fn is_news_source_region_list(lower: &str) -> bool {
+    // Check if the title contains a known news outlet name
+    for outlet in NEWS_OUTLETS {
+        if lower.contains(outlet) {
+            // Strip the outlet name and check what's left
+            let remainder = lower.replace(outlet, " ");
+            let remainder_words: Vec<&str> = remainder.split_whitespace()
+                .filter(|w| w.len() >= 2)
+                .collect();
+            // Count region words in the remainder
+            let region_count = remainder_words.iter()
+                .filter(|w| ALL_REGION_WORDS.contains(w))
+                .count();
+            // If 3+ region words remain with no action content, it's garbage
+            if region_count >= 3 {
+                // Check for action words that would make it meaningful
+                let action_words = [
+                    "reports", "report", "reveals", "says", "confirms", "warns",
+                    "strikes", "attack", "attacks", "war", "conflict", "crisis",
+                    "bombing", "explosion", "protests", "sanctions", "ceasefire",
+                    "invasion", "offensive", "siege", "disaster", "earthquake",
+                    "outbreak", "hack", "breach", "election",
+                ];
+                let has_action = remainder_words.iter()
+                    .any(|w| action_words.contains(w));
+                if !has_action {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Detect titles that are >60% region words with no action content.
+/// E.g. "Africa Asia Europe" (100% regions) or "The Africa Middle East Asia Pacific" (>60%).
+fn is_mostly_regions(lower: &str) -> bool {
+    let words: Vec<&str> = lower.split_whitespace()
+        .filter(|w| w.len() >= 2)
+        .collect();
+    if words.len() < 2 {
+        return false;
+    }
+    let region_count = words.iter()
+        .filter(|w| ALL_REGION_WORDS.contains(w))
+        .count();
+    let ratio = region_count as f64 / words.len() as f64;
+    if ratio <= 0.6 {
+        return false;
+    }
+    // Check for action words that would make it meaningful despite high region ratio
+    let action_words = [
+        "war", "conflict", "strikes", "attack", "attacks", "strike",
+        "crisis", "disaster", "earthquake", "flood", "protests", "sanctions",
+        "ceasefire", "invasion", "offensive", "outbreak", "hack", "breach",
+        "election", "reports", "bombing", "explosion", "summit", "talks",
+    ];
+    !words.iter().any(|w| action_words.contains(w))
 }
 
 /// Detect titles that are just geographic names / org acronyms concatenated with no action.
@@ -370,6 +455,37 @@ mod tests {
         assert!(!is_garbage_title("Yemen Houthi Strikes"));
         assert!(!is_garbage_title("Iran Nuclear Talks"));
         assert!(!is_garbage_title("Syria Refugee Crisis"));
+    }
+
+    // News source + region list garbage tests
+    #[test]
+    fn test_garbage_news_source_region_list() {
+        assert!(is_garbage_title("Wall Street Journal Africa Middle East Europe Southeast Asia"));
+        assert!(is_garbage_title("Reuters Middle East Africa East Asia"));
+        assert!(is_garbage_title("Bloomberg Asia Pacific Europe Africa"));
+        assert!(is_garbage_title("BBC Africa Middle East South Asia"));
+        assert!(is_garbage_title("Al Jazeera Africa Asia Europe Mediterranean"));
+    }
+    #[test]
+    fn test_good_title_news_source_with_action() {
+        // News source + action word = not garbage
+        assert!(!is_garbage_title("Wall Street Journal Reports Iran Strike"));
+        assert!(!is_garbage_title("Reuters Confirms Syria Ceasefire"));
+        assert!(!is_garbage_title("BBC Reports Middle East Crisis"));
+    }
+
+    // Pure region concatenation (>60% region words)
+    #[test]
+    fn test_garbage_mostly_regions() {
+        assert!(is_garbage_title("Africa Asia Europe"));
+        assert!(is_garbage_title("Middle East North Africa Southeast Asia"));
+        assert!(is_garbage_title("The Southern Africa East Asia Pacific"));
+    }
+    #[test]
+    fn test_good_title_regions_with_action() {
+        // Region words + action = not garbage
+        assert!(!is_garbage_title("Middle East Ceasefire Talks"));
+        assert!(!is_garbage_title("South Asia Flooding Crisis"));
     }
 
     // filter_relevant_entities tests
