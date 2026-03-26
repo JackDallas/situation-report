@@ -108,7 +108,7 @@ services:
         curl -L --progress-bar -o /models/qwen3.5-9b-q4_k_m.gguf \
           "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf"
     volumes:
-      - llama-models:/models
+      - ${LLM_MODELS_DIR:-/var/mnt/sitrep-cold/llama-models}:/models
     restart: "no"
 
   # llama-server: external LLM inference server (CUDA GPU)
@@ -134,7 +134,7 @@ services:
       - "--reasoning-budget"
       - "0"
     volumes:
-      - llama-models:/models:ro
+      - ${LLM_MODELS_DIR:-/var/mnt/sitrep-cold/llama-models}:/models:ro
     deploy:
       resources:
         reservations:
@@ -208,8 +208,8 @@ services:
     group_add:
       - ${DOCKER_GID:-999}
     volumes:
-      - embeddings-cache:/app/models
-      - llama-models:/app/llm-models:ro
+      - ${EMBEDDINGS_DIR:-/var/mnt/sitrep-cold/embeddings-cache}:/app/models
+      - ${LLM_MODELS_DIR:-/var/mnt/sitrep-cold/llama-models}:/app/llm-models:ro
       - ./data:/app/data
       - ${AIRCRAFT_DB_DIR:-./modes-db}:/app/modes-db:ro
       - /var/run/docker.sock:/var/run/docker.sock:rw
@@ -229,9 +229,3 @@ services:
         max-size: "50m"
         max-file: "5"
 
-volumes:
-  pgdata:
-    external: true
-    name: situationreport_pgdata
-  embeddings-cache:
-  llama-models:
